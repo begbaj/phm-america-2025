@@ -1,5 +1,5 @@
 [project]
-name = "src"
+name = "phm-america-2025"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -49,6 +49,7 @@ dependencies = [
   "jsonschema-specifications==2025.9.1",
   "jupyter==1.1.1",
   "jupyter-client==8.7.0",
+  "jupyter-collaboration>=4.2.0",
   "jupyter-console==6.6.3",
   "jupyter-core==5.9.1",
   "jupyter-events==0.12.0",

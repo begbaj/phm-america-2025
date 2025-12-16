@@ -2,8 +2,6 @@
 
 **"HPT" =** High Pressure Turbine
 
-
-
 **ESN**: numero di serie del motore
 
 **Cycles\_Since\_New**: numero di cicli
@@ -53,4 +51,3 @@
 **Cycles\_to\_HPC\_SV**: stima dei cicli per raggiungere la soglia di manutenzione per HPC
 
 **Cycles\_to\_HPT\_SV**: stima dei cicli per raggiungere la soglia di manutenzione per HPT
-
