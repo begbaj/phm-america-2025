@@ -55,6 +55,7 @@ profile_default/
 .webassets-cache
 .pnp.* # Plug and Play package manager
 pyrightconfig.json
+.vscode/
 
 # Environment variables
 .env
