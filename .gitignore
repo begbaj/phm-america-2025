@@ -56,6 +56,7 @@ profile_default/
 .pnp.* # Plug and Play package manager
 pyrightconfig.json
 .vscode/
+.virtual_documents/
 
 # Environment variables
 .env
