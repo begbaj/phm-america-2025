@@ -40,6 +40,8 @@ def get_shift(col, df):
 
 ESN = [101, 102, 103, 104]
 
+Snapshot = [1, 2, 3, 4, 5, 6, 7, 8]
+
 class SENSORS(Enum):
     Sensed_Altitude="Sensed_Altitude"
     Sensed_Mach="Sensed_Mach"
