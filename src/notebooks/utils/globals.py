@@ -1,4 +1,5 @@
 import os.path as path
+import os
 import pandas as pd
 from typing import Type
 from enum import Enum
@@ -16,7 +17,7 @@ def iter_enum(S):
             yield p.value
 
 
-def filter(df, key, val, cols=None):
+def filter(df, key, val, cols=None) -> pd.DataFrame:
     if cols is None:
         return df.loc[df[key] == val].copy()
     return df.loc[df[key] == val, cols].copy()
@@ -42,6 +43,14 @@ ESN = [101, 102, 103, 104]
 
 Snapshot = [1, 2, 3, 4, 5, 6, 7, 8]
 
+def sensors_subset(df):
+    return df.loc[:, SENSORS.tolist()].copy()
+
+def plot_path(dirname, *args):
+    full_path = path.join(PLOT_PATH, dirname, *map(str, args))
+    os.makedirs(full_path, exist_ok=True)
+    return full_path
+
 class SENSORS(Enum):
     Sensed_Altitude="Sensed_Altitude"
     Sensed_Mach="Sensed_Mach"
@@ -59,7 +68,10 @@ class SENSORS(Enum):
     Sensed_T45="Sensed_T45"
     Sensed_P25="Sensed_P25"
     Sensed_T5="Sensed_T5"
-    
+
+    def tolist():
+        return list(iter_enum(SENSORS))
+ 
     def iter():
         return list(iter_enum(SENSORS))
 

@@ -119,6 +119,7 @@ dependencies = [
   "soupsieve==2.8",
   "spyder-kernels>=2.2.0",
   "stack-data==0.6.3",
+  "statsmodels>=0.14.6",
   "terminado==0.18.1",
   "tinycss2==1.4.0",
   "tomli==2.3.0",
