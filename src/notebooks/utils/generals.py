@@ -4,6 +4,8 @@ import os
 import pandas as pd
 from typing import Type
 from enum import Enum
+import scipy as sp
+
 
 PLOT_PATH=f"./img/"
 DATA_PATH=f"../../Data/PHM2025_training_data/training_data.csv"
@@ -54,7 +56,25 @@ def plot_path(dirname, *args, filename=None):
         full_path = os.path.join(full_path, filename)
     return full_path
 
-def my_fft(v: pd.DataFrame | np.dtype):
+def my_fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0):
+
+    if isinstance(v, pd.DataFrame):
+        v = v.values.squeeze()
+
+    if v.ndim != 1:
+        raise ValueError("Input must be a 1-D signal")
+
+    n = v.size
+    yf = sp.fft.fft(v)
+    xf = sp.fft.fftfreq(n, d=1/fs)
+
+    return xf, yf
+
+
+def my_stft(v: pd.DataFrame | np.dtype):
+    """
+    non esiste
+    """
     pass
 
 
