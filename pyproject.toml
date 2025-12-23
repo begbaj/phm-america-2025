@@ -98,8 +98,6 @@ dependencies = [
   "pycparser==2.23",
   "pygments==2.19.2",
   "pyparsing==3.2.5",
-  "pyqt5>=5.15.11",
-  "pyqt6>=6.10.1",
   "python-dateutil==2.9.0.post0",
   "python-json-logger==4.0.0",
   "pytz==2025.2",
