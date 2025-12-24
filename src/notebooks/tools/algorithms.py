@@ -3,7 +3,12 @@ import numpy as np
 import scipy as sp
 
 
-def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0):
+def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:
+    """
+    implementazione della FFT
+
+    :returns: frequenze e trasformata di fourie
+    """
     if isinstance(v, pd.DataFrame):
         v = v.values.squeeze()
 

@@ -1,9 +1,11 @@
 import os.path as path
 import os
 import pandas as pd
-from pandas import DataFrame
+from pandas import DataFrame, Series
 from enum import Enum
-from config import DATA_PATH, PLOT_PATH
+
+from plotly.graph_objs import Data
+from tools.config import DATA_PATH, PLOT_PATH
 
 ESN = range(101, 105)
 """
@@ -40,12 +42,102 @@ def iter_enum(S):
             yield p.value
 
 
+###
+### DATA
+###
+
+
 def load_training() -> DataFrame:
     """
     Carica il dataset di training
     """
     with open(DATA_PATH, "r") as f:
         return pd.read_csv(f)
+
+
+def load_testing() -> DataFrame:
+    """
+    Carica il dataset di training
+    """
+    with open(DATA_PATH, "r") as f:
+        return pd.read_csv(f)
+
+
+def load_validation() -> DataFrame:
+    """
+    Carica il dataset di training
+    """
+    with open(DATA_PATH, "r") as f:
+        return pd.read_csv(f)
+
+
+def load_event_points(
+    df: DataFrame,
+) -> tuple[DataFrame, DataFrame, DataFrame] | tuple[None, None, None]:
+    """
+    Bisogna dare come argomento il dataset dal quale
+    estrarre gli eventi
+    """
+
+    wws = df_get_step_points(df, "Cumulative_WWs")
+    hpc = df_get_step_points(df, "Cumulative_HPC_SVs")
+    hpt = df_get_step_points(df, "Cumulative_HPT_SVs")
+
+    if (
+        isinstance(wws, DataFrame)
+        and isinstance(hpc, DataFrame)
+        and isinstance(hpt, DataFrame)
+    ):
+        return wws, hpc, hpt
+    return None, None, None
+
+
+###
+### DATAFRAME MANIPULATION AND LOGICS
+###
+
+
+def df_row_filter(df: DataFrame | Series, val=0) -> DataFrame | Series | None:
+    """
+    restituisce un dataframe filtrato per riga
+    """
+    try:
+        a = df[(df.T != val)]
+        if isinstance(a, DataFrame) or isinstance(a, Series):
+            return a
+        return None
+    except Exception:
+        print("NON PRATICABILE")
+        return df
+
+
+def df_col_filter(df: DataFrame, val=0) -> DataFrame | None:
+    """
+    restituisce un dataframe filtrato colonna
+    """
+    try:
+        a = df.loc[:, (df != 0).any(axis=0)]
+        if isinstance(a, DataFrame):
+            return a
+        return None
+    except Exception:
+        print("NON PRATICABILE")
+        return df
+
+
+def df_get_step_points(df: DataFrame, column: str, up=False) -> DataFrame | None:
+    """
+    Restituisce in output una lista di record che corrispondono
+    ai record subito prima di uno step.
+    Uno step è definito come un valore che va nella direzione opposta a quella attesa.
+    """
+    if up:
+        a = df[df[column] < df[column].shift(1)]
+    else:
+        a = df[df[column] > df[column].shift(1)]
+    if isinstance(a, DataFrame):
+        return a
+    return None
 
 
 def filter_by_key(df: DataFrame, col: str, val, cols=None) -> DataFrame:
@@ -75,6 +167,11 @@ def sensors_subset(df: DataFrame) -> DataFrame:
     shortcut per df.loc[:, SENSORS.tolist()]
     """
     return df.loc[:, SENSORS.tolist()].copy()
+
+
+###
+### ENUMS
+###
 
 
 class SENSORS(Enum):
