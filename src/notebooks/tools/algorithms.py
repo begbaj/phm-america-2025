@@ -20,3 +20,4 @@ def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:
     xf = sp.fft.fftfreq(n, d=1 / fs)
 
     return xf, yf
+

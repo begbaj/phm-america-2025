@@ -1,9 +1,9 @@
 import os.path as path
 import os
 import pandas as pd
+import numpy as np
 from pandas import DataFrame, Series
 from enum import Enum
-
 from plotly.graph_objs import Data
 from tools.config import DATA_PATH, PLOT_PATH
 
@@ -41,10 +41,15 @@ def iter_enum(S):
         except (AssertionError, TypeError):
             yield p.value
 
-
 ###
 ### DATA
 ###
+
+def WrapData(data: DataFrame):
+    def access():
+        return data.copy()
+    return access
+
 
 
 def load_training() -> DataFrame:
@@ -52,7 +57,7 @@ def load_training() -> DataFrame:
     Carica il dataset di training
     """
     with open(DATA_PATH, "r") as f:
-        return pd.read_csv(f)
+        return WrapData(pd.read_csv(f))
 
 
 def load_testing() -> DataFrame:
@@ -60,7 +65,7 @@ def load_testing() -> DataFrame:
     Carica il dataset di training
     """
     with open(DATA_PATH, "r") as f:
-        return pd.read_csv(f)
+        return WrapData(pd.read_csv(f))
 
 
 def load_validation() -> DataFrame:
@@ -68,7 +73,7 @@ def load_validation() -> DataFrame:
     Carica il dataset di training
     """
     with open(DATA_PATH, "r") as f:
-        return pd.read_csv(f)
+        return WrapData(pd.read_csv(f))
 
 
 def load_event_points(
@@ -88,13 +93,29 @@ def load_event_points(
         and isinstance(hpc, DataFrame)
         and isinstance(hpt, DataFrame)
     ):
-        return wws, hpc, hpt
+        return WrapData(wws), WrapData(hpc), WrapData(hpt)
     return None, None, None
 
 
 ###
 ### DATAFRAME MANIPULATION AND LOGICS
 ###
+
+def df_avg_stdd_cycles_to_event(df: DataFrame, groupby: str = "ESN") -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+    rww = []
+    rhpc = []
+    rhpt = []
+
+    ww = df.groupby("Cumulative_WWs").size()
+    hpc = df.groupby("Cumulative_HPC_SVs").size()
+    hpt = df.groupby("Cumulative_HPT_SVs").size()
+
+    rww = (ww.mean(), ww.std())
+    rhpc = (hpc.mean(), hpc.std())
+    rhpt = (hpt.mean(), hpt.std())
+
+    return rww, rhpc, rhpt
+
 
 
 def df_row_filter(df: DataFrame | Series, val=0) -> DataFrame | Series | None:
@@ -140,7 +161,7 @@ def df_get_step_points(df: DataFrame, column: str, up=False) -> DataFrame | None
     return None
 
 
-def filter_by_key(df: DataFrame, col: str, val, cols=None) -> DataFrame:
+def df_filter_by_key(df: DataFrame, col: str, val, cols=None) -> DataFrame:
     """
     filtra il DataFrame in base al valore che assume una colonna.
     Equivalente di WHERE in SQL.
@@ -151,7 +172,7 @@ def filter_by_key(df: DataFrame, col: str, val, cols=None) -> DataFrame:
     return df.loc[df[col] == val, cols].copy()
 
 
-def get_shift(df: DataFrame, col: str) -> DataFrame:
+def df_get_shift(df: DataFrame, col: str) -> DataFrame:
     """
     Ritorna i punti in cui il valore successivo è minore del precedente
 
@@ -161,7 +182,7 @@ def get_shift(df: DataFrame, col: str) -> DataFrame:
     return df.loc[df[col] > df[col].shift(1), ["ESN", col]].copy()
 
 
-def sensors_subset(df: DataFrame) -> DataFrame:
+def df_sensors_subset(df: DataFrame) -> DataFrame:
     """
     Ritorna il dataframe con solo i sensori
     shortcut per df.loc[:, SENSORS.tolist()]
