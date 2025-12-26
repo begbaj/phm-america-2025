@@ -28,7 +28,7 @@ import scipy as sp
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
 
 # %%
-otraining = u.load_training()
+otraining = u.get_training_generator()
 owws, ohpc, ohpt = u.load_event_points(orig_training())
 # load_training testing e validation restituiscono un la funzione WrapData per mantenere il dato originale intatto senza modifiche.
 # per accedere al dato e copiarlo basterà chiamarla come funzione che copierà il dataframe originale in una nuova variabile.

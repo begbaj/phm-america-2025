@@ -2,6 +2,7 @@ import os.path as path
 import os
 import pandas as pd
 import numpy as np
+from types import FunctionType
 from pandas import DataFrame, Series
 from enum import Enum
 from plotly.graph_objs import Data
@@ -46,13 +47,19 @@ def iter_enum(S):
 ###
 
 def WrapData(data: DataFrame):
-    def access():
+    """
+    Generator di dati.
+    
+    :param data: Description
+    :type data: DataFrame
+    """
+    def access() -> DataFrame:
         return data.copy()
     return access
 
 
 
-def load_training() -> DataFrame:
+def load_training() -> FunctionType:
     """
     Carica il dataset di training
     """
@@ -60,7 +67,7 @@ def load_training() -> DataFrame:
         return WrapData(pd.read_csv(f))
 
 
-def load_testing() -> DataFrame:
+def load_testing() -> FunctionType:
     """
     Carica il dataset di training
     """
@@ -68,7 +75,7 @@ def load_testing() -> DataFrame:
         return WrapData(pd.read_csv(f))
 
 
-def load_validation() -> DataFrame:
+def load_validation() -> FunctionType:
     """
     Carica il dataset di training
     """
@@ -78,10 +85,12 @@ def load_validation() -> DataFrame:
 
 def load_event_points(
     df: DataFrame,
-) -> tuple[DataFrame, DataFrame, DataFrame] | tuple[None, None, None]:
+) -> tuple[FunctionType, FunctionType, FunctionType] | tuple[None, None, None]:
     """
     Bisogna dare come argomento il dataset dal quale
     estrarre gli eventi
+
+    usa la funzione df_get_step_points su colonne predefinite.
     """
 
     wws = df_get_step_points(df, "Cumulative_WWs")
