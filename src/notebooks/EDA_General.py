@@ -7,7 +7,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: Python 3 (ipykernel)
+#     display_name: phm-america-2025
 #     language: python
 #     name: python3
 # ---
@@ -21,7 +21,7 @@ import seaborn as sns
 import plotly.graph_objects as go
 from plotly.offline import iplot
 from statsmodels.tsa.stattools import adfuller
-from utils import generals
+from tools import utils
 
 # %%
 train = None
