@@ -58,4 +58,33 @@ def plot_avg_std_cycles_to_event(data: DataFrame, event:int, figsize: tuple[floa
 
 
 
+def plot_stat_ess(data: DataFrame):
+    """
+    Plot di stazionarietà per ESS (ESN -> SENSOR -> SNAPSHOT)
+    Ogni boxplot mostra la distribuzione del sensore tra voli,
+    a parità di snapshot (fase di volo).
+    """
+    for esn in u.ESN:
+        fig, axes = plt.subplots( nrows=4, ncols=4, figsize=(16, 12), sharey='row')
+        fig.suptitle(f"Stazionarietà condizionata alla fase – ESN {esn}", fontsize=16)
+        for i, sensor in enumerate(u.SENSORS):
+            ax = axes[i//4, i%4]
+            ddict = {}
+            for j, snapshot in enumerate(u.SNAPSHOTS):
+                ddict[j] = u.df_ess_filter(data, esn, sensor, snapshot).values.squeeze()
+
+            ax.boxplot(ddict.values(), labels=ddict.keys(), patch_artist=True,
+                        boxprops=dict(facecolor='lightblue', color='darkblue'),
+                        medianprops=dict(color='red'),
+                        whiskerprops=dict(color='green'))
+
+            ax.set_title(f"Sensor {sensor}", fontsize=9)
+            ax.grid(True, alpha=0.3, linestyle="--")
+
+        # plt.tight_layout(rect=[0, 0, 1, 0.97])
+        plt.tight_layout()
+        yield fig
+
+
+
 

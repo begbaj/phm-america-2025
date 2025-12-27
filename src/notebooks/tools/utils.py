@@ -8,6 +8,49 @@ from enum import Enum
 from plotly.graph_objs import Data
 from tools.config import DATA_PATH, PLOT_PATH
 
+###
+### ENUMS
+###
+
+
+class ESENSORS(Enum):
+    """
+    è una lista dei sensori presenti nel dataset
+    serve solo per evitare di scrivere a mano i nomi dei sensori
+    """
+
+    Sensed_Altitude = "Sensed_Altitude"
+    Sensed_Mach = "Sensed_Mach"
+    Sensed_Pamb = "Sensed_Pamb"
+    Sensed_Pt2 = "Sensed_Pt2"
+    Sensed_TAT = "Sensed_TAT"
+    Sensed_WFuel = "Sensed_WFuel"
+    Sensed_VAFN = "Sensed_VAFN"
+    Sensed_VBV = "Sensed_VBV"
+    Sensed_Fan_Speed = "Sensed_Fan_Speed"
+    Sensed_Core_Speed = "Sensed_Core_Speed"
+    Sensed_T25 = "Sensed_T25"
+    Sensed_T3 = "Sensed_T3"
+    Sensed_Ps3 = "Sensed_Ps3"
+    Sensed_T45 = "Sensed_T45"
+    Sensed_P25 = "Sensed_P25"
+    Sensed_T5 = "Sensed_T5"
+
+    @classmethod
+    def values(cls) -> list[str]:
+        """Ritorna la lista dei valori."""
+        return [e.value for e in cls]
+
+    @classmethod
+    def iter(cls) -> list[str]:
+        """DEPRECATO, usa values. Ritorna la lista dei valori."""
+        return [e.value for e in cls]
+
+    @classmethod
+    def members(cls) -> list["ESENSORS"]:
+        """Ritorna la lista dei membri Enum."""
+        return list(cls)
+
 ESN = range(101, 105)
 """
 for esn in u.ESN:
@@ -17,6 +60,8 @@ SNAPSHOTS = range(1, 9)
 """
 for esn in u.SNAPSHOTS:
 """
+
+SENSORS = ESENSORS.values()
 
 
 def plot_path(dirname: str, *args, filename=None) -> str:
@@ -30,6 +75,35 @@ def plot_path(dirname: str, *args, filename=None) -> str:
         full_path = os.path.join(full_path, filename)
     return full_path
 
+def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"]):
+    order = [o.lower() for o in order]
+    order_enum = {
+        "esn": ESN,
+        "sensor": SENSORS,
+        "snapshot": SNAPSHOTS,
+    }
+    esn: int = 0
+    sensor: str = "Sensor"
+    snapshot: int = 0
+
+    def matcher(o: int, v, oesn, osensor, osnapshot) -> tuple[int,str,int]:
+        match order[o]:
+            case "esn":
+                return int(v), osensor, int(osnapshot)
+            case "sensor":
+                return int(oesn), v, int(osnapshot)
+            case "snapshot":
+                return int(oesn), osnapshot, int(v)
+            case _:
+                return int(oesn), osensor, int(osnapshot)
+
+    for A in order_enum[order[0]]:
+        esn, sensor, snapshot = matcher(0,A, esn, sensor, snapshot)
+        for B in order_enum[order[1]]:
+            esn, sensor, snapshot = matcher(1,B, esn, sensor, snapshot)
+            for C in order_enum[order[2]]:
+                esn, sensor, snapshot = matcher(2,C, esn, sensor, snapshot)
+                yield df_ess_filter(df, esn, sensor, snapshot)
 
 def iter_enum(S):
     """
@@ -109,6 +183,13 @@ def load_event_points(
 ###
 ### DATAFRAME MANIPULATION AND LOGICS
 ###
+
+def df_ess_filter(df: DataFrame, esn: int, sensor: str, snapshot: int):
+    return df.loc[
+        (df["ESN"] == esn) & (df["Snapshot"] == snapshot),
+        [sensor]
+    ]
+
 
 def df_avg_stdd_cycles_to_event(df: DataFrame, groupby: str = "ESN") -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
     rww = []
@@ -194,43 +275,9 @@ def df_get_shift(df: DataFrame, col: str) -> DataFrame:
 def df_sensors_subset(df: DataFrame) -> DataFrame:
     """
     Ritorna il dataframe con solo i sensori
-    shortcut per df.loc[:, SENSORS.tolist()]
+    shortcut per df.loc[:, SENSORS]
     """
-    return df.loc[:, SENSORS.tolist()].copy()
+    return df.loc[:, SENSORS].copy()
 
 
-###
-### ENUMS
-###
 
-
-class SENSORS(Enum):
-    """
-    è una lista dei sensori presenti nel dataset
-    serve solo per evitare di scrivere a mano i nomi dei sensori
-    """
-
-    Sensed_Altitude = "Sensed_Altitude"
-    Sensed_Mach = "Sensed_Mach"
-    Sensed_Pamb = "Sensed_Pamb"
-    Sensed_Pt2 = "Sensed_Pt2"
-    Sensed_TAT = "Sensed_TAT"
-    Sensed_WFuel = "Sensed_WFuel"
-    Sensed_VAFN = "Sensed_VAFN"
-    Sensed_VBV = "Sensed_VBV"
-    Sensed_Fan_Speed = "Sensed_Fan_Speed"
-    Sensed_Core_Speed = "Sensed_Core_Speed"
-    Sensed_T25 = "Sensed_T25"
-    Sensed_T3 = "Sensed_T3"
-    Sensed_Ps3 = "Sensed_Ps3"
-    Sensed_T45 = "Sensed_T45"
-    Sensed_P25 = "Sensed_P25"
-    Sensed_T5 = "Sensed_T5"
-
-    @staticmethod
-    def tolist():
-        return list(iter_enum(SENSORS))
-
-    @staticmethod
-    def iter():
-        return list(iter_enum(SENSORS))
