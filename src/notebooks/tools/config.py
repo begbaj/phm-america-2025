@@ -1,2 +1,4 @@
 PLOT_PATH = f"./img/"
 DATA_PATH = f"../../Data/PHM2025_training_data/training_data.csv"
+DATA_BASE_PATH = f"../../Data/"
+DATA_TRAINING_PATH = f"../../Data/PHM2025_training_data/"

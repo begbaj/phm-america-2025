@@ -7,6 +7,7 @@ from pandas import DataFrame, Series
 from enum import Enum
 from plotly.graph_objs import Data
 from tools.config import DATA_PATH, PLOT_PATH
+import tools.config as c
 
 ###
 ### ENUMS
@@ -93,7 +94,7 @@ def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"]):
             case "sensor":
                 return int(oesn), v, int(osnapshot)
             case "snapshot":
-                return int(oesn), osnapshot, int(v)
+                return int(oesn), osensor, int(v)
             case _:
                 return int(oesn), osensor, int(osnapshot)
 
@@ -103,7 +104,7 @@ def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"]):
             esn, sensor, snapshot = matcher(1,B, esn, sensor, snapshot)
             for C in order_enum[order[2]]:
                 esn, sensor, snapshot = matcher(2,C, esn, sensor, snapshot)
-                yield df_ess_filter(df, esn, sensor, snapshot)
+                yield df_ess_filter(df, esn, sensor, snapshot, all=True)
 
 def iter_enum(S):
     """
@@ -137,8 +138,13 @@ def load_training() -> FunctionType:
     """
     Carica il dataset di training
     """
-    with open(DATA_PATH, "r") as f:
+    with open(c.DATA_PATH, "r") as f:
         return WrapData(pd.read_csv(f))
+
+def load_forward_fill() -> FunctionType:
+    with open(c.DATA_TRAINING_PATH + "training_ffill.csv", "r") as f:
+        return WrapData(pd.read_csv(f))
+
 
 
 def load_testing() -> FunctionType:
@@ -184,11 +190,17 @@ def load_event_points(
 ### DATAFRAME MANIPULATION AND LOGICS
 ###
 
-def df_ess_filter(df: DataFrame, esn: int, sensor: str, snapshot: int):
-    return df.loc[
-        (df["ESN"] == esn) & (df["Snapshot"] == snapshot),
-        [sensor]
-    ]
+def df_ess_filter(df: DataFrame, esn: int, sensor: str, snapshot: int, all=False):
+    if all:
+        return df.loc[
+            (df["ESN"] == esn) & (df["Snapshot"] == snapshot),
+            [sensor]
+        ], esn, sensor, snapshot
+    else:
+        return df.loc[
+            (df["ESN"] == esn) & (df["Snapshot"] == snapshot),
+            [sensor]
+        ]
 
 
 def df_avg_stdd_cycles_to_event(df: DataFrame, groupby: str = "ESN") -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
