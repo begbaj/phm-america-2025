@@ -19,7 +19,7 @@
 
 # %%
 import pandas as pd
-import matplotlib as plt
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
 
@@ -28,14 +28,15 @@ import scipy as sp
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
 
 # %%
-otraining = u.get_training_generator()
-owws, ohpc, ohpt = u.load_event_points(orig_training())
+# otraining = u.load_training()
+otraining = u.load_forward_fill()
+owws, ohpc, ohpt = u.load_event_points(otraining())
 # load_training testing e validation restituiscono un la funzione WrapData per mantenere il dato originale intatto senza modifiche.
 # per accedere al dato e copiarlo basterà chiamarla come funzione che copierà il dataframe originale in una nuova variabile.
 df = otraining()
 wws = owws()
-hpc = ohpc()
-hpt = ohpt()
+hpcs = ohpc()
+hpts = ohpt()
 
 
 # %%
@@ -82,21 +83,31 @@ for a in [A,B,C,D]:
     printcent(f"Cicli tra un evento e l'altro - {esn}")
     ww, hpc, hpt = u.df_avg_stdd_cycles_to_event(a)
 
-    print(f"EVENTO \tMEAN\tDEVIAZIONE STD: ")
-    print(f"WW   :\t{round(ww[0])} \t {round(ww[1])}")
-    print(f"HPC  :\t{round(hpc[0])}\t {round(hpc[1])}")
-    print(f"HPT  :\t{round(hpt[0])}\t {round(hpt[1])}")
+    nww = len(u.df_filter_by_key(wws, 'ESN', int(esn)))
+    nhpc = len(u.df_filter_by_key(hpcs, 'ESN', int(esn)))
+    nhpt = len(u.df_filter_by_key(hpts, 'ESN', int(esn)))
+
+    print(f"EVENTO \tMEAN\tDEVIAZIONE STD \t EVENTI: ")
+    print(f"WW   :\t{round(ww[0])} \t {round(ww[1])} \t\t {nww}")
+    print(f"HPC  :\t{round(hpc[0])}\t {round(hpc[1])} \t\t {nhpc}")
+    print(f"HPT  :\t{round(hpt[0])}\t {round(hpt[1])} \t\t {nhpt}")
 
     data[esn] = {}
-    data[esn]["WW_MEAN"] = ww[0]
+    data[esn]["WW_MEAN"]  = ww[0]
     data[esn]["HPC_MEAN"] = hpc[0]
     data[esn]["HPT_MEAN"] = hpt[0]
 
-    data[esn]["WW_STD"] = ww[1]
+    data[esn]["WW_STD"]  = ww[1]
     data[esn]["HPC_STD"] = hpc[1]
     data[esn]["HPT_STD"] = hpt[1]
 
+    data[esn]["EVENTS_WW"] = nww
+    data[esn]["EVENTS_HPC"] = nhpc
+    data[esn]["EVENTS_HPT"] = nhpt
+
+
 data = pd.DataFrame(data).T
+# un grafico solo potrebbe essere ottimale
 figa = up.plot_avg_std_cycles_to_event(data,0)
 figb = up.plot_avg_std_cycles_to_event(data,1)
 figc = up.plot_avg_std_cycles_to_event(data,2)
@@ -104,6 +115,80 @@ figa.show()
 figb.show()
 figc.show()
 
+# %% [markdown]
+# # Stazionarietà
+# Parlare di stazionarietà dei segnali, nel caso dei dati a disposizione, non ha granchè senso se i dati vengono valutati tutti insieme. Bisogna perciò fare una analisi separata per ogni gruppo di dati che contengono dati dello stesso snapshot in voli diversi nello stesso motore.
+#
+# Si parla di suddivisione ESN->Sensor->Snapshot: u.ess_filter(df, esn, sensor, snapshot)
+
 # %%
+for fig in up.plot_stat_ess(df):
+    fig.show()
+
+# %% [markdown]
+# # RUL
+
+# %%
+for d, e, sens, snap in u.ess_iter(df):
+    print(f"Dataset Analysis:")
+    print(f"-----------------")
+    print(f"{e} - {sens} - snap {snap}")
+    print(f"RMS Value:    {alg.rms(d):.4f}")
+    print(f"Shape Factor: {alg.shape_factor(d):.4f}")
+    print(f"Skewness:     {d[sens].skew():.4f}")
+    print(f"Kurtosis:     {d[sens].kurtosis():.4f}")
+
+
+# %%
+window = 5
+overlap = 4
+step = window - overlap
+
+items = list(u.ess_iter(df))
+n_plots = len(items)
+
+fig, axes = plt.subplots(
+    n_plots, 1,
+    figsize=(15, 4 * n_plots),
+    sharex=False
+)
+
+# caso con un solo subplot
+if n_plots == 1:
+    axes = [axes]
+
+for ax, (d, e, sens, snap) in zip(axes, items):
+
+    # eventi di riparazione per ESN
+    esp = wws.loc[wws["ESN"] == e]
+
+    rms_groups = alg.moving_rms_with_stop(
+        signal=d[sens].values,
+        stop=esp,
+        N=window,
+        o=step
+    )
+
+    # curve sovrapposte
+    for gid, rms_vals in rms_groups.items():
+        ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
+
+    ax.set_title(
+        f"ESN: {e} | Sensor: {sens} | Snapshot: {snap}"
+    )
+    ax.set_ylabel("RMS amplitude")
+    ax.grid(True)
+    ax.legend()
+
+axes[-1].set_xlabel("RMS window index")
+
+fig.suptitle(
+    f"Moving RMS dashboard | Window={window}, Overlap={overlap}",
+    fontsize=14
+)
+
+fig.tight_layout(rect=[0, 0, 1, 0.97])
+plt.show()
+
 
 # %%
