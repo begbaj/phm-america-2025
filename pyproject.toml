@@ -139,3 +139,6 @@ dependencies = [
 theme = [
     "catppuccin-jupyterlab>=0.2.4",
 ]
+
+[tool.jupytext]
+formats = "ipynb,py:percent"
