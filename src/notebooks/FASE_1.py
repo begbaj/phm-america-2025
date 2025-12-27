@@ -140,29 +140,20 @@ for d, e, sens, snap in u.ess_iter(df):
 
 
 # %%
+target_event = 0  # 0 per il primo pezzo, 1 per il secondo, ecc.
+features = ["rms", "mean", "std", "kurtosis", "skewness", "shape_factor"]
+
 window = 5
-overlap = 4
+overlap = 1
 step = window - overlap
 
 items = list(u.ess_iter(df))
 n_plots = len(items)
-
-fig, axes = plt.subplots(
-    n_plots, 1,
-    figsize=(15, 4 * n_plots),
-    sharex=False
-)
-
-# caso con un solo subplot
-if n_plots == 1:
-    axes = [axes]
-
-for ax, (d, e, sens, snap) in zip(axes, items):
-
+for (d, e, sens, snap) in items:
+    # 1. Calcolo le feature per questo sensore/ESN
     # eventi di riparazione per ESN
     esp = wws.loc[wws["ESN"] == e]
-
-    rms_groups = alg.moving_rms_with_stop(
+    all_features_groups = alg.moving_features_with_stop(
         signal=d[sens].values,
         stop=esp,
         N=window,
@@ -170,25 +161,45 @@ for ax, (d, e, sens, snap) in zip(axes, items):
     )
 
     # curve sovrapposte
-    for gid, rms_vals in rms_groups.items():
-        ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
+    # for gid, rms_vals in rms_groups.items():
+    #     ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
 
-    ax.set_title(
-        f"ESN: {e} | Sensor: {sens} | Snapshot: {snap}"
+    # --- LOGICA DI SELEZIONE ---
+    # Verifichiamo se l'evento richiesto esiste nel dizionario
+    # Verifichiamo se il segmento esiste
+    if target_event not in all_features_groups:
+        print(f"Evento {target_event} non trovato per ESN {e}")
+        continue
+        
+    # 2. Creo una figura specifica per questo sensore con 6 subplot (3x2)
+    fig, axes = plt.subplots(
+        len(features), 1, 
+        figsize=(15, 3 * len(features)), 
+        sharex=True  # Condividono l'asse X per allineare i tempi
     )
-    ax.set_ylabel("RMS amplitude")
-    ax.grid(True)
-    ax.legend()
+    
+    fig.suptitle(
+        f"Analisi Multi-Parametrica | ESN: {e} | Sensor: {sens} | Snapshot: {snap} \nEvento n.: {target_event+1}", 
+        fontsize=16, y=1.02
+    )
 
-axes[-1].set_xlabel("RMS window index")
+    # 4. Ciclo sui subplot per ogni feature
+    for ax, feat in zip(axes, features):
+        vals = all_features_groups[target_event][feat]
+        
+        ax.plot(vals, label=feat.upper(), color='tab:blue', linewidth=1.5)
+        
+        # Estetica del singolo subplot
+        ax.set_ylabel(feat.upper(), fontsize=10, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(loc='upper right')
+        
+        # Opzionale: aggiunge una linea tratteggiata per la media globale del segmento
+        if len(vals) > 0:
+            ax.axhline(np.mean(vals), color='red', linestyle=':', alpha=0.5)
 
-fig.suptitle(
-    f"Moving RMS dashboard | Window={window}, Overlap={overlap}",
-    fontsize=14
-)
-
-fig.tight_layout(rect=[0, 0, 1, 0.97])
-plt.show()
-
-
+    axes[-1].set_xlabel("Window Index (Tempo)", fontsize=12)
+    
+    plt.tight_layout()
+    plt.show()
 # %%

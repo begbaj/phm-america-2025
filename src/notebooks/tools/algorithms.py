@@ -80,3 +80,52 @@ def skewness(signal, bias=False):
 
 def kurtosis(signal, fisher=True, bias=False):
     return spstats.kurtosis(signal, fisher, bias)
+
+
+def moving_features_with_stop(signal, stop, N, o=None):
+    """
+    signal : array-like (1D)
+    stop   : DataFrame con index = sample in cui avviene la riparazione
+    N      : window size
+    o      : step size (default = N, no overlap)
+    """
+    if o is None:
+        o = N
+    stop_points = stop.index.to_numpy()
+    stop_ptr = 0
+    res = {}
+    group_id = 0
+    # Inizializziamo il gruppo con un dizionario di liste
+    def new_group():
+        return {
+            "rms": [], "mean": [], "std": [],
+            "kurtosis": [], "skewness": [], "shape_factor": []
+        }
+    res[group_id] = new_group()
+    i = 0
+    L = len(signal)
+    while i + N <= L:
+        # Se supero l'evento di riparazione, cambio gruppo
+        if stop_ptr < len(stop_points) and i >= stop_points[stop_ptr]:
+            group_id += 1
+            res[group_id] = new_group()
+            stop_ptr += 1
+        window = signal[i:i + N]
+        # Protezione: se la finestra è vuota, salta
+        if len(window) == 0:
+            i += o
+            continue
+        # Calcolo delle statistiche
+        m = np.mean(window)
+        s = np.std(window)
+        r = rms(window)
+        res[group_id]["mean"].append(m)
+        res[group_id]["std"].append(s)
+        res[group_id]["rms"].append(r)
+        # Forziamo l'asse 0 (per array 1D)
+        res[group_id]["kurtosis"].append(float(spstats.kurtosis(window, axis=0, fisher=True)))
+        res[group_id]["skewness"].append(float(spstats.skew(window, axis=0)))
+        # Shape Factor = RMS / Mean Absolute Value
+        res[group_id]["shape_factor"].append(r / np.mean(np.abs(window)) if np.mean(np.abs(window)) != 0 else 0)
+        i += o
+    return res
