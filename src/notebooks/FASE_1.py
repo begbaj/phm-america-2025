@@ -183,7 +183,7 @@ target_event = 0
 # --- ESECUZIONE ---
 for (d, e, sens, snap) in u.ess_iter(df):
     # 1. Calcolo feature
-    esp = wws.loc[hpc["ESN"] == e]
+    esp = hpc.loc[hpc["ESN"] == e]
     all_features_groups = alg.moving_features_with_stop(
         signal=d[sens].values,
         stop=esp,
@@ -215,7 +215,7 @@ target_event = 0
 # --- ESECUZIONE ---
 for (d, e, sens, snap) in u.ess_iter(df):
     # 1. Calcolo feature
-    esp = wws.loc[hpt["ESN"] == e]
+    esp = hpt.loc[hpt["ESN"] == e]
     all_features_groups = alg.moving_features_with_stop(
         signal=d[sens].values,
         stop=esp,
