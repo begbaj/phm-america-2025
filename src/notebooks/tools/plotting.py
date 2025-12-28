@@ -18,10 +18,11 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
-from tools import utils as u
+from tools import utils as u, config as cfg
 from pandas import DataFrame
 from matplotlib.figure import Figure
 from typing import overload
+import os
 
 class PlotColors:
     def __init__(self, colors = None) -> None:
@@ -86,5 +87,43 @@ def plot_stat_ess(data: DataFrame):
         yield fig
 
 
-
-
+def plot_stat_feat(data: DataFrame, esn:int, sensor:str, snapshot:int, event_id:int, features_list:list,
+                   step:int, event_type:int, save_path:str=None):
+    """
+    Plot dei grafici per le feature statistiche dei segnali
+    """
+    event_name = cfg.EVENT_TYPES.get(event_type, f"Tipo {event_type}")
+    n_features = len(features_list)
+    fig, axes = plt.subplots(
+        n_features, 1, 
+        figsize=(15, 3 * n_features), 
+        sharex=True
+    )
+    fig.suptitle(
+        f"Analisi Multi-Parametrica Run to failure | ESN: {esn} | Sensor: {sensor} | Snapshot: {snapshot} \n"
+        f"Categoria: {event_name} | Evento n.: {event_id + 1}", 
+        fontsize=16, y=1.02
+    )
+    for ax, feat in zip(axes, features_list):
+        if feat not in data:
+            continue 
+        vals = data[feat]
+        ax.plot(vals, label=feat.upper(), color='tab:blue', linewidth=1.5)
+        # Estetica
+        ax.set_ylabel(feat.upper(), fontsize=10, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(loc='upper right')
+        if len(vals) > 0:
+            ax.axhline(np.mean(vals), color='red', linestyle=':', alpha=0.5)
+    axes[-1].set_xlabel("Window Index (Cicli)", fontsize=12)
+    plt.tight_layout()
+    # --- GESTIONE SALVATAGGIO E CARTELLE ---
+    if save_path:
+        # Crea la cartella se non esiste
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+            print(f"Cartella creata: {save_path}")
+        filename = f"ESN_{esn}_{event_name}_{sensor}_Evento_{event_id+1}_Snapshot_{snapshot}.png"
+        file_path = os.path.join(save_path, filename)
+        plt.savefig(file_path, bbox_inches='tight')
+    plt.close()

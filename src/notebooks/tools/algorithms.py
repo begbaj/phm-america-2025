@@ -98,7 +98,7 @@ def moving_features_with_stop(signal, stop, N, o=None):
     # Inizializziamo il gruppo con un dizionario di liste
     def new_group():
         return {
-            "rms": [], "mean": [], "std": [],
+            "rms":[], "mean": [], "std": [],
             "kurtosis": [], "skewness": [], "shape_factor": []
         }
     res[group_id] = new_group()

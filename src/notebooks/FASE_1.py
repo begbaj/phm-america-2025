@@ -22,9 +22,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
+import os
 
-# %load_ext autoreload
-# %autoreload 2
+#%load_ext autoreload
+#%autoreload 2
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
 
 # %%
@@ -139,67 +140,105 @@ for d, e, sens, snap in u.ess_iter(df):
     print(f"Kurtosis:     {d[sens].kurtosis():.4f}")
 
 
-# %%
-target_event = 0  # 0 per il primo pezzo, 1 per il secondo, ecc.
-features = ["rms", "mean", "std", "kurtosis", "skewness", "shape_factor"]
-
-window = 5
-overlap = 1
+# %% [markdown]
+# Calcolo delle features statistiche - Run to failure a evento
+# Grafici features statistiche run to failure eventi ww
+# --- CONFIGURAZIONE ---
+features = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
+window, overlap = 5, 4
 step = window - overlap
-
-items = list(u.ess_iter(df))
-n_plots = len(items)
-for (d, e, sens, snap) in items:
-    # 1. Calcolo le feature per questo sensore/ESN
-    # eventi di riparazione per ESN
-    esp = wws.loc[wws["ESN"] == e]
-    all_features_groups = alg.moving_features_with_stop(
-        signal=d[sens].values,
-        stop=esp,
-        N=window,
-        o=step
-    )
-
-    # curve sovrapposte
-    # for gid, rms_vals in rms_groups.items():
-    #     ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
-
-    # --- LOGICA DI SELEZIONE ---
-    # Verifichiamo se l'evento richiesto esiste nel dizionario
-    # Verifichiamo se il segmento esiste
-    if target_event not in all_features_groups:
-        print(f"Evento {target_event} non trovato per ESN {e}")
-        continue
-        
-    # 2. Creo una figura specifica per questo sensore con 6 subplot (3x2)
-    fig, axes = plt.subplots(
-        len(features), 1, 
-        figsize=(15, 3 * len(features)), 
-        sharex=True  # Condividono l'asse X per allineare i tempi
-    )
-    
-    fig.suptitle(
-        f"Analisi Multi-Parametrica | ESN: {e} | Sensor: {sens} | Snapshot: {snap} \nEvento n.: {target_event+1}", 
-        fontsize=16, y=1.02
-    )
-
-    # 4. Ciclo sui subplot per ogni feature
-    for ax, feat in zip(axes, features):
-        vals = all_features_groups[target_event][feat]
-        
-        ax.plot(vals, label=feat.upper(), color='tab:blue', linewidth=1.5)
-        
-        # Estetica del singolo subplot
-        ax.set_ylabel(feat.upper(), fontsize=10, fontweight='bold')
-        ax.grid(True, linestyle='--', alpha=0.7)
-        ax.legend(loc='upper right')
-        
-        # Opzionale: aggiunge una linea tratteggiata per la media globale del segmento
-        if len(vals) > 0:
-            ax.axhline(np.mean(vals), color='red', linestyle=':', alpha=0.5)
-
-    axes[-1].set_xlabel("Window Index (Tempo)", fontsize=12)
-    
-    plt.tight_layout()
-    plt.show()
+# --- ESECUZIONE ---
+for target_event in (0,2):
+    items = list(u.ess_iter(df))
+    for (d, e, sens, snap) in items:
+        # 1. Calcolo feature
+        esp = wws.loc[wws["ESN"] == e]
+        all_features_groups = alg.moving_features_with_stop(
+            signal=d[sens].values,
+            stop=esp,
+            N=window,
+            o=step
+        )
+        output_dir = f"{cfg.STAT_FEATURES_PATH}/WW/{e}/{sens}/"
+        # 2. Validazione
+        if target_event not in all_features_groups:
+            print(f"Evento {target_event} non trovato per ESN {e}")
+            continue
+        # 3. Plotting tramite funzione dedicata
+        up.plot_stat_feat(
+            all_features_groups[target_event],
+            e,
+            sens,
+            snap,
+            target_event,
+            features,
+            step,
+            0,
+            output_dir
+        )
 # %%
+# Grafici features statistiche run to failure eventi hpc
+# --- CONFIGURAZIONE ---
+window, overlap = 5, 1
+step = window - overlap
+for target_event in n_hpc:
+    # --- ESECUZIONE ---
+    items = list(u.ess_iter(df))
+    for (d, e, sens, snap) in items:
+        # 1. Calcolo feature
+        esp = wws.loc[hpc["ESN"] == e]
+        all_features_groups = alg.moving_features_with_stop(
+            signal=d[sens].values,
+            stop=esp,
+            N=window,
+            o=step
+        )
+        output_dir = f"{cfg.STAT_FEATURES_PATH}/HPC/{e}/{sens}/"
+        # 2. Validazione
+        if target_event not in all_features_groups:
+            print(f"Evento {target_event} non trovato per ESN {e}")
+            continue
+        # 3. Plotting tramite funzione dedicata
+        up.plot_stat_feat(
+            all_features_groups[target_event],
+            e,
+            sens,
+            snap,
+            target_event,
+            features,
+            1,
+            output_dir
+        )
+# %%
+# Grafici features statistiche run to failure eventi hpt
+# --- CONFIGURAZIONE ---
+window, overlap = 5, 1
+step = window - overlap
+for target_event in (0,2):
+    # --- ESECUZIONE ---
+    items = list(u.ess_iter(df))
+    for (d, e, sens, snap) in items:
+        # 1. Calcolo feature
+        esp = wws.loc[hpt["ESN"] == e]
+        all_features_groups = alg.moving_features_with_stop(
+            signal=d[sens].values,
+            stop=esp,
+            N=window,
+            o=step
+        )
+        output_dir = f"{cfg.STAT_FEATURES_PATH}/HPT/{e}/{sens}/"
+        # 2. Validazione
+        if target_event not in all_features_groups:
+            print(f"Evento {target_event} non trovato per ESN {e}")
+            continue
+        # 3. Plotting tramite funzione dedicata
+        up.plot_stat_feat(
+            all_features_groups[target_event],
+            e,
+            sens,
+            snap,
+            target_event,
+            features,
+            2,
+            output_dir
+        )
