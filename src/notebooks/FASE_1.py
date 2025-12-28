@@ -22,9 +22,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
+import os
 
-# %load_ext autoreload
-# %autoreload 2
+#%load_ext autoreload
+#%autoreload 2
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
 
 # %%
@@ -139,56 +140,101 @@ for d, e, sens, snap in u.ess_iter(df):
     print(f"Kurtosis:     {d[sens].kurtosis():.4f}")
 
 
-# %%
-window = 5
-overlap = 4
+# %% [markdown]
+# Calcolo delle features statistiche - Run to failure a evento
+# Grafici features statistiche run to failure eventi ww
+# --- CONFIGURAZIONE ---
+features = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
+window, overlap = 5, 1
 step = window - overlap
-
-items = list(u.ess_iter(df))
-n_plots = len(items)
-
-fig, axes = plt.subplots(
-    n_plots, 1,
-    figsize=(15, 4 * n_plots),
-    sharex=False
-)
-
-# caso con un solo subplot
-if n_plots == 1:
-    axes = [axes]
-
-for ax, (d, e, sens, snap) in zip(axes, items):
-
-    # eventi di riparazione per ESN
+# --- ESECUZIONE ---
+target_event = 0
+for (d, e, sens, snap) in u.ess_iter(df):
+    # 1. Calcolo feature
     esp = wws.loc[wws["ESN"] == e]
-
-    rms_groups = alg.moving_rms_with_stop(
+    all_features_groups = alg.moving_features_with_stop(
         signal=d[sens].values,
         stop=esp,
         N=window,
         o=step
     )
-
-    # curve sovrapposte
-    for gid, rms_vals in rms_groups.items():
-        ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
-
-    ax.set_title(
-        f"ESN: {e} | Sensor: {sens} | Snapshot: {snap}"
+    output_dir = f"{cfg.STAT_FEATURES_PATH}/WW/{e}/{sens}/"
+    # 2. Validazione
+    if target_event not in all_features_groups:
+        print(f"Evento {target_event} non trovato per ESN {e}")
+        continue
+    # 3. Plotting tramite funzione dedicata
+    up.plot_stat_feat(
+        all_features_groups[target_event],
+        e,
+        sens,
+        snap,
+        target_event,
+        features,
+        0,
+        output_dir
     )
-    ax.set_ylabel("RMS amplitude")
-    ax.grid(True)
-    ax.legend()
-
-axes[-1].set_xlabel("RMS window index")
-
-fig.suptitle(
-    f"Moving RMS dashboard | Window={window}, Overlap={overlap}",
-    fontsize=14
-)
-
-fig.tight_layout(rect=[0, 0, 1, 0.97])
-plt.show()
-
-
 # %%
+# Grafici features statistiche run to failure eventi hpc
+# --- CONFIGURAZIONE ---
+window, overlap = 5, 1
+step = window - overlap
+target_event = 0
+# --- ESECUZIONE ---
+for (d, e, sens, snap) in u.ess_iter(df):
+    # 1. Calcolo feature
+    esp = wws.loc[hpc["ESN"] == e]
+    all_features_groups = alg.moving_features_with_stop(
+        signal=d[sens].values,
+        stop=esp,
+        N=window,
+        o=step
+    )
+    output_dir = f"{cfg.STAT_FEATURES_PATH}/HPC/{e}/{sens}/"
+    # 2. Validazione
+    if target_event not in all_features_groups:
+        print(f"Evento {target_event} non trovato per ESN {e}")
+        continue
+    # 3. Plotting tramite funzione dedicata
+    up.plot_stat_feat(
+        all_features_groups[target_event],
+        e,
+        sens,
+        snap,
+        target_event,
+        features,
+        1,
+        output_dir
+    )
+# %%
+# Grafici features statistiche run to failure eventi hpt
+# --- CONFIGURAZIONE ---
+window, overlap = 5, 1
+step = window - overlap
+target_event = 0
+# --- ESECUZIONE ---
+for (d, e, sens, snap) in u.ess_iter(df):
+    # 1. Calcolo feature
+    esp = wws.loc[hpt["ESN"] == e]
+    all_features_groups = alg.moving_features_with_stop(
+        signal=d[sens].values,
+        stop=esp,
+        N=window,
+        o=step
+    )
+    output_dir = f"{cfg.STAT_FEATURES_PATH}/HPT/{e}/{sens}/"
+    # 2. Validazione
+    if target_event not in all_features_groups:
+        print(f"Evento {target_event} non trovato per ESN {e}")
+        continue
+    # 3. Plotting tramite funzione dedicata
+    up.plot_stat_feat(
+        all_features_groups[target_event],
+        e,
+        sens,
+        snap,
+        target_event,
+        features,
+        2,
+        output_dir
+    )

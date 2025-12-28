@@ -140,11 +140,17 @@ def load_training() -> FunctionType:
     """
     with open(c.DATA_PATH, "r") as f:
         return WrapData(pd.read_csv(f))
+    
+def load_ffill_training() -> FunctionType:
+    """
+    Carica il dataset di training
+    """
+    with open(c.DATA_PATH_FFILL, "r") as f:
+        return WrapData(pd.read_csv(f))
 
 def load_forward_fill() -> FunctionType:
     with open(c.DATA_TRAINING_PATH + "training_ffill.csv", "r") as f:
         return WrapData(pd.read_csv(f))
-
 
 
 def load_testing() -> FunctionType:
