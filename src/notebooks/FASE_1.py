@@ -140,51 +140,67 @@ for d, e, sens, snap in u.ess_iter(df):
     print(f"Kurtosis:     {d[sens].kurtosis():.4f}")
 
 
-# %% [markdown]
-# Calcolo delle features statistiche - Run to failure a evento
-# Grafici features statistiche run to failure eventi ww
-# --- CONFIGURAZIONE ---
-# features = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
-# window, overlap = 5, 1
-# step = window - overlap
-# --- ESECUZIONE ---
-# target_event = 0
-# for (d, e, sens, snap) in u.ess_iter(df):
-#     # 1. Calcolo feature
-#     esp = wws.loc[wws["ESN"] == e]
-#     all_features_groups = alg.moving_features_with_stop(
-#         signal=d[sens].values,
-#         stop=esp,
-#         N=window,
-#         o=step
-#     )
-#     output_dir = f"{cfg.STAT_FEATURES_PATH}/WW/{e}/{sens}/"
-#     # 2. Validazione
-#     if target_event not in all_features_groups:
-#         print(f"Evento {target_event} non trovato per ESN {e}")
-#         continue
-#     # 3. Plotting tramite funzione dedicata
-#     up.plot_stat_feat(
-#         all_features_groups[target_event],
-#         e,
-#         sens,
-#         snap,
-#         target_event,
-#         features,
-#         0,
-#         output_dir
-#     )
+# %%
+window = 5
+overlap = 4
+step = window - overlap
+
+items = list(u.ess_iter(df))
+n_plots = len(items)
+
+fig, axes = plt.subplots(
+    n_plots, 1,
+    figsize=(15, 4 * n_plots),
+    sharex=False
+)
+
+# caso con un solo subplot
+if n_plots == 1:
+    axes = [axes]
+
+for ax, (d, e, sens, snap) in zip(axes, items):
+
+    # eventi di riparazione per ESN
+    esp = wws.loc[wws["ESN"] == e]
+
+    rms_groups = alg.moving_rms_with_stop(
+        signal=d[sens].values,
+        stop=esp,
+        N=window,
+        o=step
+    )
+
+    # curve sovrapposte
+    for gid, rms_vals in rms_groups.items():
+        ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
+
+    ax.set_title(
+        f"ESN: {e} | Sensor: {sens} | Snapshot: {snap}"
+    )
+    ax.set_ylabel("RMS amplitude")
+    ax.grid(True)
+    ax.legend()
+
+axes[-1].set_xlabel("RMS window index")
+
+fig.suptitle(
+    f"Moving RMS dashboard | Window={window}, Overlap={overlap}",
+    fontsize=14
+)
+
+fig.tight_layout(rect=[0, 0, 1, 0.97])
+plt.show()
 # %%
 # Grafici features statistiche run to failure eventi hpc
 # --- CONFIGURAZIONE ---
 window, overlap = 5, 1
 step = window - overlap
-target_event = 0
+target = 0
 # --- ESECUZIONE ---
 for (d, e, sens, snap) in u.ess_iter(df):
     # 1. Calcolo feature
     esp = hpc.loc[hpc["ESN"] == e]
-    all_features_groups = alg.moving_features_with_stop(
+    featgroups = alg.moving_features_with_stop(
         signal=d[sens].values,
         stop=esp,
         N=window,
@@ -192,49 +208,38 @@ for (d, e, sens, snap) in u.ess_iter(df):
     )
     output_dir = f"{cfg.STAT_FEATURES_PATH}/HPC/{e}/{sens}/"
     # 2. Validazione
-    if target_event not in all_features_groups:
-        print(f"Evento {target_event} non trovato per ESN {e}")
+    if target not in featgroups:
+        print(f"Evento {target} non trovato per ESN {e}")
         continue
     # 3. Plotting tramite funzione dedicata
     up.plot_stat_feat(
-        all_features_groups[target_event],
+        featgroups[target],
         e,
         sens,
         snap,
-        target_event,
+        target,
         features,
         1,
         output_dir
     )
 # %%
-# Grafici features statistiche run to failure eventi hpt
-# --- CONFIGURAZIONE ---
-window, overlap = 5, 1
+window, overlap = 7, 4
 step = window - overlap
-target_event = 0
-# --- ESECUZIONE ---
-for (d, e, sens, snap) in u.ess_iter(df):
+old_esn = 0
+
+for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "sensor"]):
     # 1. Calcolo feature
-    esp = hpt.loc[hpt["ESN"] == e]
-    all_features_groups = alg.moving_features_with_stop(
-        signal=d[sens].values,
+    esp = hpts.loc[hpts["ESN"] == pdata.esn]
+    featgroups = alg.moving_features_with_stop(
+        signal=d[pdata.sensor].values,
         stop=esp,
         N=window,
         o=step
     )
-    output_dir = f"{cfg.STAT_FEATURES_PATH}/HPT/{e}/{sens}/"
-    # 2. Validazione
-    if target_event not in all_features_groups:
-        print(f"Evento {target_event} non trovato per ESN {e}")
-        continue
-    # 3. Plotting tramite funzione dedicata
-    up.plot_stat_feat(
-        all_features_groups[target_event],
-        e,
-        sens,
-        snap,
-        target_event,
-        features,
-        2,
-        output_dir
-    )
+
+    pdata.size=(20,10)
+    pdata.cols=3
+    pdata.repair = u.RepairEventType.HPT
+
+    if isinstance(pdata, up.PlotData):
+        up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, show=True, save=True)
