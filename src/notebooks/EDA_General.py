@@ -191,12 +191,12 @@ fig_hpt.show()
 # %%
 # Test per verificare la stazionarietà dei segnali dei sensori - controllo delle statistiche mobili dei segnali
 
-for esn_id in generals.ESN:
+for esn_id in utils.ESN:
     engine_data = train[train['ESN'] == esn_id].copy()
     fig, axes = plt.subplots(4, 4, figsize=(20, 16))
     axes = axes.flatten()
     print(f"Generazione dashboard per Motore ESN: {esn_id}...")
-    for i, sensor in enumerate(generals.SENSORS):
+    for i, sensor in enumerate(utils.ESENSORS):
         sensor_name = sensor.value if hasattr(sensor, 'value') else sensor
         ax = axes[i]
         series = engine_data[sensor_name].dropna()
