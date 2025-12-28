@@ -13,9 +13,11 @@
 #   def _<nome_funzione_helper>(<args>) -> <figura>:
 #       <logica helper>
 #       return <figura>
+from ast import FunctionType
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import math
 import numpy as np
 import pandas as pd
 from tools import utils as u, config as cfg
@@ -24,15 +26,19 @@ from matplotlib.figure import Figure
 from typing import overload
 import os
 
-class PlotColors:
-    def __init__(self, colors = None) -> None:
-        self.colors = colors
+class PlotData:
+    esn: int
+    snap: int
+    sensor: str
+    size: tuple[float,float] = (15,12)
+    cols: int = 3
+    repair: str
 
-    def minmax(self, min, max, values, cmname = "viridis") -> None:
-        norm = mcolors.Normalize(vmin=min, vmax=max)
-        cmap = cm.get_cmap(cmname)
-        colors = cmap(norm(values))
-        self.colors = colors
+
+    def __init__(self, esn=0, snap=0, sensor="None") -> None:
+        self.esn = esn
+        self.snap = snap
+        self.sensor = sensor
 
 
 def plot_avg_std_cycles_to_event(data: DataFrame, event:int, figsize: tuple[float, float] = (15,10)) -> Figure:
@@ -86,45 +92,71 @@ def plot_stat_ess(data: DataFrame):
         plt.tight_layout()
         yield fig
 
+def _dynamic_grid(dlength, cols=3, size=(5, 4)):
+    """
+    Creates a dynamic grid of subplots based on the number of elements in data_list.
+    
+    Parameters:
+    - n: numero di elementi
+    - plot_func: A function(item, ax) that takes a single item and an axis to plot on.
+    - cols: Number of columns in the grid.
+    - size: Tuple (width, height) for *each individual subplot*.
+    """
+    rows = math.ceil(dlength / cols)
+    figsize = (cols * size[0], rows * size[1])
+    fig, axes = plt.subplots(rows, cols, figsize=figsize)
+    axes_flat = axes.flatten() if dlength > 1 else [axes]
+    return fig, axes_flat
 
-def plot_stat_feat(data: DataFrame, esn:int, sensor:str, snapshot:int, event_id:int, features_list:list,
-                    event_type:int, save_path:str=None):
+
+
+
+def plot_stat_feat(data: dict, pdata: PlotData, repair:u.RepairEventType, featlist:list = None, save:bool=False, show=True):
+
     """
     Plot dei grafici per le feature statistiche dei segnali
     """
-    event_name = cfg.EVENT_TYPES.get(event_type, f"Tipo {event_type}")
-    n_features = len(features_list)
-    fig, axes = plt.subplots(
-        n_features, 1, 
-        figsize=(15, 3 * n_features), 
-        sharex=True
-    )
+    if featlist is None:
+        featlist = u.FEATURES
+    fig, axes = _dynamic_grid(len(featlist),cols=pdata.cols, size=pdata.size)
     fig.suptitle(
-        f"Analisi Multi-Parametrica Run to failure | ESN: {esn} | Sensor: {sensor} | Snapshot: {snapshot} \n"
-        f"Categoria: {event_name} | Evento n.: {event_id + 1}", 
+        f"Run to failure | ESN: {pdata.esn} | Sensor: {pdata.sensor} | Snapshot: {pdata.snap} \n"
+        f"Manutenzione: {repair}", 
         fontsize=16, y=1.02
     )
-    for ax, feat in zip(axes, features_list):
-        if feat not in data:
-            continue 
-        vals = data[feat]
-        ax.plot(vals, label=feat.upper(), color='tab:blue', linewidth=1.5)
-        # Estetica
-        ax.set_ylabel(feat.upper(), fontsize=10, fontweight='bold')
+
+    for ax, feat in zip(axes, featlist):
+        vals = []
+        all_x = []  
+        max_len = 0
+        for g, e in data.items():
+            y_data = e[feat]
+            vals.extend(y_data)
+            all_x.extend(range(len(y_data)))
+            if len(y_data) > max_len:
+                max_len = len(y_data)
+            ax.plot(y_data, label=g, linewidth=2, alpha=0.5)
+
+        if len(vals) > 0:
+            z = np.polyfit(all_x, vals, 1)
+            p = np.poly1d(z)
+            x_trend = np.arange(max_len)
+            ax.plot(x_trend, p(x_trend), color='red', linestyle=':', alpha=1, linewidth=3)
+
+        ax.set_title(feat.upper(), fontsize=10, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.7)
         ax.legend(loc='upper right')
-        #if len(vals) > 0:
-            #ax.axhline(np.mean(vals), color='red', linestyle=':', alpha=0.5)
+
     axes[-1].set_xlabel("Window Index (Cicli)", fontsize=12)
     plt.tight_layout()
-    # --- GESTIONE SALVATAGGIO E CARTELLE ---
-    if save_path:
-        # Crea la cartella se non esiste
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-            print(f"Cartella creata: {save_path}")
-        filename = f"ESN_{esn}_{event_name}_{sensor}_Evento_{event_id+1}_Snapshot_{snapshot}.png"
-        file_path = os.path.join(save_path, filename)
-        plt.savefig(file_path, bbox_inches='tight')
+
+    if save:
+        filename = "-".join([str(pdata.esn), str(pdata.sensor), str(pdata.snap), str(pdata.repair)]) + ".png"
+        path = u.plot_path("STAT_FEATURES", pdata.repair, pdata.esn, pdata.sensor, filename=filename)
+        plt.savefig(path, bbox_inches='tight')
+
+    if show:
+        plt.show()
+
     plt.close(fig)
-    plt.close('all')
+    return fig

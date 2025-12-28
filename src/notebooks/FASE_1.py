@@ -24,8 +24,8 @@ import numpy as np
 import scipy as sp
 import os
 
-#%load_ext autoreload
-#%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
 
 # %%
@@ -144,36 +144,36 @@ for d, e, sens, snap in u.ess_iter(df):
 # Calcolo delle features statistiche - Run to failure a evento
 # Grafici features statistiche run to failure eventi ww
 # --- CONFIGURAZIONE ---
-features = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
-window, overlap = 5, 1
-step = window - overlap
+# features = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
+# window, overlap = 5, 1
+# step = window - overlap
 # --- ESECUZIONE ---
-target_event = 0
-for (d, e, sens, snap) in u.ess_iter(df):
-    # 1. Calcolo feature
-    esp = wws.loc[wws["ESN"] == e]
-    all_features_groups = alg.moving_features_with_stop(
-        signal=d[sens].values,
-        stop=esp,
-        N=window,
-        o=step
-    )
-    output_dir = f"{cfg.STAT_FEATURES_PATH}/WW/{e}/{sens}/"
-    # 2. Validazione
-    if target_event not in all_features_groups:
-        print(f"Evento {target_event} non trovato per ESN {e}")
-        continue
-    # 3. Plotting tramite funzione dedicata
-    up.plot_stat_feat(
-        all_features_groups[target_event],
-        e,
-        sens,
-        snap,
-        target_event,
-        features,
-        0,
-        output_dir
-    )
+# target_event = 0
+# for (d, e, sens, snap) in u.ess_iter(df):
+#     # 1. Calcolo feature
+#     esp = wws.loc[wws["ESN"] == e]
+#     all_features_groups = alg.moving_features_with_stop(
+#         signal=d[sens].values,
+#         stop=esp,
+#         N=window,
+#         o=step
+#     )
+#     output_dir = f"{cfg.STAT_FEATURES_PATH}/WW/{e}/{sens}/"
+#     # 2. Validazione
+#     if target_event not in all_features_groups:
+#         print(f"Evento {target_event} non trovato per ESN {e}")
+#         continue
+#     # 3. Plotting tramite funzione dedicata
+#     up.plot_stat_feat(
+#         all_features_groups[target_event],
+#         e,
+#         sens,
+#         snap,
+#         target_event,
+#         features,
+#         0,
+#         output_dir
+#     )
 # %%
 # Grafici features statistiche run to failure eventi hpc
 # --- CONFIGURAZIONE ---

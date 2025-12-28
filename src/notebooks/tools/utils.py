@@ -6,6 +6,7 @@ from types import FunctionType
 from pandas import DataFrame, Series
 from enum import Enum
 from plotly.graph_objs import Data
+from tools import plotting
 from tools.config import DATA_PATH, PLOT_PATH
 import tools.config as c
 
@@ -51,6 +52,15 @@ class ESENSORS(Enum):
     def members(cls) -> list["ESENSORS"]:
         """Ritorna la lista dei membri Enum."""
         return list(cls)
+    
+class RepairEventType(Enum):
+    WW = 0
+    HPT = 1
+    HPC = 2
+
+    def __str__(self) -> str:
+        return REPAIR_EVENT_TYPES[self.value]
+
 
 ESN = range(101, 105)
 """
@@ -64,6 +74,9 @@ for esn in u.SNAPSHOTS:
 
 SENSORS = ESENSORS.values()
 
+FEATURES = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
+
+REPAIR_EVENT_TYPES = ["ww", "hpc", "hpt"]
 
 def plot_path(dirname: str, *args, filename=None) -> str:
     """
@@ -76,7 +89,7 @@ def plot_path(dirname: str, *args, filename=None) -> str:
         full_path = os.path.join(full_path, filename)
     return full_path
 
-def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"]):
+def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"], plotdata=False):
     order = [o.lower() for o in order]
     order_enum = {
         "esn": ESN,
@@ -104,7 +117,7 @@ def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"]):
             esn, sensor, snapshot = matcher(1,B, esn, sensor, snapshot)
             for C in order_enum[order[2]]:
                 esn, sensor, snapshot = matcher(2,C, esn, sensor, snapshot)
-                yield df_ess_filter(df, esn, sensor, snapshot, all=True)
+                yield df_ess_filter(df, esn, sensor, snapshot, all=True, pdata=plotdata)
 
 def iter_enum(S):
     """
@@ -153,6 +166,7 @@ def load_forward_fill() -> FunctionType:
         return WrapData(pd.read_csv(f))
 
 
+
 def load_testing() -> FunctionType:
     """
     Carica il dataset di training
@@ -196,8 +210,20 @@ def load_event_points(
 ### DATAFRAME MANIPULATION AND LOGICS
 ###
 
-def df_ess_filter(df: DataFrame, esn: int, sensor: str, snapshot: int, all=False):
+def df_reset_index(df: DataFrame, base=0):
+    df.index -= base
+
+def df_ess_filter(df: DataFrame, esn: int, sensor: str, snapshot: int, all=False, pdata=False):
     if all:
+        if pdata:
+            pdd = plotting.PlotData()
+            pdd.esn = esn
+            pdd.sensor = sensor
+            pdd.snap = snapshot
+            return df.loc[
+                (df["ESN"] == esn) & (df["Snapshot"] == snapshot),
+                [sensor]
+            ], pdd
         return df.loc[
             (df["ESN"] == esn) & (df["Snapshot"] == snapshot),
             [sensor]
