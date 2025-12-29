@@ -117,18 +117,14 @@ def _dynamic_grid(dlength, cols=3, size=(5, 4)):
     return fig, axes_flat
 
 
-
-
-def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=True,featlist:list = None, save:bool=False, show=True):
-
+def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=True, featlist: list = None, save: bool = False, show=True):
     """
     Plot dei grafici per le feature statistiche dei segnali
     """
-
     if featlist is None:
         featlist = u.FEATURES
 
-    fig, axes = _dynamic_grid(len(featlist),cols=pdata.cols, size=pdata.size)
+    fig, axes = _dynamic_grid(len(featlist), cols=pdata.cols, size=pdata.size)
 
     fig.suptitle(
         f"Run to failure | ESN: {pdata.esn} | Sensor: {pdata.sensor} | Snapshot: {pdata.snap} \n"
@@ -136,68 +132,71 @@ def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=Tr
         fontsize=16, y=1.02
     )
 
-
     for ax, feat in zip(axes, featlist):
         cmap = _get_color_cycler()
-        vals = []
-        all_x = []  
-        y_datas = []
+
+        series_data = [] # Stores tuples of (label, values)
+        all_vals = []    # Flattened y values for polyfit
+        all_x = []       # Flattened x values for polyfit
+        
         max_len = 0
-        min_len = 0
+        min_len = float('inf')
 
-        for i, (g, e) in enumerate(reversed(data.items())):
+        for g, e in reversed(data.items()):
             y_data = e[feat]
-            vals.extend(y_data)
-            all_x.extend(range(len(y_data)))
+            current_len = len(y_data)
+            
+            if current_len == 0: continue
 
-            if len(y_data) > max_len:
-                max_len = len(y_data)
+            max_len = max(max_len, current_len)
+            min_len = min(min_len, current_len)
+            
+            series_data.append((g, y_data))
+            all_vals.extend(y_data)
+            all_x.extend(range(current_len))
 
-            if len(y_data) < min_len or min_len == 0:
-                min_len = len(y_data)
+        if min_len == float('inf'): min_len = 0
 
-            y_datas.append(y_data)
-
-        for y in y_datas:
+        for label, y_data in series_data:
             ccol = next(cmap)
+            y_plot = y_data[:min_len] if stop else y_data
+            
+            ax.plot(y_plot, label=label, color=ccol, linewidth=1, alpha=0.4)
+
+            if not stop:
+                ax.axvline(len(y_data) - 1, color=ccol)
+
+        if len(all_vals) > 0:
             if stop:
-                ax.plot(y[:min_len], label=g, color=ccol, linewidth=1, alpha=0.4)
+                target_len = min_len
+                fit_x = all_x[:min_len]
+                fit_y = all_vals[:min_len]
             else:
-                ax.plot(y, label=g, color=ccol, linewidth=1, alpha=0.4)
-                ax.axvline(all_x[-1], color=ccol)
-        if not stop:
-            if len(vals) > 0: # polyfit
-                z = np.polyfit(all_x, vals, max_len)
-                p = np.poly1d(z)
-                x_trend = np.arange(max_len)
-                ax.plot(x_trend, p(x_trend), color='blue', alpha=0.6, linewidth=2)
+                target_len = max_len
+                fit_x = all_x
+                fit_y = all_vals
 
-                z = np.polyfit(all_x, vals, 4)
-                p = np.poly1d(z)
-                x_trend = np.arange(max_len)
-                ax.plot(x_trend, p(x_trend), color='green',linestyle=":" ,alpha=0.7, linewidth=3)
+            # Cap the max degree to 10 or (length-1), whichever is smaller.
+            # This prevents the SVD/LinAlgError.
+            safe_high_degree = min(target_len - 1, 10)
+            
+            # If safe_high_degree is too low (e.g. data has 2 points), ensure it doesn't break logic
+            if safe_high_degree < 1: safe_high_degree = 1
 
-                z = np.polyfit(all_x, vals, 1)
-                p = np.poly1d(z)
-                x_trend = np.arange(max_len)
-                ax.plot(x_trend, p(x_trend), color='red',alpha=1, linewidth=4)
-        else:
-            if len(vals) > 0: # polyfit
-                z = np.polyfit(all_x[:min_len], vals[:min_len], min_len)
-                p = np.poly1d(z)
-                x_trend = np.arange(min_len)
-                ax.plot(x_trend, p(x_trend), color='blue', alpha=0.6, linewidth=2)
+            x_trend = np.arange(target_len)
+            
+            trends = [
+                (safe_high_degree, 'blue', '-', 0.6, 2), # High degree (Capped)
+                (4, 'green', ':', 0.7, 3),               # 4th degree
+                (1, 'red', '-', 1.0, 4)                  # Linear
+            ]
 
-                z = np.polyfit(all_x[:min_len], vals[:min_len], 4)
+            for degree, color, style, alpha, width in trends:
+                z = np.polyfit(fit_x, fit_y, degree)
                 p = np.poly1d(z)
-                x_trend = np.arange(min_len)
-                ax.plot(x_trend, p(x_trend), color='green',linestyle=":" ,alpha=0.7, linewidth=3)
+                ax.plot(x_trend, p(x_trend), color=color, linestyle=style, alpha=alpha, linewidth=width)
 
-                z = np.polyfit(all_x[:min_len], vals[:min_len], 1)
-                p = np.poly1d(z)
-                x_trend = np.arange(min_len)
-                ax.plot(x_trend, p(x_trend), color='red',alpha=1, linewidth=4)
-
+        # 4. Styling
         ax.set_title(feat.upper(), fontsize=10, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.7)
         ax.legend(loc='upper right')
@@ -206,7 +205,7 @@ def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=Tr
     plt.tight_layout()
 
     if save:
-        filename = "-".join([str(pdata.esn), str(pdata.sensor), str(pdata.snap), str(pdata.repair)]) + ".png"
+        filename = f"{pdata.esn}-{pdata.sensor}-{pdata.snap}-{pdata.repair}.png"
         path = u.plot_path("STAT_FEATURES", pdata.repair, pdata.esn, pdata.sensor, filename=filename)
         plt.savefig(path, bbox_inches='tight')
 

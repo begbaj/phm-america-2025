@@ -28,10 +28,13 @@ import os
 # %load_ext autoreload
 # %autoreload 2
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
+from tools.types.plotdata import PlotData
+from tools.types.enums import *
 
 # %%
 otraining = u.load_training()
-# otraining = u.load_forward_fill()
+#otraining = u.load_forward_fill()
+# otraining = u.load_smooth_training(otraining, 10)
 owws, ohpc, ohpt = u.load_event_points(otraining())
 # load_training testing e validation restituiscono un la funzione WrapData per mantenere il dato originale intatto senza modifiche.
 # per accedere al dato e copiarlo basterà chiamarla come funzione che copierà il dataframe originale in una nuova variabile.
@@ -205,7 +208,7 @@ for (d, e, sens, snap) in u.ess_iter(df):
         signal=d[sens].values,
         stop=esp,
         N=window,
-        o=step
+        step=step
     )
     output_dir = f"{cfg.STAT_FEATURES_PATH}/HPC/{e}/{sens}/"
     # 2. Validazione
@@ -226,24 +229,25 @@ for (d, e, sens, snap) in u.ess_iter(df):
 # %%
 window, overlap = 7, 4
 step = window - overlap
-old_esn = 0
 
-dropped = df.dropna()
 
-for (d, pdata) in u.ess_iter(dropped, plotdata=True, order=["esn", "snapshot", "sensor"]):
+for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "sensor"]):
 
-    esp = hpts.loc[hpts["ESN"] == pdata.esn]
+    if not isinstance(pdata, PlotData) or not isinstance(d, pd.DataFrame):
+        break 
+
+    esp = hpts.loc[hpts["ESN"] == pdata.esn].index
 
     featgroups = alg.moving_features_with_stop(
-        signal=d[pdata.sensor].values,
+        signal=u.to_signal(d, pdata.sensor),
         stop=esp,
         N=window,
-        o=step
+        step=step
     )
 
     pdata.size=(20,10)
     pdata.cols=3
-    pdata.repair = u.RepairEventType.HPT
+    pdata.repair = RepairEventType.HPT
 
     if isinstance(pdata, up.PlotData):
-        up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, show=True, save=True)
+        up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)

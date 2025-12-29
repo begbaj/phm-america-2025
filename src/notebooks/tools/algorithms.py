@@ -1,3 +1,4 @@
+import itertools
 import pandas as pd
 import numpy as np
 import scipy as sp
@@ -23,7 +24,7 @@ def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:
     return xf, yf
 
 def rms(signal):
-    return np.sqrt(np.mean(signal**2))
+    return np.sqrt(np.mean(np.array(signal)**2))
 
 def moving_rms_with_stop(signal, stop, N, o=None):
     """
@@ -81,51 +82,123 @@ def skewness(signal, bias=False):
 def kurtosis(signal, fisher=True, bias=False):
     return spstats.kurtosis(signal, fisher, bias)
 
+import numpy as np
+import scipy.stats as spstats
 
-def moving_features_with_stop(signal, stop, N, o=None):
-    """
-    signal : array-like (1D)
-    stop   : DataFrame con index = sample in cui avviene la riparazione
-    N      : window size
-    o      : step size (default = N, no overlap)
-    """
-    if o is None:
-        o = N
-    stop_points = stop.index.to_numpy()
-    stop_ptr = 0
-    res = {}
-    group_id = 0
-    # Inizializziamo il gruppo con un dizionario di liste
+def moving_features_with_stop_individually(signal: list[tuple[int, float]], stop: list[int], N, step=None) -> list[dict]:
+    if step is None:
+        step = N
+
     def new_group():
-        return {
-            "rms":[], "mean": [], "std": [],
-            "kurtosis": [], "skewness": [], "shape_factor": []
-        }
-    res[group_id] = new_group()
+        return {"rms": [], "mean": [], "std": [], "kurtosis": [], "skewness": [], "shape_factor": []}
+
+    # Initialize result as a list containing the first group
+    res = []
+    res.append(new_group())
+
     i = 0
     L = len(signal)
+    stop_ptr = 0
+    
+    stop = sorted(stop)
+
     while i + N <= L:
-        # Se supero l'evento di riparazione, cambio gruppo
-        if stop_ptr < len(stop_points) and i >= stop_points[stop_ptr]:
-            group_id += 1
-            res[group_id] = new_group()
+        # Check if current signal index matches or passes the next stop point
+        if stop_ptr < len(stop) and signal[i][0] >= int(stop[stop_ptr]):
             stop_ptr += 1
-        window = signal[i:i + N]
-        # Protezione: se la finestra è vuota, salta
-        if len(window) == 0:
-            i += o
+            
+            # START NEW GROUP: Append a new dictionary to the list
+            res.append(new_group())
+            
+            # Continue to re-evaluate (handle multiple stops or proceed)
             continue
-        # Calcolo delle statistiche
+
+        window_list = [a[1] for a in signal[i:i + N]]
+        window = np.array(window_list)
+
+        if len(window) == 0:
+            i += step
+            continue
+
         m = np.mean(window)
         s = np.std(window)
-        r = rms(window)
+        r = np.sqrt(np.mean(np.square(window))) 
+
+        # APPEND TO CURRENT GROUP: Always target the last dictionary in the list
+        current_group = res[-1]
+        
+        current_group["mean"].append(m)
+        current_group["std"].append(s)
+        current_group["rms"].append(r)
+
+        current_group["kurtosis"].append(float(spstats.kurtosis(window, axis=0, fisher=True)))
+        current_group["skewness"].append(float(spstats.skew(window, axis=0)))
+        
+        mean_abs = np.mean(np.abs(window))
+        sf = r / mean_abs if mean_abs != 0 else 0
+        current_group["shape_factor"].append(sf)
+
+        i += step
+
+    return res
+
+def moving_features_with_stop(signal: list[tuple[int, float]], stop: list[int], N, step=None):
+    if step is None:
+        step = N
+
+    def new_group():
+        return {"rms": [], "mean": [], "std": [], "kurtosis": [], "skewness": [], "shape_factor": []}
+
+    group_id = 0
+    res = {}
+    res[group_id] = new_group()
+
+    i = 0
+    L = len(signal)
+    stop_ptr = 0
+    
+    # Ensure stop list is sorted, otherwise logic breaks
+    stop = sorted(stop)
+
+    while i + N <= L:
+        # Check if current signal index matches or passes the next stop point
+        if stop_ptr < len(stop) and signal[i][0] >= int(stop[stop_ptr]):
+            stop_ptr += 1
+            group_id += 1
+            res[group_id] = new_group()
+            # We continue to re-evaluate in case multiple stops overlap
+            # or to proceed to processing with the new group_id
+            continue
+
+        # Extract values for the window
+        window_list = [a[1] for a in signal[i:i + N]]
+        
+        # FIX: Convert to numpy array for math operations
+        window = np.array(window_list)
+
+        if len(window) == 0:
+            i += step
+            continue
+
+        # Vectorized calculations are safer on np.array
+        m = np.mean(window)
+        s = np.std(window)
+        
+        # Use np.square to handle the array/list safe RMS calculation
+        r = np.sqrt(np.mean(np.square(window))) 
+
         res[group_id]["mean"].append(m)
         res[group_id]["std"].append(s)
         res[group_id]["rms"].append(r)
-        # Forziamo l'asse 0 (per array 1D)
+
         res[group_id]["kurtosis"].append(float(spstats.kurtosis(window, axis=0, fisher=True)))
         res[group_id]["skewness"].append(float(spstats.skew(window, axis=0)))
-        # Shape Factor = RMS / Mean Absolute Value
-        res[group_id]["shape_factor"].append(r / np.mean(np.abs(window)) if np.mean(np.abs(window)) != 0 else 0)
-        i += o
+        
+        # Safety check for division by zero
+        mean_abs = np.mean(np.abs(window))
+        sf = r / mean_abs if mean_abs != 0 else 0
+        res[group_id]["shape_factor"].append(sf)
+
+        i += step
+
     return res

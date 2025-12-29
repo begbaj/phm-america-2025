@@ -78,6 +78,16 @@ def iter_enum(S):
         except (AssertionError, TypeError):
             yield p.value
 
+def to_signal(df, column) -> list[tuple[int,float]]:
+    ixs = df.index
+    vals = df[column].values
+
+    if len(ixs) != len(vals):
+        print("Length of ixs and vals are not the same")
+        return [(0,0)]
+
+    return list(zip(ixs, vals)) 
+
 ###
 ### DATA
 ###
@@ -113,7 +123,7 @@ def load_forward_fill() -> FunctionType:
     with open(c.DATA_TRAINING_PATH + "training_ffill.csv", "r") as f:
         return WrapData(pd.read_csv(f))
     
-def load_smooth_training(orig: DataFrame, span: int) -> DataFrame:
+def load_smooth_training(orig: FunctionType, span: int) -> DataFrame:
     """
     Genera il dataset con smoothing
     
@@ -122,16 +132,15 @@ def load_smooth_training(orig: DataFrame, span: int) -> DataFrame:
     :param span: finestra di punti considerati
     :type span: int
     """
-    smooth_data = orig.copy()
+    data = orig()
     try:
-        for idx, sensor in enumerate(SENSORS):
-            sensor_name = sensor.value if hasattr(sensor, 'value') else sensor
-            smooth_data[sensor_name] = smooth_data.groupby(['ESN', 'Snapshot'], group_keys=False)[sensor_name].transform(
+        for idx, sensor in enumerate(ESENSORS.values()):
+            data[sensor] = data.groupby(['ESN', 'Snapshot'], group_keys=False)[sensor].transform(
                 lambda x: x.ewm(span=span, adjust=False).mean())
         print(f"Dataset filtrato con successo")
     except:
         print("Errore nel filtraggio del dataset")
-    return smooth_data
+    return WrapData(data)
 
 
 def load_testing() -> FunctionType:
