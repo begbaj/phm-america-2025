@@ -1,6 +1,7 @@
 # ---
 # jupyter:
 #   jupytext:
+#     formats: ipynb,py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
@@ -243,3 +244,4 @@ for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "senso
 
     if isinstance(pdata, up.PlotData):
         up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, show=True, save=True)
+
