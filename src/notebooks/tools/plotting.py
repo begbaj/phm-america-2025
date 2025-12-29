@@ -24,21 +24,9 @@ from tools import utils as u, config as cfg
 from pandas import DataFrame
 from matplotlib.figure import Figure
 from typing import overload
+from tools.types.plotdata import PlotData
+from tools.types.enums import ESENSORS, RepairEventType
 import os
-
-class PlotData:
-    esn: int
-    snap: int
-    sensor: str
-    size: tuple[float,float] = (15,12)
-    cols: int = 3
-    repair: str
-
-
-    def __init__(self, esn=0, snap=0, sensor="None") -> None:
-        self.esn = esn
-        self.snap = snap
-        self.sensor = sensor
 
 
 def plot_avg_std_cycles_to_event(data: DataFrame, event:int, figsize: tuple[float, float] = (15,10)) -> Figure:
@@ -111,14 +99,17 @@ def _dynamic_grid(dlength, cols=3, size=(5, 4)):
 
 
 
-def plot_stat_feat(data: dict, pdata: PlotData, repair:u.RepairEventType, featlist:list = None, save:bool=False, show=True):
+def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, featlist:list = None, save:bool=False, show=True):
 
     """
     Plot dei grafici per le feature statistiche dei segnali
     """
+
     if featlist is None:
         featlist = u.FEATURES
+
     fig, axes = _dynamic_grid(len(featlist),cols=pdata.cols, size=pdata.size)
+
     fig.suptitle(
         f"Run to failure | ESN: {pdata.esn} | Sensor: {pdata.sensor} | Snapshot: {pdata.snap} \n"
         f"Manutenzione: {repair}", 
@@ -129,19 +120,33 @@ def plot_stat_feat(data: dict, pdata: PlotData, repair:u.RepairEventType, featli
         vals = []
         all_x = []  
         max_len = 0
+
         for g, e in data.items():
             y_data = e[feat]
             vals.extend(y_data)
             all_x.extend(range(len(y_data)))
             if len(y_data) > max_len:
                 max_len = len(y_data)
-            ax.plot(y_data, label=g, linewidth=2, alpha=0.5)
+            ax.plot(y_data, label=g, linewidth=1, alpha=0.4)
+        ax.axvline(all_x[-1])
 
-        if len(vals) > 0:
+        if len(vals) > 0: # polyfit
+            z = np.polyfit(all_x, vals, max_len)
+            p = np.poly1d(z)
+            x_trend = np.arange(max_len)
+            ax.plot(x_trend, p(x_trend), color='blue', alpha=0.6, linewidth=2)
+
+        if len(vals) > 0: # polyfit
+            z = np.polyfit(all_x, vals, 4)
+            p = np.poly1d(z)
+            x_trend = np.arange(max_len)
+            ax.plot(x_trend, p(x_trend), color='green',linestyle=":" ,alpha=0.7, linewidth=3)
+
+        if len(vals) > 0: # polyfit
             z = np.polyfit(all_x, vals, 1)
             p = np.poly1d(z)
             x_trend = np.arange(max_len)
-            ax.plot(x_trend, p(x_trend), color='red', linestyle=':', alpha=1, linewidth=3)
+            ax.plot(x_trend, p(x_trend), color='red',alpha=1, linewidth=4)
 
         ax.set_title(feat.upper(), fontsize=10, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.7)

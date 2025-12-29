@@ -9,74 +9,20 @@ from plotly.graph_objs import Data
 from tools import plotting
 from tools.config import DATA_PATH, PLOT_PATH
 import tools.config as c
+from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 
 ###
 ### ENUMS
 ###
 
-
-class ESENSORS(Enum):
-    """
-    è una lista dei sensori presenti nel dataset
-    serve solo per evitare di scrivere a mano i nomi dei sensori
-    """
-
-    Sensed_Altitude = "Sensed_Altitude"
-    Sensed_Mach = "Sensed_Mach"
-    Sensed_Pamb = "Sensed_Pamb"
-    Sensed_Pt2 = "Sensed_Pt2"
-    Sensed_TAT = "Sensed_TAT"
-    Sensed_WFuel = "Sensed_WFuel"
-    Sensed_VAFN = "Sensed_VAFN"
-    Sensed_VBV = "Sensed_VBV"
-    Sensed_Fan_Speed = "Sensed_Fan_Speed"
-    Sensed_Core_Speed = "Sensed_Core_Speed"
-    Sensed_T25 = "Sensed_T25"
-    Sensed_T3 = "Sensed_T3"
-    Sensed_Ps3 = "Sensed_Ps3"
-    Sensed_T45 = "Sensed_T45"
-    Sensed_P25 = "Sensed_P25"
-    Sensed_T5 = "Sensed_T5"
-
-    @classmethod
-    def values(cls) -> list[str]:
-        """Ritorna la lista dei valori."""
-        return [e.value for e in cls]
-
-    @classmethod
-    def iter(cls) -> list[str]:
-        """DEPRECATO, usa values. Ritorna la lista dei valori."""
-        return [e.value for e in cls]
-
-    @classmethod
-    def members(cls) -> list["ESENSORS"]:
-        """Ritorna la lista dei membri Enum."""
-        return list(cls)
-    
-class RepairEventType(Enum):
-    WW = 0
-    HPT = 1
-    HPC = 2
-
-    def __str__(self) -> str:
-        return REPAIR_EVENT_TYPES[self.value]
-
-
 ESN = range(101, 105)
 """
 for esn in u.ESN:
 """
-
-SNAPSHOTS = range(1, 9)
-"""
-for esn in u.SNAPSHOTS:
-"""
-
+SNAPSHOTS = range(1,9)
 SENSORS = ESENSORS.values()
-
 FEATURES = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
 
-REPAIR_EVENT_TYPES = ["ww", "hpc", "hpt"]
 
 def plot_path(dirname: str, *args, filename=None) -> str:
     """
@@ -93,9 +39,11 @@ def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"], plotdata=False)
     order = [o.lower() for o in order]
     order_enum = {
         "esn": ESN,
-        "sensor": SENSORS,
-        "snapshot": SNAPSHOTS,
+        "sensor": ESENSORS.values(),
+        "snapshot": Snapshots.values(),
+        "event": RepairEventType.values(),
     }
+
     esn: int = 0
     sensor: str = "Sensor"
     snapshot: int = 0

@@ -229,8 +229,9 @@ step = window - overlap
 old_esn = 0
 
 for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "sensor"]):
-    # 1. Calcolo feature
+
     esp = hpts.loc[hpts["ESN"] == pdata.esn]
+
     featgroups = alg.moving_features_with_stop(
         signal=d[pdata.sensor].values,
         stop=esp,
@@ -244,4 +245,3 @@ for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "senso
 
     if isinstance(pdata, up.PlotData):
         up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, show=True, save=True)
-
