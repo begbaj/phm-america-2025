@@ -30,8 +30,8 @@ import os
 from tools import utils as u, config as cfg, algorithms as alg, plotting as up
 
 # %%
-# otraining = u.load_training()
-otraining = u.load_forward_fill()
+otraining = u.load_training()
+# otraining = u.load_forward_fill()
 owws, ohpc, ohpt = u.load_event_points(otraining())
 # load_training testing e validation restituiscono un la funzione WrapData per mantenere il dato originale intatto senza modifiche.
 # per accedere al dato e copiarlo basterà chiamarla come funzione che copierà il dataframe originale in una nuova variabile.
@@ -85,9 +85,9 @@ for a in [A,B,C,D]:
     printcent(f"Cicli tra un evento e l'altro - {esn}")
     ww, hpc, hpt = u.df_avg_stdd_cycles_to_event(a)
 
-    nww = len(u.df_filter_by_key(wws, 'ESN', int(esn)))
-    nhpc = len(u.df_filter_by_key(hpcs, 'ESN', int(esn)))
-    nhpt = len(u.df_filter_by_key(hpts, 'ESN', int(esn)))
+    nww = u.df_filter_by_key(wws, 'ESN', int(esn)).shape[0]
+    nhpc = u.df_filter_by_key(hpcs, 'ESN', int(esn)).shape[0]
+    nhpt = u.df_filter_by_key(hpts, 'ESN', int(esn)).shape[0]
 
     print(f"EVENTO \tMEAN\tDEVIAZIONE STD \t EVENTI: ")
     print(f"WW   :\t{round(ww[0])} \t {round(ww[1])} \t\t {nww}")
@@ -228,7 +228,9 @@ window, overlap = 7, 4
 step = window - overlap
 old_esn = 0
 
-for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "sensor"]):
+dropped = df.dropna()
+
+for (d, pdata) in u.ess_iter(dropped, plotdata=True, order=["esn", "snapshot", "sensor"]):
 
     esp = hpts.loc[hpts["ESN"] == pdata.esn]
 
