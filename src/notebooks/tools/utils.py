@@ -126,7 +126,6 @@ def load_smooth_training(orig: DataFrame, span: int) -> DataFrame:
     try:
         for idx, sensor in enumerate(SENSORS):
             sensor_name = sensor.value if hasattr(sensor, 'value') else sensor
-            print(f"Elaborazione sensore: {sensor_name}")
             smooth_data[sensor_name] = smooth_data.groupby(['ESN', 'Snapshot'], group_keys=False)[sensor_name].transform(
                 lambda x: x.ewm(span=span, adjust=False).mean())
         print(f"Dataset filtrato con successo")
