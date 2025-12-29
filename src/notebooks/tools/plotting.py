@@ -116,6 +116,183 @@ def _dynamic_grid(dlength, cols=3, size=(5, 4)):
     axes_flat = axes.flatten() if dlength > 1 else [axes]
     return fig, axes_flat
 
+def plot_stat_feat_individually_mean(data: dict, pdata: PlotData, repair: RepairEventType, stop=True, featlist: list = None, save: bool = False, show=True):
+    """
+    Plot dei grafici per le feature statistiche dei segnali
+    """
+
+    if featlist is None:
+        featlist = u.FEATURES
+
+    fig, axes = _dynamic_grid(len(featlist), cols=pdata.cols, size=pdata.size)
+
+    fig.suptitle(
+        f"Run to failure | ESN: {pdata.esn} | Sensor: {pdata.sensor} | Snapshot: {pdata.snap} \n"
+        f"Manutenzione: {repair}", 
+        fontsize=16, y=1.02
+    )
+
+    trends = [
+        #(5, 'blue', '-', 0.6, 2),               
+        #(4, 'green', ':', 0.7, 2),               # 4th degree
+        (1, 'red', '-', 0.8, 2)                  # Linear
+    ]
+
+    for ax, feat in zip(axes, featlist):
+        cmap = _get_color_cycler()
+
+        series_data = [] # Stores tuples of (label, values)
+        
+        max_len = 0
+        min_len = float('inf')
+
+        for g, e in data.items():
+            y_data = e[feat]
+            current_len = len(y_data)
+            
+            if current_len == 0: continue
+
+            max_len = max(max_len, current_len)
+            min_len = min(min_len, current_len)
+            
+            series_data.append((g, y_data))
+
+        if min_len == float('inf'): min_len = 0
+
+        # Prepare x values for trend fitting
+        if min_len == 0:
+            continue
+        
+
+        # Inside your loop:
+        for label, y_data in series_data:
+            ccol = next(cmap)
+            
+            # 1. Prepare data and X-axis
+            y_plot = y_data[:min_len] if stop else y_data
+            x_vals = np.arange(len(y_plot))
+            
+            # 2. Plot the raw data
+            ax.plot(x_vals, y_plot, label=label, color=ccol, linewidth=1, alpha=0.1)
+
+            if not stop:
+                ax.axvline(len(y_data) - 1, color=ccol)
+
+            # 3. Plot the Rolling Mean (Smoothed Data)
+            # We still unpack 'degree' to keep the tuple format, but we don't use it.
+            for degree, color, style, alpha, width in trends:
+                
+                # Calculate dynamic window size
+                window = max(5, int(len(y_plot) * 0.1))
+                
+                y_smooth = pd.Series(y_plot).rolling(window=window, center=True, min_periods=1).std().to_numpy()
+                ax.plot(x_vals, y_smooth, color=ccol, linestyle=style, alpha=alpha, linewidth=width)
+                y_smooth = pd.Series(y_plot).rolling(window=window, center=True, min_periods=1).mean().to_numpy()
+                ax.plot(x_vals, y_smooth, color=ccol, linestyle=style, alpha=alpha-0.05, linewidth=width-0.5)
+            
+        # 4. Styling
+        ax.set_title(feat.upper(), fontsize=10, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(loc='upper right')
+
+    axes[-1].set_xlabel("Window Index (Cicli)", fontsize=12)
+    plt.tight_layout()
+
+    if save:
+        filename = f"{pdata.esn}-{pdata.sensor}-{pdata.snap}-{pdata.repair}.png"
+        path = u.plot_path("STAT_FEATURES", pdata.repair, pdata.esn, pdata.sensor, filename=filename)
+        plt.savefig(path, bbox_inches='tight')
+
+    if show:
+        plt.show()
+
+    plt.close(fig)
+    return fig
+
+
+def plot_stat_feat_individually(data: dict, pdata: PlotData, repair: RepairEventType, stop=True, featlist: list = None, save: bool = False, show=True):
+    """
+    Plot dei grafici per le feature statistiche dei segnali
+    """
+
+    if featlist is None:
+        featlist = u.FEATURES
+
+    fig, axes = _dynamic_grid(len(featlist), cols=pdata.cols, size=pdata.size)
+
+    fig.suptitle(
+        f"Run to failure | ESN: {pdata.esn} | Sensor: {pdata.sensor} | Snapshot: {pdata.snap} \n"
+        f"Manutenzione: {repair}", 
+        fontsize=16, y=1.02
+    )
+
+    trends = [
+        #(5, 'blue', '-', 0.6, 2),               
+        #(4, 'green', ':', 0.7, 2),               # 4th degree
+        (1, 'red', '-', 0.8, 2)                  # Linear
+    ]
+
+    for ax, feat in zip(axes, featlist):
+        cmap = _get_color_cycler()
+
+        series_data = [] # Stores tuples of (label, values)
+        
+        max_len = 0
+        min_len = float('inf')
+
+        for g, e in reversed(data.items()):
+            y_data = e[feat]
+            current_len = len(y_data)
+            
+            if current_len == 0: continue
+
+            max_len = max(max_len, current_len)
+            min_len = min(min_len, current_len)
+            
+            series_data.append((g, y_data))
+
+        if min_len == float('inf'): min_len = 0
+
+        # Prepare x values for trend fitting
+        if min_len == 0:
+            continue
+        
+
+        for label, y_data in series_data:
+            fit_x = np.arange(len(y_data))
+            x_trend = np.arange(len(y_data))
+            ccol = next(cmap)
+            y_plot = y_data[:min_len] if stop else y_data
+            
+            ax.plot(y_plot, label=label, color=ccol, linewidth=1, alpha=0.4)
+
+            if not stop:
+                ax.axvline(len(y_data) - 1, color=ccol)
+
+            for degree, color, style, alpha, width in trends:
+                z = np.polyfit(fit_x, y_plot, degree)
+                p = np.poly1d(z)
+                ax.plot(x_trend, p(x_trend), color=ccol, linestyle=style, alpha=alpha, linewidth=width)
+
+        # 4. Styling
+        ax.set_title(feat.upper(), fontsize=10, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(loc='upper right')
+
+    axes[-1].set_xlabel("Window Index (Cicli)", fontsize=12)
+    plt.tight_layout()
+
+    if save:
+        filename = f"{pdata.esn}-{pdata.sensor}-{pdata.snap}-{pdata.repair}.png"
+        path = u.plot_path("STAT_FEATURES", pdata.repair, pdata.esn, pdata.sensor, filename=filename)
+        plt.savefig(path, bbox_inches='tight')
+
+    if show:
+        plt.show()
+
+    plt.close(fig)
+    return fig
+
 
 def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=True, featlist: list = None, save: bool = False, show=True):
     """

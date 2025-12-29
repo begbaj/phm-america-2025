@@ -8,6 +8,7 @@ from enum import Enum
 from plotly.graph_objs import Data
 from tools import plotting
 from tools.config import DATA_PATH, PLOT_PATH
+import random
 import tools.config as c
 from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 
@@ -35,7 +36,7 @@ def plot_path(dirname: str, *args, filename=None) -> str:
         full_path = os.path.join(full_path, filename)
     return full_path
 
-def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"], plotdata=False):
+def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"], plotdata=False, rand = False):
     order = [o.lower() for o in order]
     order_enum = {
         "esn": ESN,
@@ -43,6 +44,9 @@ def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"], plotdata=False)
         "snapshot": Snapshots.values(),
         "event": RepairEventType.values(),
     }
+
+    if rand:
+        order_enum = {k: random.sample(list(v), len(v)) for k, v in order_enum.items()}
 
     esn: int = 0
     sensor: str = "Sensor"

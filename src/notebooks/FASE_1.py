@@ -145,98 +145,48 @@ for d, e, sens, snap in u.ess_iter(df):
 
 
 # %%
-window = 5
-overlap = 4
-step = window - overlap
+for esn_id in u.ESN:
+    edata = u.df_filter_by_key(df, "ESN", esn_id)
+    fig, axes = plt.subplots(4, 4, figsize=(20, 16))
+    axes = axes.flatten()
+    print(f"Generazione dashboard per Motore ESN: {esn_id}...")
+    for i, sensor in enumerate(ESENSORS):
+        ax = axes[i]
+        series = edata[str(sensor)]
 
-items = list(u.ess_iter(df))
-n_plots = len(items)
+        if len(series) > 16:
+            roll_mean = series.rolling(window=16).mean()
+            roll_std = series.rolling(window=16).std()
 
-fig, axes = plt.subplots(
-    n_plots, 1,
-    figsize=(15, 4 * n_plots),
-    sharex=False
-)
+            ax.plot(series.values, alpha=0.3, label='Raw', color='gray')
+            ax.plot(roll_mean.values, label='Media Mobile', color='blue', linewidth=1.5)
+            ax.plot(roll_std.values, label='Std Mobile', color='red', linewidth=1)
+        else:
+            ax.text(0.5, 0.5, 'Dati insufficienti', ha='center', va='center')
+        # Formattazione singolo grafico
+        ax.set_title(f"{sensor_name}", fontsize=10)
+        ax.grid(True, alpha=0.2, linestyle='--')
+        ax.tick_params(axis='both', which='major', labelsize=8)
+        if i == 0:
+            ax.legend(loc='upper left', fontsize='x-small')
 
-# caso con un solo subplot
-if n_plots == 1:
-    axes = [axes]
+    fig.suptitle(f"Analisi Stazionarietà - Motore ESN {esn_id}", fontsize=20, y=1.02)
+    plt.tight_layout()
+    plt.savefig(f"Analisi_Stazionarieta_ESN_{esn_id}.png", bbox_inches='tight')
+    plt.show()
 
-for ax, (d, e, sens, snap) in zip(axes, items):
-
-    # eventi di riparazione per ESN
-    esp = wws.loc[wws["ESN"] == e]
-
-    rms_groups = alg.moving_rms_with_stop(
-        signal=d[sens].values,
-        stop=esp,
-        N=window,
-        o=step
-    )
-
-    # curve sovrapposte
-    for gid, rms_vals in rms_groups.items():
-        ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
-
-    ax.set_title(
-        f"ESN: {e} | Sensor: {sens} | Snapshot: {snap}"
-    )
-    ax.set_ylabel("RMS amplitude")
-    ax.grid(True)
-    ax.legend()
-
-axes[-1].set_xlabel("RMS window index")
-
-fig.suptitle(
-    f"Moving RMS dashboard | Window={window}, Overlap={overlap}",
-    fontsize=14
-)
-
-fig.tight_layout(rect=[0, 0, 1, 0.97])
-plt.show()
-# %%
-# Grafici features statistiche run to failure eventi hpc
-# --- CONFIGURAZIONE ---
-window, overlap = 5, 1
-step = window - overlap
-target = 0
-# --- ESECUZIONE ---
-for (d, e, sens, snap) in u.ess_iter(df):
-    # 1. Calcolo feature
-    esp = hpc.loc[hpc["ESN"] == e]
-    featgroups = alg.moving_features_with_stop(
-        signal=d[sens].values,
-        stop=esp,
-        N=window,
-        step=step
-    )
-    output_dir = f"{cfg.STAT_FEATURES_PATH}/HPC/{e}/{sens}/"
-    # 2. Validazione
-    if target not in featgroups:
-        print(f"Evento {target} non trovato per ESN {e}")
-        continue
-    # 3. Plotting tramite funzione dedicata
-    up.plot_stat_feat(
-        featgroups[target],
-        e,
-        sens,
-        snap,
-        target,
-        features,
-        1,
-        output_dir
-    )
 # %%
 window, overlap = 7, 4
 step = window - overlap
 
 
-for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "sensor"]):
+for (d, pdata) in u.ess_iter(df, plotdata=True, order=["snapshot", "sensor", "esn"], rand=True):
 
     if not isinstance(pdata, PlotData) or not isinstance(d, pd.DataFrame):
         break 
 
-    esp = hpts.loc[hpts["ESN"] == pdata.esn].index
+    # esp = hpcs.loc[hpcs["ESN"] == pdata.esn].index
+    esp = wws.loc[wws["ESN"] == pdata.esn].index
 
     featgroups = alg.moving_features_with_stop(
         signal=u.to_signal(d, pdata.sensor),
@@ -247,7 +197,7 @@ for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "senso
 
     pdata.size=(20,10)
     pdata.cols=3
-    pdata.repair = RepairEventType.HPT
+    pdata.repair = str(RepairEventType.WW)
 
     if isinstance(pdata, up.PlotData):
-        up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)
+        up.plot_stat_feat_individually(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)

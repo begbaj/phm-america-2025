@@ -82,66 +82,6 @@ def skewness(signal, bias=False):
 def kurtosis(signal, fisher=True, bias=False):
     return spstats.kurtosis(signal, fisher, bias)
 
-import numpy as np
-import scipy.stats as spstats
-
-def moving_features_with_stop_individually(signal: list[tuple[int, float]], stop: list[int], N, step=None) -> list[dict]:
-    if step is None:
-        step = N
-
-    def new_group():
-        return {"rms": [], "mean": [], "std": [], "kurtosis": [], "skewness": [], "shape_factor": []}
-
-    # Initialize result as a list containing the first group
-    res = []
-    res.append(new_group())
-
-    i = 0
-    L = len(signal)
-    stop_ptr = 0
-    
-    stop = sorted(stop)
-
-    while i + N <= L:
-        # Check if current signal index matches or passes the next stop point
-        if stop_ptr < len(stop) and signal[i][0] >= int(stop[stop_ptr]):
-            stop_ptr += 1
-            
-            # START NEW GROUP: Append a new dictionary to the list
-            res.append(new_group())
-            
-            # Continue to re-evaluate (handle multiple stops or proceed)
-            continue
-
-        window_list = [a[1] for a in signal[i:i + N]]
-        window = np.array(window_list)
-
-        if len(window) == 0:
-            i += step
-            continue
-
-        m = np.mean(window)
-        s = np.std(window)
-        r = np.sqrt(np.mean(np.square(window))) 
-
-        # APPEND TO CURRENT GROUP: Always target the last dictionary in the list
-        current_group = res[-1]
-        
-        current_group["mean"].append(m)
-        current_group["std"].append(s)
-        current_group["rms"].append(r)
-
-        current_group["kurtosis"].append(float(spstats.kurtosis(window, axis=0, fisher=True)))
-        current_group["skewness"].append(float(spstats.skew(window, axis=0)))
-        
-        mean_abs = np.mean(np.abs(window))
-        sf = r / mean_abs if mean_abs != 0 else 0
-        current_group["shape_factor"].append(sf)
-
-        i += step
-
-    return res
-
 def moving_features_with_stop(signal: list[tuple[int, float]], stop: list[int], N, step=None):
     if step is None:
         step = N
