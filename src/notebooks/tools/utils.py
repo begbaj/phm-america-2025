@@ -112,7 +112,27 @@ def load_ffill_training() -> FunctionType:
 def load_forward_fill() -> FunctionType:
     with open(c.DATA_TRAINING_PATH + "training_ffill.csv", "r") as f:
         return WrapData(pd.read_csv(f))
-
+    
+def load_smooth_training(orig: DataFrame, span: int) -> DataFrame:
+    """
+    Genera il dataset con smoothing
+    
+    :param orig: dataframe da filtrare
+    :type orig: DataFrame
+    :param span: finestra di punti considerati
+    :type span: int
+    """
+    smooth_data = orig.copy()
+    try:
+        for idx, sensor in enumerate(SENSORS):
+            sensor_name = sensor.value if hasattr(sensor, 'value') else sensor
+            print(f"Elaborazione sensore: {sensor_name}")
+            smooth_data[sensor_name] = smooth_data.groupby(['ESN', 'Snapshot'], group_keys=False)[sensor_name].transform(
+                lambda x: x.ewm(span=span, adjust=False).mean())
+        print(f"Dataset filtrato con successo")
+    except:
+        print("Errore nel filtraggio del dataset")
+    return smooth_data
 
 
 def load_testing() -> FunctionType:
