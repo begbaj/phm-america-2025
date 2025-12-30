@@ -1,8 +1,14 @@
 import itertools
+from time import monotonic
 import pandas as pd
 import numpy as np
+import progpy.datasets
+import progpy.datasets.nasa_battery
+import progpy.metrics
+import progpy.mixture_of_experts
 import scipy as sp
 import scipy.stats as spstats
+import progpy
 
 
 def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:
@@ -142,3 +148,20 @@ def moving_features_with_stop(signal: list[tuple[int, float]], stop: list[int], 
         i += step
 
     return res
+
+def monotonicity(signal):
+    diffs = np.diff(signal)
+    n = len(diffs)
+    pos_diffs = np.sum(diffs > 0)
+    neg_diffs = np.sum(diffs < 0)
+    return np.abs(pos_diffs - neg_diffs) / n
+
+
+def evaluate_feature_groups_stats(featgroups: dict[str, list[tuple[int, float]]]):
+    results = {}
+    for feat_name, signal in featgroups.items():
+        m = monotonicity(signal)
+
+        results[feat_name] = {}
+        results[feat_name]["monotonicity"] = m
+    return results

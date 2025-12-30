@@ -195,9 +195,11 @@ for (d, pdata) in u.ess_iter(df, plotdata=True, order=["snapshot", "sensor", "es
         step=step
     )
 
+    print(alg.evaluate_feature_groups_stats(featgroups[0]))
+
     pdata.size=(20,10)
     pdata.cols=3
     pdata.repair = str(RepairEventType.WW)
 
-    if isinstance(pdata, up.PlotData):
-        up.plot_stat_feat_individually(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)
+    # if isinstance(pdata, up.PlotData):
+    #     up.plot_stat_feat_individually(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)
