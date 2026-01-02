@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -24,6 +24,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
 import os
+from matplotlib.path import Path
+from collections import deque
 
 # %load_ext autoreload
 # %autoreload 2
@@ -34,7 +36,7 @@ from tools.types.enums import *
 # %%
 otraining = u.load_training()
 #otraining = u.load_forward_fill()
-# otraining = u.load_smooth_training(otraining, 10)
+otraining = u.load_smooth_training(otraining, 10)
 owws, ohpc, ohpt = u.load_event_points(otraining())
 # load_training testing e validation restituiscono un la funzione WrapData per mantenere il dato originale intatto senza modifiche.
 # per accedere al dato e copiarlo basterà chiamarla come funzione che copierà il dataframe originale in una nuova variabile.
@@ -42,6 +44,89 @@ df = otraining()
 wws = owws()
 hpcs = ohpc()
 hpts = ohpt()
+
+# %%
+# Creazione dei csv per la simulazione
+
+# --- CONFIGURAZIONE INVILUPPO ---
+envelope_vertices = [
+    (0.0, 0), (0.0, 10000), (0.2, 10000), (0.5, 25000), 
+    (0.6, 35000), (0.7, 40000), (0.8, 40000), (0.8, 25000), 
+    (0.7, 2000), (0.5, 0), (0.0, 0)
+]
+flight_envelope = Path(envelope_vertices)
+
+# --- CONFIGURAZIONE OUTPUT ---
+header_line1 = ",,Basic Inputs,,,,,Engine Health Parameters,,,,,,,,,,,,,,Sensor/Actuator Biases Applied Before Model Call,,,,,,,,Sensor/Actuator Biases Applied After Model Call,,,,,,,"
+header_line2 = "Notes,,Altitude,Mach,N1c,dTamb,,fan_WcMod,fan_PRMod,fan_EffMod,lpc_WcMod,lpc_PRMod,lpc_EffMod,hpc_WcMod,hpc_PRMod,hpc_EffMod,hpt_WcMod,hpt_EffMod,lpt_WcMod,lpt_EffMod,,Pamb_bias,Pt2_bias,Tt2_bias,N1mech_bias,VBV_bias,VAFN_bias,HP_EM_pwr_bias,,N3mech_bias,Wf_bias,Tt25_bias,Pt25_bias,Tt3_bias,Ps3_bias,Tt45_bias,Tt5_bias"
+
+# Colonne da estrarre
+column_mapping = {
+    "Sensed_Altitude": "Altitude",
+    "Sensed_Mach": "Mach",
+    "Sensed_Fan_Speed": "N1c"
+}
+
+raw_cols = header_line2.split(',')
+clean_cols = [name if name != '' else f"EMPTY_{i}" for i, name in enumerate(raw_cols)]
+
+# --- GESTIONE MEDIE ---
+window_size = 10
+history_cols = ["Altitude", "Mach", "N1c"]
+running_history = {col: deque(maxlen=window_size) for col in history_cols}
+
+for esn in u.ESN:
+    for snap in u.SNAPSHOTS:
+        mask = (df['ESN'] == esn) & (df['Snapshot'] == snap)
+        subset = df.loc[mask, list(column_mapping.keys())].copy()
+        
+        if not subset.empty:
+            # 1. Creiamo il DataFrame di output con lo stesso numero di righe del subset
+            num_rows = len(subset)
+            final_df = pd.DataFrame(0.0, index=np.arange(num_rows), columns=clean_cols)
+            
+            # 2. Verifichiamo la validità punto per punto (o sul valore medio dello snapshot)
+            # Qui decidiamo: se la MEDIA dello snapshot è valida, teniamo tutto lo snapshot
+            avg_mach = subset['Sensed_Mach'].mean()
+            avg_alt = subset['Sensed_Altitude'].mean()
+            avg_fan = subset['Sensed_Fan_Speed'].mean()
+
+            is_valid = (
+                flight_envelope.contains_point((avg_mach, avg_alt)) and
+                850 <= avg_fan <= 2550
+            )
+
+            if is_valid:
+                # Se è VALIDO: Copiamo i dati riga per riga dal subset originale
+                final_df['Altitude'] = subset['Sensed_Altitude'].values
+                final_df['Mach'] = subset['Sensed_Mach'].values
+                final_df['N1c'] = subset['Sensed_Fan_Speed'].values
+                
+                # Aggiorniamo la cronologia delle medie per i futuri punti invalidi
+                # (usiamo la media di questo snapshot per la memoria)
+                running_history['Altitude'].append(avg_alt)
+                running_history['Mach'].append(avg_mach)
+                running_history['N1c'].append(avg_fan)
+            else:
+                # Se NON è VALIDO: Riempiamo tutte le righe con la media storica
+                for col in history_cols:
+                    val_to_use = sum(running_history[col]) / len(running_history[col]) if running_history[col] else 0.0
+                    final_df[col] = val_to_use
+            
+            # dTamb rimane a 0.0 per tutte le righe come richiesto
+            final_df["dTamb"] = 0.0
+
+            # --- SALVATAGGIO ---
+            os.makedirs(os.path.dirname(cfg.DATA_SIMULATION_PATH), exist_ok=True)
+            final_save_path = f"{cfg.DATA_SIMULATION_PATH}_ESN-{esn}_Snap-{snap}.csv"
+            
+            with open(final_save_path, 'w', encoding='utf-8') as f:
+                f.write(header_line1 + "\n")
+                f.write(header_line2 + "\n")
+                # Scrittura dati (dTamb e gli altri saranno 0.0)
+                final_df.to_csv(f, index=False, header=False, lineterminator='\n')
+            
+            print(f"ESN {esn} Snap {snap}: {'OK' if is_valid else 'SOSTITUITO (Media)'}")
 
 
 # %%
@@ -121,6 +206,11 @@ figb.show()
 figc.show()
 
 # %% [markdown]
+# ## Profili run to failure
+
+# %%
+
+# %% [markdown]
 # # Stazionarietà
 # Parlare di stazionarietà dei segnali, nel caso dei dati a disposizione, non ha granchè senso se i dati vengono valutati tutti insieme. Bisogna perciò fare una analisi separata per ogni gruppo di dati che contengono dati dello stesso snapshot in voli diversi nello stesso motore.
 #
@@ -145,48 +235,98 @@ for d, e, sens, snap in u.ess_iter(df):
 
 
 # %%
-for esn_id in u.ESN:
-    edata = u.df_filter_by_key(df, "ESN", esn_id)
-    fig, axes = plt.subplots(4, 4, figsize=(20, 16))
-    axes = axes.flatten()
-    print(f"Generazione dashboard per Motore ESN: {esn_id}...")
-    for i, sensor in enumerate(ESENSORS):
-        ax = axes[i]
-        series = edata[str(sensor)]
+window = 5
+overlap = 4
+step = window - overlap
 
-        if len(series) > 16:
-            roll_mean = series.rolling(window=16).mean()
-            roll_std = series.rolling(window=16).std()
+items = list(u.ess_iter(df))
+n_plots = len(items)
 
-            ax.plot(series.values, alpha=0.3, label='Raw', color='gray')
-            ax.plot(roll_mean.values, label='Media Mobile', color='blue', linewidth=1.5)
-            ax.plot(roll_std.values, label='Std Mobile', color='red', linewidth=1)
-        else:
-            ax.text(0.5, 0.5, 'Dati insufficienti', ha='center', va='center')
-        # Formattazione singolo grafico
-        ax.set_title(f"{sensor_name}", fontsize=10)
-        ax.grid(True, alpha=0.2, linestyle='--')
-        ax.tick_params(axis='both', which='major', labelsize=8)
-        if i == 0:
-            ax.legend(loc='upper left', fontsize='x-small')
+fig, axes = plt.subplots(
+    n_plots, 1,
+    figsize=(15, 4 * n_plots),
+    sharex=False
+)
 
-    fig.suptitle(f"Analisi Stazionarietà - Motore ESN {esn_id}", fontsize=20, y=1.02)
-    plt.tight_layout()
-    plt.savefig(f"Analisi_Stazionarieta_ESN_{esn_id}.png", bbox_inches='tight')
-    plt.show()
+# caso con un solo subplot
+if n_plots == 1:
+    axes = [axes]
 
+for ax, (d, e, sens, snap) in zip(axes, items):
+
+    # eventi di riparazione per ESN
+    esp = wws.loc[wws["ESN"] == e]
+
+    rms_groups = alg.moving_rms_with_stop(
+        signal=d[sens].values,
+        stop=esp,
+        N=window,
+        o=step
+    )
+
+    # curve sovrapposte
+    for gid, rms_vals in rms_groups.items():
+        ax.plot(rms_vals, label=f"Group {gid}", alpha=0.8)
+
+    ax.set_title(
+        f"ESN: {e} | Sensor: {sens} | Snapshot: {snap}"
+    )
+    ax.set_ylabel("RMS amplitude")
+    ax.grid(True)
+    ax.legend()
+
+axes[-1].set_xlabel("RMS window index")
+
+fig.suptitle(
+    f"Moving RMS dashboard | Window={window}, Overlap={overlap}",
+    fontsize=14
+)
+
+fig.tight_layout(rect=[0, 0, 1, 0.97])
+plt.show()
+# %%
+# Grafici features statistiche run to failure eventi hpc
+# --- CONFIGURAZIONE ---
+window, overlap = 5, 1
+step = window - overlap
+target = 0
+# --- ESECUZIONE ---
+for (d, e, sens, snap) in u.ess_iter(df):
+    # 1. Calcolo feature
+    esp = hpc.loc[hpc["ESN"] == e]
+    featgroups = alg.moving_features_with_stop(
+        signal=d[sens].values,
+        stop=esp,
+        N=window,
+        step=step
+    )
+    output_dir = f"{cfg.STAT_FEATURES_PATH}/HPC/{e}/{sens}/"
+    # 2. Validazione
+    if target not in featgroups:
+        print(f"Evento {target} non trovato per ESN {e}")
+        continue
+    # 3. Plotting tramite funzione dedicata
+    up.plot_stat_feat(
+        featgroups[target],
+        e,
+        sens,
+        snap,
+        target,
+        features,
+        1,
+        output_dir
+    )
 # %%
 window, overlap = 7, 4
 step = window - overlap
 
 
-for (d, pdata) in u.ess_iter(df, plotdata=True, order=["snapshot", "sensor", "esn"], rand=True):
+for (d, pdata) in u.ess_iter(df, plotdata=True, order=["esn", "snapshot", "sensor"]):
 
     if not isinstance(pdata, PlotData) or not isinstance(d, pd.DataFrame):
         break 
 
-    # esp = hpcs.loc[hpcs["ESN"] == pdata.esn].index
-    esp = wws.loc[wws["ESN"] == pdata.esn].index
+    esp = hpts.loc[hpts["ESN"] == pdata.esn].index
 
     featgroups = alg.moving_features_with_stop(
         signal=u.to_signal(d, pdata.sensor),
@@ -195,11 +335,11 @@ for (d, pdata) in u.ess_iter(df, plotdata=True, order=["snapshot", "sensor", "es
         step=step
     )
 
-    print(alg.evaluate_feature_groups_stats(featgroups[0]))
-
     pdata.size=(20,10)
     pdata.cols=3
-    pdata.repair = str(RepairEventType.WW)
+    pdata.repair = RepairEventType.HPT
 
-    # if isinstance(pdata, up.PlotData):
-    #     up.plot_stat_feat_individually(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)
+    if isinstance(pdata, up.PlotData):
+        up.plot_stat_feat(featgroups, pdata, repair=pdata.repair, stop=False, show=True, save=True)
+
+# %%
