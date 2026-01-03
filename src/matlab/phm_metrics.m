@@ -1,7 +1,8 @@
 clear; clc; close all;
 
 % --- CONFIGURATION ---
-dataPath = 'data/PHM2025_training_data/training_data.csv'; 
+dataPath = 'data/PHM2025_training_data/training_data.csv';
+%data_path = ''
 ESNS = [101, 102, 103, 104];
 SNAPSHOTS_TO_PLOT = [1, 2, 3, 4, 5, 6, 7, 8]; % Which snapshots (flights) to visualize?
 FEATURES_NAMES = {'mean', 'std', 'rms', 'kurtosis', 'skewness', 'shape_factor'};
@@ -17,13 +18,31 @@ step_size = 3;
 fprintf('Loading data...\n');
 T_raw = readtable(dataPath);
 
+% --- 1b. FILTRAGGIO GLOBALE ---
+fprintf('Filtering sensors with moving average...\n');
+% Creiamo una copia per non sovrascrivere i dati originali se servono
+T_filtered = T_raw; 
+
+for i = 1:length(ESNS)
+    current_esn = ESNS(i);
+    % Identifica le righe di questo motore
+    idx = T_filtered.ESN == current_esn;
+    
+    % Applica il filtro solo alle colonne dei sensori per questo ESN
+    for s = 1:length(SENSORS)
+        sens_name = SENSORS{s};
+        % movmean con finestra 15 (puoi regolarlo)
+        T_filtered{idx, sens_name} = movmean(T_filtered{idx, sens_name}, 1);
+    end
+end
+
 % --- 2. MAIN LOOP: PER ESN ---
 for esn_idx = 1:length(ESNS)
     current_esn = ESNS(esn_idx);
     fprintf('\nProcessing ESN: %d\n', current_esn);
     
     % Prepare Data for this ESN
-    df = T_raw(T_raw.ESN == current_esn, :);
+    df = T_filtered(T_filtered.ESN == current_esn, :);
     df = sortrows(df, 'Cycles_Since_New');
     df.Index = (1:height(df))';
     
@@ -96,7 +115,8 @@ for esn_idx = 1:length(ESNS)
     
     % Create a figure for this ESN
     fig = figure('Name', sprintf('ESN %d Analysis', current_esn), 'Color', 'w');
-    t = tiledlayout(length(SNAPSHOTS_TO_PLOT), 2, 'TileSpacing', 'compact');
+    fig.WindowState = 'maximized';
+    t = tiledlayout(fig, length(SNAPSHOTS_TO_PLOT), 2, 'TileSpacing', 'compact');
     title(t, sprintf('Top Features by Snapshot for ESN %d', current_esn));
     
     keys_list = SnapshotRankings.keys;
@@ -143,7 +163,7 @@ end
 function df_out = get_step_points(df, column_name)
     vals = df.(column_name);
     prev_vals = [NaN; vals(1:end-1)];
-    mask = vals < prev_vals; % Drops
+    mask = (vals ~= prev_vals) & ~isnan(prev_vals); % different
     df_out = df(mask, :);
 end
 
