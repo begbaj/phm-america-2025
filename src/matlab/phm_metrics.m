@@ -31,8 +31,8 @@ for i = 1:length(ESNS)
     % Applica il filtro solo alle colonne dei sensori per questo ESN
     for s = 1:length(SENSORS)
         sens_name = SENSORS{s};
-        % movmean con finestra 15 (puoi regolarlo)
-        T_filtered{idx, sens_name} = movmean(T_filtered{idx, sens_name}, 1);
+        % movmean con finestra 10 
+        T_filtered{idx, sens_name} = movmean(T_filtered{idx, sens_name}, 10);
     end
 end
 
