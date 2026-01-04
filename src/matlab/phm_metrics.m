@@ -1,73 +1,55 @@
 clear; clc; close all;
 
-% --- CONFIGURATION ---
-dataPath = 'data/PHM2025_training_data/training_data.csv';
-%data_path = ''
+%% Configurazione
+
+DATA_PATH = 'data/PHM2025_training_data/training_data.csv';
 ESNS = [101, 102, 103, 104];
-SNAPSHOTS_TO_PLOT = [1, 2, 3, 4, 5, 6, 7, 8]; % Which snapshots (flights) to visualize?
+SNAPSHOTS_TO_PLOT = [1, 2, 3, 4, 5, 6, 7, 8];
 FEATURES_NAMES = {'mean', 'std', 'rms', 'kurtosis', 'skewness', 'shape_factor'};
 SENSORS = {'Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_Pt2', ...
            'Sensed_TAT', 'Sensed_WFuel', 'Sensed_VAFN', 'Sensed_VBV', ...
            'Sensed_Fan_Speed', 'Sensed_Core_Speed', 'Sensed_T25', 'Sensed_T3', ...
            'Sensed_Ps3', 'Sensed_T45', 'Sensed_P25', 'Sensed_T5'};
 
-window_size = 10;
-step_size = 3;
+WINDOW_SIZE = 10;
+STEP_SIZE = 3;
+CUMULATIVE_TYPE = ["Cumulative_WWs", "Cumulative_HPT_SVs", "Cumulative_HPC_SVs"];
 
-% --- 1. LOAD DATA ---
-fprintf('Loading data...\n');
-T_raw = readtable(dataPath);
+%% T_movmean contiene il dataset ma con un moving mean window
+T_raw = readtable(DATA_PATH);
+T_movmean = T_raw;
 
-% --- 1b. FILTRAGGIO GLOBALE ---
-fprintf('Filtering sensors with moving average...\n');
-% Creiamo una copia per non sovrascrivere i dati originali se servono
-T_filtered = T_raw; 
-
-for i = 1:length(ESNS)
-    current_esn = ESNS(i);
-    % Identifica le righe di questo motore
-    idx = T_filtered.ESN == current_esn;
-    
-    % Applica il filtro solo alle colonne dei sensori per questo ESN
-    for s = 1:length(SENSORS)
-        sens_name = SENSORS{s};
-        % movmean con finestra 10 
-        T_filtered{idx, sens_name} = movmean(T_filtered{idx, sens_name}, 10);
+for esn = ESNS
+    idx = T_movmean.ESN == esn;
+    for sensor = SENSORS
+        T_movmean{idx, sensor} = movmean(T_movmean{idx, sensor}, WINDOW_SIZE);
     end
 end
+clearvars idx esn sensor
 
-% --- 2. MAIN LOOP: PER ESN ---
-for esn_idx = 1:length(ESNS)
-    current_esn = ESNS(esn_idx);
-    fprintf('\nProcessing ESN: %d\n', current_esn);
-    
-    % Prepare Data for this ESN
-    df = T_filtered(T_filtered.ESN == current_esn, :);
-    df = sortrows(df, 'Cycles_Since_New');
+%% 
+
+for esn = ESNS
+    fprintf('Processing ESN: %d', esn);
+    df = T_movmean(T_movmean.ESN == esn, :);
     df.Index = (1:height(df))';
-    
-    % Get Split Points (Snapshots boundaries)
-    stops_table = get_step_points(df, 'Cumulative_WWs');
-    if isempty(stops_table)
-        stop_indices = [];
-    else
-        stop_indices = stops_table.Index;
-    end
+    % carichiamo il dataset con solo i record dell'attuale ESN e poi
+    % reimpostiamo l'indice
+    % ora vogliamo ottenere i "step_points", ovvero i record in cui
+    % avvengono delle manutenzioni
+    stops_table = get_step_points(df, CUMULATIVE_TYPE(1));
+    stop_indices = stops_table.Index;
     
     % Storage for this ESN: Map<SnapshotID, Table_of_Rankings>
     % We will store ranking tables for every snapshot here
     SnapshotRankings = containers.Map('KeyType', 'double', 'ValueType', 'any');
-    
-    % --- 3. PER SENSOR CALCULATION ---
-    for s_idx = 1:length(SENSORS)
-        sens_name = SENSORS{s_idx};
-        
-        % Prepare signal matrix [Index, Value]
-        signal = [df.Index, df.(sens_name)];
-        
+
+    for sensor = SENSORS
+        signal = [df.Index, df.(sensor{1})];
+
         % Run Moving Features (returns struct array, one element per snapshot)
         % segments(1) = Snapshot 1, segments(2) = Snapshot 2, etc.
-        segments = moving_features(signal, stop_indices, window_size, step_size);
+        segments = moving_features(signal, stop_indices, WINDOW_SIZE, STEP_SIZE);
         
         % Iterate through the specific snapshots we care about
         for snap_id = SNAPSHOTS_TO_PLOT
@@ -82,22 +64,28 @@ for esn_idx = 1:length(ESNS)
                 continue; 
             end
             
-            % --- CALCULATE MONOTONICITY FOR ALL FEATURES ---
             for f_name = FEATURES_NAMES
                 feat = f_name{1};
                 traj = seg_data.(feat);
                 
                 % Monotonicity = Abs(Spearman Correlation with Time)
                 time_vec = (1:length(traj))';
-                mono = abs(corr(time_vec, traj(:), 'Type', 'Spearman'));
-                
+
+                %mono = abs(corr(time_vec, traj(:), 'Type', 'Spearman'));
+                mono = monotonicity({traj}, time_vec);
+                progno = prognosability({traj}, time_vec);
+                trend = trendability({traj}, time_vec);
+
                 if isnan(mono), mono = 0; end
+                if isnan(progno), progno = 0; end
+                if isnan(trend), trend = 0; end
                 
                 % Store result in a temporary list for this snapshot
                 % We need to aggregate these into a table later
                 if ~isKey(SnapshotRankings, snap_id)
-                     % Initialize empty table for this snapshot if new
-                     SnapshotRankings(snap_id) = table({}, {}, [], 'VariableNames', {'Sensor', 'Feature', 'Monotonicity'});
+                     SnapshotRankings(snap_id) = table({}, {}, [], ...
+                         'VariableNames', {'Sensor', 'Feature', ...
+                         'Monotonicity', 'Prognosability', 'Trendability'});
                 end
                 
                 current_tbl = SnapshotRankings(snap_id);
@@ -147,7 +135,7 @@ for esn_idx = 1:length(ESNS)
         % Re-extract the specific trajectory to plot it
         % (Inefficient to re-calc, but keeps code cleaner than storing everything)
         raw_sig = [df.Index, df.(best_sens)];
-        segs = moving_features(raw_sig, stop_indices, window_size, step_size);
+        segs = moving_features(raw_sig, stop_indices, WINDOW_SIZE, STEP_SIZE);
         best_traj = segs(snap_id).(best_feat);
         
         plot(best_traj, 'LineWidth', 1.5, 'Color', 'r');
