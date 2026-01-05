@@ -62,10 +62,9 @@ for esn in u.ESN:
         final_struct = df_evento[['Cycles_Since_New']].reset_index()
         final_struct = final_struct.rename(columns={'index': 'Index'})
         final_events[esn][type] = final_struct
-        file_name = f"{cfg.DATA_EVENTS_PATH}_{type}_{esn}.csv"
-        full_path = os.path.join(file_name, file_name)
-        final_struct.to_csv(full_path, index=False)
-        print(f"File salvato: {full_path}")
+        file_name = f"{cfg.DATA_EVENTS_PATH}{type}_{esn}.csv"
+        final_struct.to_csv(file_name, index=False)
+        print(f"File salvato: {file_name}")
 
 
 # %% [markdown]
