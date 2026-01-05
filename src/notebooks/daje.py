@@ -36,6 +36,10 @@ from tools.types.enums import *
 # %%
 # DA RIVEDERE COME DEFINIRE GLI STEP POINTS
 # Load original data and event points
+
+if not os.path.exists(cfg.DATA_EVENTS_PATH):
+    os.makedirs(cfg.DATA_EVENTS_PATH)
+
 otraining = u.load_training()
 df = otraining()
 
@@ -55,9 +59,13 @@ for esn in u.ESN:
     final_events[esn] = {}
     for type in u.EVENTS:
         df_evento = events_per_motor[esn][type]
-        struttura_pulita = df_evento[['Cycles_Since_New']].reset_index()
-        struttura_pulita = struttura_pulita.rename(columns={'index': 'Index'})
-        final_events[esn][type] = struttura_pulita
+        final_struct = df_evento[['Cycles_Since_New']].reset_index()
+        final_struct = final_struct.rename(columns={'index': 'Index'})
+        final_events[esn][type] = final_struct
+        file_name = f"{cfg.DATA_EVENTS_PATH}_{type}_{esn}.csv"
+        full_path = os.path.join(file_name, file_name)
+        final_struct.to_csv(full_path, index=False)
+        print(f"File salvato: {full_path}")
 
 
 # %% [markdown]
