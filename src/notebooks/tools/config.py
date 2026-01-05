@@ -18,3 +18,6 @@ DATA_TRAINING_PATH = f"../../Data/PHM2025_training_data/"
 
 DATA_PATH_FFILL = f"../../Data/PHM2025_training_data/training_ffill.csv"
 """../../Data/PHM2025_training_data/training_ffill.csv"""
+
+DATA_REFACTOR_PATH = f"../../Data/REFACTOR"
+DATA_EVENTS_PATH = f"../../Data/EVENTS/"
