@@ -156,7 +156,6 @@ for s = 1:length(SNAPSHOTS_TO_ANALYZE)
     T_esn_avg = groupsummary(T_metrics, {'Sensor', 'ESN'}, 'mean', ...
         {'Monotonicity', 'Prognosability', 'Trendability', 'TotalScore'});  
     % 2. Media Globale per Sensore (Media di tutti i motori)
-    % Rimuoviamo il prefisso 'mean_' generato automaticamente da MATLAB per pulizia
     T_sensor_final = groupsummary(T_esn_avg, 'Sensor', 'mean', ...
         {'mean_Monotonicity', 'mean_Prognosability', 'mean_Trendability', 'mean_TotalScore'}); 
     % Rinominiamo le colonne per leggibilità
@@ -168,12 +167,130 @@ for s = 1:length(SNAPSHOTS_TO_ANALYZE)
     BestFeatures.(snap_field) = T_sensor_final;   
     % --- STAMPA TOP 5 ---
     fprintf('\n--- TOP 5 SENSORS FOR SNAPSHOT %d ---\n', snap_id);
-    if height(T_sensor_final) >= 5
-        disp(T_sensor_final(1:5, {'Sensor', 'TotalScore', 'Monotonicity', 'Prognosability', 'Trendability'}));
+    if height(T_sensor_final) >= 8
+        disp(T_sensor_final(1:8, {'Sensor', 'TotalScore', 'Monotonicity', 'Prognosability', 'Trendability'}));
     else
         disp(T_sensor_final(:, {'Sensor', 'TotalScore', 'Monotonicity', 'Prognosability', 'Trendability'}));
     end
     fprintf('--------------------------------------\n');
+end
+
+
+%% 6 IDENTIFICAZIONE DEI CONDITION INDICATORS
+all_top_sensors = {};
+% Recuperiamo i nomi dei sensori nelle Top 5 di ogni snapshot
+snap_names = fieldnames(BestFeatures);
+for i = 1:length(snap_names)
+    T_snap = BestFeatures.(snap_names{i});
+    % Prendiamo i primi 5 (o meno se lo snapshot ne ha meno)
+    num_to_extract = min(5, height(T_snap));
+    top_5_names = T_snap.Sensor(1:num_to_extract);
+    % Accumuliamo i nomi in una lista unica
+    all_top_sensors = [all_top_sensors; top_5_names];
+end
+% Creiamo una tabella di frequenza
+[unique_sensors, ~, idx] = unique(all_top_sensors);
+counts = accumarray(idx, 1);
+FrequencyTable = table(unique_sensors, counts, ...
+    'VariableNames', {'Sensor', 'Top5_Appearance_Count'});
+% Ordiniamo per frequenza decrescente
+FrequencyTable = sortrows(FrequencyTable, 'Top5_Appearance_Count', 'descend');
+% Visualizzazione finale
+fprintf('\n======================================================\n');
+fprintf('   SENSORS CONSISTENCY ANALYSIS (Appearance in Top 5)\n');
+fprintf('======================================================\n');
+disp(FrequencyTable);
+fprintf('======================================================\n');
+% Identifichiamo i sensori "Leader" (quelli che appaiono in quasi tutti gli snapshot)
+threshold = length(SNAPSHOTS_TO_ANALYZE) * 0.7; % Appare almeno nel 70% degli snapshot
+leader_sensors = FrequencyTable.Sensor(FrequencyTable.Top5_Appearance_Count >= threshold);
+fprintf('Sensori consigliati per il modello predittivo:\n');
+disp(leader_sensors);
+
+%% POSSIBILE 7: ANALISI SUI 5 SENSORI PIU FREQUENTI IN GENERALE? O DIVISI PER SNAPSHOT?
+
+%% 7 SEPARAZIONE DEI FAULTY CYCLES PER I CI PER OGNI SNAPSHOT
+FailurePoints = struct();   
+DegradationData = struct(); 
+for s = 1:length(SNAPSHOTS_TO_ANALYZE)
+    snap_id = SNAPSHOTS_TO_ANALYZE(s);
+    snap_field = sprintf('Snap%d', snap_id);
+    % Verifichiamo che esistano sia i dati che le metriche
+    if ~isfield(Results, snap_field) || ~isfield(BestFeatures, snap_field), continue; end   
+    % 1. Identifichiamo i Top 3 sensori specifici per QUESTO snapshot
+    T_best = BestFeatures.(snap_field);
+    current_top_3 = T_best.Sensor(1:min(3, height(T_best)));    
+    % 2. Filtriamo i dati originali di Results per questi 3 sensori
+    T_full = Results.(snap_field);
+    T_filtered = T_full(ismember(T_full.Sensor, current_top_3), :);    
+    all_failures = {};
+    all_degradation = {};    
+    unique_esns = unique(T_filtered.ESN);    
+    for e_idx = 1:length(unique_esns)
+        esn_val = unique_esns(e_idx);
+        T_esn = T_filtered(T_filtered.ESN == esn_val, :);        
+        unique_evs = unique(T_esn.Event_Num);       
+        for ev = 1:length(unique_evs)
+            ev_id = unique_evs(ev);
+            T_ev = T_esn(T_esn.Event_Num == ev_id, :);           
+            % Per ogni sensore dei top 3, separiamo l'ultimo ciclo dal resto
+            for sns_idx = 1:length(current_top_3)
+                s_name = current_top_3{sns_idx};
+                T_ev_sns = T_ev(strcmp(T_ev.Sensor, s_name), :);               
+                if isempty(T_ev_sns), continue; end          
+                % Identifichiamo l'ultimo ciclo (Failure Point)
+                max_cycle = max(T_ev_sns.Cycles);                
+                % Estrazione righe
+                is_failure = (T_ev_sns.Cycles == max_cycle);                
+                all_failures{end+1} = T_ev_sns(is_failure, :);
+                all_degradation{end+1} = T_ev_sns(~is_failure, :);
+            end
+        end
+    end    
+    % Consolidamento dei dati dello snapshot
+    FailurePoints.(snap_field) = vertcat(all_failures{:});
+    DegradationData.(snap_field) = vertcat(all_degradation{:});    
+    fprintf('Snapshot %d (Sensori: %s, %s, %s):\n', ...
+        snap_id, current_top_3{1}, current_top_3{2}, current_top_3{3});
+    fprintf('   -> Isolate %d righe di Failure e %d di Degrado.\n', ...
+        height(FailurePoints.(snap_field)), height(DegradationData.(snap_field)));
+end
+
+
+%% 8. BOXPLOT DELLA MEDIA DI DEGRADATION DATA E FAULTY DATA
+for s = 1:length(SNAPSHOTS_TO_ANALYZE)
+    snap_id = SNAPSHOTS_TO_ANALYZE(s);
+    snap_field = sprintf('Snap%d', snap_id);
+    if ~isfield(DegradationData, snap_field), continue; end
+    % Recuperiamo i dati e i sensori top per questo snapshot
+    T_deg = DegradationData.(snap_field);
+    T_fail = FailurePoints.(snap_field);
+    current_sensors = unique(T_deg.Sensor); 
+    % Creiamo una nuova figura per ogni snapshot
+    figure('Name', sprintf('Comparison Snapshot %d', snap_id), 'NumberTitle', 'off', 'Color', 'w');
+    sgtitle(sprintf('Distribuzione Feature: Degradation vs Failure (Snapshot %d)', snap_id));
+    for i = 1:length(current_sensors)
+        sensor_name = current_sensors{i};
+        % Estraiamo i valori della media per le due classi
+        val_deg = T_deg.Mean(strcmp(T_deg.Sensor, sensor_name));
+        val_fail = T_fail.Mean(strcmp(T_fail.Sensor, sensor_name));
+        % Prepariamo i dati per il boxplot (vettore unico + etichette)
+        data_plot = [val_deg; val_fail];
+        group_label = [repmat({'Degradation'}, length(val_deg), 1); ...
+                       repmat({'Failure'}, length(val_fail), 1)];
+        % Subplot per ogni sensore
+        subplot(1, 3, i);
+        boxplot(data_plot, group_label, 'Notch', 'on', 'Colors', 'rb');
+        grid on;
+        title(strrep(sensor_name, '_', ' '));
+        ylabel('Mean Value');
+        % Estetica: coloriamo i box per distinguerli meglio
+        h = findobj(gca,'Tag','Box');
+        if length(h) >= 2
+            patch(get(h(1),'XData'), get(h(1),'YData'), 'b', 'FaceAlpha', 0.3); % Failure
+            patch(get(h(2),'XData'), get(h(2),'YData'), 'r', 'FaceAlpha', 0.3); % Degradation
+        end
+    end
 end
 
 
