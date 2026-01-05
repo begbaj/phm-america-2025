@@ -32,7 +32,10 @@ def plot_path(dirname: str, *args, filename=None) -> str:
     Genera il path per il plot e crea le cartelle se non esistono
 
     """
-    full_path = path.join(PLOT_PATH, dirname, *map(str, args))
+    return pathfinder(PLOT_PATH, dirname, *map(str, args), filename=filename)
+
+def pathfinder(dirname: str, *args, filename=None):
+    full_path = path.join(dirname, *map(str, args))
     os.makedirs(full_path, exist_ok=True)
     if filename:
         full_path = os.path.join(full_path, filename)
