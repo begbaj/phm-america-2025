@@ -16,13 +16,15 @@ from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 ### ENUMS
 ###
 
+EVENTS = ["wws", "hpc", "hpt"]
+
 ESN = range(101, 105)
 """
 for esn in u.ESN:
 """
 SNAPSHOTS = range(1,9)
 SENSORS = ESENSORS.values()
-FEATURES = ["mean", "std", "rms", "kurtosis", "skewness", "shape_factor"]
+FEATURES = ["mean", "std", "kurtosis", "skewness"]
 
 
 def plot_path(dirname: str, *args, filename=None) -> str:
@@ -302,6 +304,27 @@ def df_sensors_subset(df: DataFrame) -> DataFrame:
     shortcut per df.loc[:, SENSORS]
     """
     return df.loc[:, SENSORS].copy()
+
+def refactor_table(df: DataFrame, snap: int, span: int) -> DataFrame:
+    """
+    Funzione per il refactoring del dataset e per la moving average
+    
+    :param df: Dataset per il refactoring
+    :type df: DataFrame
+    :param snap: Numero di snapshot
+    :type snap: int
+    :param span: Ampiezza della finestra per la moving average
+    :type span: int
+    :return: Dataset modificato
+    :rtype: DataFrame
+    """
+    subset = df[df['Snapshot'] == snap]
+    final_table = subset.pivot(index='Cycles_Since_New', columns='ESN', values=SENSORS)
+    final_table.columns = [f"{sensor}_{esn}" for sensor, esn in final_table.columns]
+    final_table = final_table.reset_index()
+    for column in final_table.columns:
+        final_table[column] = final_table[column].transform(lambda x: x.ewm(span=span, adjust=False).mean())
+    return final_table
 
 
 
