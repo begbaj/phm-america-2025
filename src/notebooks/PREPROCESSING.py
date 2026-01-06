@@ -41,89 +41,60 @@ from tools.types.enums import *
 # %%
 # 1. PREPARAZIONE INDICI
 # Reset dell'indice per preservare l'indice originale come 'global_index'
-df_processed = train.reset_index().rename(columns={"index": "global_index"})
+train = u.load_training()()
+dfp = train.reset_index().rename(columns={"index": "global_index"})
 
-# Calcoliamo l'indice relativo al motore (progressivo per ogni ESN)
-df_processed['esn_index'] = df_processed.groupby('ESN').cumcount()
-# Calcoliamo l'indice relativo allo snapshot (progressivo per ogni Snapshot)
-df_processed['snap_index'] = df_processed.groupby('Snapshot').cumcount()
-
+#rinomazionazione di alcune colonne per semplicità di scrittura
 rename_map = {
     'ESN': 'esn',
-    'Cumulative_WWs': 'ww_cycle',
-    'Cumulative_HPC_SVs': 'hpc_cycle',
-    'Cumulative_HPT_SVs': 'hpt_cycle'
+    'Snapshot': 'snap',
+    'Cumulative_WWs': 'wwCycle',
+    'Cumulative_HPC_SVs': 'hpcCycle',
+    'Cumulative_HPT_SVs': 'hptCycle'
 }
+dfp = dfp.rename(columns=rename_map)
 
-df_processed = df_processed.rename(columns=rename_map)
-
-# 3. PULIZIA NOMI SENSORI (Opzionale ma consigliato)
-# "Sensed_Altitude" -> "Altitude"
-sensor_cols = [c for c in df_processed.columns if c.startswith('Sensed_')]
+#rimozionione Sensed_ dai sensori (clogged view)
+sensor_cols = [c for c in dfp.columns if c.startswith('Sensed_')]
 sensor_rename_map = {c: c.replace('Sensed_', '') for c in sensor_cols}
-df_processed = df_processed.rename(columns=sensor_rename_map)
+dfp = dfp.rename(columns=sensor_rename_map)
 final_sensor_names = list(sensor_rename_map.values())
+
+# Nuovi indici
+dfp['esnIndex'] = dfp.groupby('esn').cumcount()
+dfp['snapIndex'] = dfp.groupby('snap').cumcount()
+dfp['wwCycleIndex']  = dfp.groupby(['wwCycle', "snap", "esn"]).cumcount()
+dfp['hpcCycleIndex'] = dfp.groupby(['hpcCycle', "snap", "esn"]).cumcount()
+dfp['hptCycleIndex'] = dfp.groupby(['hptCycle', "snap", "esn"]).cumcount()
 
 # 4. DEFINIZIONE ORDINE COLONNE
 # Definiamo l'ordine esatto in cui vogliamo che appaiano nel CSV Wide
 # Prima gli identificatori, poi gli indici di manutenzione, infine i sensori
 cols_order = [
-    'esn',
-    'Snapshot',
-    'global_index',
-    'esn_index',
     'snap_index',
+    'esn',
+    'snap',
+    'esn_index',
+    'global_index',
+    'ww_cycle_index',
+    'hpc_cycle_index',
+    'hpt_cycle_index',
     'ww_cycle',
     'hpc_cycle',
     'hpt_cycle'
 ] + final_sensor_names
 
-df_processed = df_processed[cols_order]
+dfp = dfp[cols_order]
 
-for snap_id, group_data in df_processed.groupby('Snapshot'):
-    print(f"Scrittura file per SNAP {snap_id}...")
-    filename = f"snapshot_{snap_id}"
-    path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
-    # index=False perché 'global_index' è già una colonna esplicita
-    group_data.to_csv(path, index=False)
+
+
+# for snap_id, group_data in dfp.groupby('snap'):
+#     print(f"Scrittura file per SNAP {snap_id}...")
+#     filename = f"snapshot_{snap_id}.csv"
+#     path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
+#     # index=False perché 'global_index' è già una colonna esplicita
+#     group_data.to_csv(path, index=False)
+path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="reformatted.csv")
+dfp.to_csv(path, index=False)
 
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
-
-# %%
-# 1. DEFINIZIONE DELLE COLONNE INDICE
-# Queste sono le colonne che identificano univocamente una riga nel formato Wide.
-# In pratica, tutto ciò che NON è 'sensor' o 'signal_value'.
-index_cols = [
-    'esn', 
-    'global_index', 
-    'esn_index', 
-    'snap_index', 
-    'ww_maint_idx', 
-    'hpc_maint_idx', 
-    'hpt_maint_idx'
-]
-df = pd.read_csv(u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="snapshot_1"))
-# 2. PIVOTING (Trasformazione)
-# Usiamo pivot() che è più performante di pivot_table() quando non ci sono duplicati
-df_wide_restored = df.pivot(
-    index=index_cols,       # Le colonne che rimangono fisse (diventeranno l'indice temporaneo)
-    columns='sensor',       # I valori di questa colonna diventano le nuove Intestazioni
-    values='signal_value'   # I valori da inserire nelle celle
-)
-
-# 3. PULIZIA STRUTTURALE
-# Il pivot crea un MultiIndex. Usiamo reset_index per farlo tornare un DataFrame piatto.
-df_wide_restored = df_wide_restored.reset_index()
-
-# Rimuoviamo il nome 'sensor' che rimane sopra le colonne dopo il pivot
-df_wide_restored.columns.name = None
-
-# (OPZIONALE) Se vuoi rimettere il prefisso "Sensed_" ai nomi delle colonne:
-# Identifichiamo le colonne che non sono negli index_cols
-sensor_columns = [c for c in df_wide_restored.columns if c not in index_cols]
-rename_map = {c: f"Sensed_{c}" for c in sensor_columns}
-df_wide_restored = df_wide_restored.rename(columns=rename_map)
-
-# Visualizzazione risultato
-print("Dimensioni Wide:", df_wide_restored.shape)
-print(df_wide_restored.head())

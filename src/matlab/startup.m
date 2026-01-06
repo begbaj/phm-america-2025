@@ -2,6 +2,7 @@ clear; clc; close all;
 
 TRAINING_DATA = 'data/PHM2025_training_data/training_data.csv';
 
+
 ESNS = [101, 102, 103, 104];
 SNAPSHOTS = [1, 2, 3, 4, 5, 6, 7, 8]; 
 FEATURES_NAMES = {'mean', 'std', 'rms', 'kurtosis', 'skewness', 'shape_factor'};
