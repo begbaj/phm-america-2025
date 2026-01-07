@@ -25,22 +25,36 @@ K = 10;
 % creiamo delle "finestre" hardcoded nella tabella
 T = sortrows(T, {'esn', 'snap', EVENT});
 T.wid = floor((0:height(T)-1)' / K);
-MovingFeatures = groupsummary(T, {'esn', 'snap', EVENT, 'wid'}, ...
+MF = groupsummary(T, {'esn', 'snap', EVENT, 'wid'}, ...
     {@mean, @std, @kurtosis, @skewness}, SENSORS);
 
+G = findgroups(MF.esn, MF.snap, MF.hpcCycle);
+MF.index = cell2mat(splitapply(@(x) {(0:numel(x)-1)'}, G, G));
 %% MONOTONICITY, PROGNOSABILITY E TRENDABILITY
-% 1. Organize data: Create a cell array where each cell is one engine's history
-uniqueESNs = unique(FeatureTable.esn);
-ensembleData = cell(length(uniqueESNs), 1);
 
-for i = 1:length(uniqueESNs)
-    % Extract data for one engine and sort by time/cycle
-    idx = FeatureTable.esn == uniqueESNs(i);
-    ensembleData{i} = sortrows(FeatureTable(idx, :), EVENT); 
-end
+%function mtpplot(data)
+%    figure;
+%    subplot(3,1,1); monotonicity(data);   title('Monotonicity');
+%    subplot(3,1,2); trendability(data);   title('Trendability');
+%    subplot(3,1,3); prognosability(data); title('Prognosability');
+%end
 
-% 2. Evaluate Features (this will auto-plot a bar chart if no output is assigned)
+features = e(:, varfun(@isnumeric, e, 'OutputFormat', 'uniform')); 
+predictors = removevars(features, {'hpcCycle', 'index'});
+target = e.hpcCycle;
+
+% 2. Train a Random Forest to see which features "explain" the cycle best
+model = TreeBagger(50, predictors, target, 'Method', 'regression', 'OOBPredictorImportance', 'on');
+
+% 3. Extract and Sort Importance
+importance = model.OOBPredictorImportance;
+[sortedImp, idx] = sort(importance, 'descend');
+featureNames = predictors.Properties.VariableNames(idx);
+
+% 4. Visualize the top 10 relevant features
 figure;
-subplot(3,1,1); monotonicity(ensembleData);   title('Monotonicity');
-subplot(3,1,2); trendability(ensembleData);   title('Trendability');
-subplot(3,1,3); prognosability(ensembleData); title('Prognosability');
+bar(sortedImp(1:min(10, end)));
+set(gca, 'XTick', 1:min(10, end), 'XTickLabel', featureNames(1:min(10, end)), 'TickLabelInterpreter', 'none');
+title('Top Features Relevant to Condition Monitoring');
+ylabel('Importance Score');
+
