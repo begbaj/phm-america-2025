@@ -51,7 +51,7 @@ rename_map = {
     'Cumulative_WWs': 'ww_cycle',
     'Cumulative_HPC_SVs': 'hpc_cycle',
     'Cumulative_HPT_SVs': 'hpt_cycle',
-    'Cycles_to_WW': 'to_next_ww',
+    'Cycles_to_WW': 'to_next_ww_cycle',
     'Cycles_to_HPC_SV': 'to_next_hpc_cycle',
     'Cycles_to_HPT_SV': 'to_next_hpt_cycle'
 }
@@ -72,7 +72,7 @@ dfp['hpt_cycle_index'] = dfp.groupby(['hpt_cycle', "snap", "esn"]).cumcount()
 
 # Aggiunta della colonna "faulty" per ogni tipo di evento
 fault_map = {
-    'to_next_ww': 'fault_ww_cycle',
+    'to_next_ww_cycle': 'fault_ww_cycle',
     'to_next_hpc_cycle': 'fault_hpc_cycle',
     'to_next_hpt_cycle': 'fault_hpt_cycle'
 }
@@ -97,7 +97,7 @@ cols_order = [
     'ww_cycle',
     'hpc_cycle',
     'hpt_cycle',
-    'to_next_ww',
+    'to_next_ww_cycle',
     'to_next_hpc_cycle',
     'to_next_hpt_cycle'
 ] + final_sensor_names + new_fault_columns
