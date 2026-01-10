@@ -26,7 +26,7 @@ from time import sleep
 
 # %load_ext autoreload
 # %autoreload 2
-from tools import utils as u, config as cfg, algorithms as alg, plotting as up
+from tools import utils as u, config as cfg, plotting as up
 from tools.types.plotdata import PlotData
 from tools.types.enums import *
 
@@ -116,3 +116,77 @@ for snap_id, group_data in dfp.groupby('snap'):
 #dfp.to_csv(path, index=False)
 
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
+
+# %%
+meta_cols = [
+    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
+    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
+    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+]
+
+agg_logic = {}
+
+# Creiamo un nuovo indice pulito che conta le righe PER OGNI SNAPSHOT e PER OGNI MOTORE
+dfp['esn_index'] = dfp.groupby(['snap', 'esn']).cumcount()
+
+# Scegliamo solo ESN e il contatore di riga come chiavi.
+group_keys = ['esn', 'esn_index']
+
+# SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
+for col in final_sensor_names:
+    if col in dfp.columns:
+        agg_logic[col] = 'mean'
+
+# SULLE COLONNE META: prendiamo il PRIMO valore (perché è uguale in tutti gli snapshot di quel momento)
+for col in meta_cols:
+    if col in dfp.columns:
+        agg_logic[col] = 'first'
+
+# Rieseguiamo l'aggregazione usando queste nuove chiavi
+df_averaged = dfp.groupby(group_keys, as_index=False).agg(agg_logic)
+
+df_averaged = df_averaged.sort_values(['esn', 'esn_index'])
+
+# 6. SALVATAGGIO
+path_avg = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="averaged_final.csv")
+df_averaged.to_csv(path_avg, index=False)
+
+print(f"OPERAZIONE COMPLETATA.")
+print(f"Righe prima: {len(dfp)} | Righe dopo (mediate): {len(df_averaged)}")
+print(f"Rapporto di compressione: {len(dfp)/len(df_averaged):.1f}x (dovrebbe essere circa 8.0)")
+
+
+# %%
+# 1. Definiamo le chiavi temporali reali. 
+# L'unico modo per identificare lo stesso istante nei diversi snapshot è il motore (esn) 
+# e il progredire del tempo/cicli (esn_index o ww_cycle).
+group_keys = ['esn'] 
+
+# 2. Specifichiamo le colonne che NON devono essere toccate (solo prese come sono)
+# Queste colonne devono decrescere riga dopo riga, non ripetersi!
+meta_cols = [
+    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
+    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
+    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+]
+
+# 3. Creiamo la logica di aggregazione
+agg_logic = {}
+
+# SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
+for col in final_sensor_names:
+    if col in dfp.columns:
+        agg_logic[col] = 'mean'
+
+# SULLE COLONNE META: prendiamo il PRIMO valore (perché è uguale in tutti gli snapshot di quel momento)
+for col in meta_cols:
+    if col in dfp.columns:
+        agg_logic[col] = 'first'
+
+# 4. L'OPERAZIONE CRUCIALE: AGGREGAZIONE
+# Questo comando "schiaccia" le 8 righe (una per snap) in una riga sola.
+df_averaged = dfp.groupby(group_keys, as_index=False).agg(agg_logic)
+
+# 5. ORDINE E PULIZIA
+# Ora to_next_ww_cycle DEVE decrescere. Se era 100, 99, 98... tornerà ad essere così.
+
