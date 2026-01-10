@@ -1,16 +1,20 @@
 clear; clc; close all;
-SENSORS = ["Altitude", "Mach", "Pamb", "Pt2", "TAT", "WFuel", "VAFN", ...
-    "VBV","Fan_Speed", "Core_Speed", "T25", "T3", "Ps3", "T45", "P25", "T5"];
+%SENSORS = ["Altitude", "Mach", "Pamb", "Pt2", "TAT", "WFuel", "VAFN", ...
+    %"VBV","Fan_Speed", "Core_Speed", "T25", "T3", "Ps3", "T45", "P25", "T5"];
+SENSORS = ["Pt2", "WFuel", "VAFN", "VBV","Fan_Speed", ...
+    "Core_Speed", "T25", "T3", "Ps3", "T45", "P25", "T5"];
 [scriptPath, ~, ~] = fileparts(mfilename('fullpath'));
 [parentPath, ~, ~] = fileparts(scriptPath);
 [granParentPath, ~, ~] = fileparts(parentPath);
-baseSavePath = fullfile(granParentPath, 'CONDITION_INDICATORS');
+baseSavePath = fullfile(granParentPath, 'Data/CONDITION_INDICATORS');
 
-for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
+%for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
+for i = {'hpc_cycle'}
     EVENT = i{1};
     for SNAPSHOT = 1:8
         T = readtable("data/snapshot_tables/snapshot_" + string(SNAPSHOT) + ".csv");
         T = stc(T); % stc fa la pulizia dei dati (però è da rivedere come funzione)
+        T = removevars(T, {'Altitude', 'Mach', 'Pamb', 'TAT'});
         % ho scritto una nuova funzione perchè il modo in cui trattiamo i dati
         % adesso è differente da prima e ho pensato dovesse essere opportuno fare
         % la pulizia in modo diverso, ma non ne sono certo ;)
