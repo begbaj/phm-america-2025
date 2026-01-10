@@ -30,6 +30,10 @@ MF = groupsummary(T, {'esn', 'snap', EVENT, 'wid'}, ...
 
 G = findgroups(MF.esn, MF.snap, MF.hpcCycle);
 MF.index = cell2mat(splitapply(@(x) {(0:numel(x)-1)'}, G, G));
+
+G = findgroups(MF.esn, MF.hpcCycle);
+MF.grouping = G;
+
 %% MONOTONICITY, PROGNOSABILITY E TRENDABILITY
 
 %function mtpplot(data)
