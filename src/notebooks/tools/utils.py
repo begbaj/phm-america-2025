@@ -25,7 +25,46 @@ for esn in u.ESN:
 SNAPSHOTS = range(1,9)
 SENSORS = ESENSORS.values()
 FEATURES = ["mean", "std", "kurtosis", "skewness"]
+META_COLS = [
+    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
+    'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
+    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
+    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+]
 
+
+
+def preproc_features(dfi, group, incols, features, sortcol, window_size=None,step=1, outcols=None):
+    v_incols = dfi[incols].select_dtypes(include=[np.number]).columns.tolist()
+    s_list = [sortcol] if isinstance(sortcol, str) else sortcol
+
+    def groupapply(fn):
+        return dfi.groupby(group)[v_incols].rolling(window_size, min_periods=step).apply(fn)
+    
+    customs = {
+        'rms': lambda _: groupapply(lambda x: np.sqrt(x**2).mean())
+    }
+
+    dfo = dfi.copy()
+    if window_size:
+        for feat in features:
+            fname = feat if isinstance(feat, str) else feat.__name__
+            if fname in customs.keys():
+                out = customs[fname](None)
+            else:
+                out = dfi.groupby(group)[v_incols].rolling(window=window_size, min_periods=step).agg(feat)
+            out = out.reset_index(level=0, drop=True)
+            out.columns = [f"{c}_{fname}" for c in out.columns]
+            dfo = pd.concat([dfo, out], axis=1)
+    else:
+        dfo = dfi.groupby(group, as_index=False).agg({c: features for c in v_incols})
+        dfo.columns = [f"{c[0]}_{c[1]}" if isinstance(c, tuple) and c[1] else c[0] for c in dfo.columns]
+
+    final_sort = [c for c in s_list if c in dfo.columns]
+    if outcols:
+        dfo = dfo[[c for c in outcols if c in dfo.columns]]
+
+    return dfo.sort_values(final_sort).reset_index(drop=True)
 
 def plot_path(dirname: str, *args, filename=None) -> str:
     """

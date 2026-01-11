@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025
 #     language: python
 #     name: python3
 # ---
@@ -23,6 +23,7 @@ import numpy as np
 import scipy as sp
 import os
 from time import sleep
+from scipy.stats import skew, kurtosis
 
 # %load_ext autoreload
 # %autoreload 2
@@ -44,7 +45,7 @@ from tools.types.enums import *
 train = u.load_training()()
 dfp = train.reset_index().rename(columns={"index": "global_index"})
 
-# Rinomazionazione di alcune colonne per semplicità di scrittura
+# Rinominazione di alcune colonne per semplicità di scrittura
 rename_map = {
     'ESN': 'esn',
     'Snapshot': 'snap',
@@ -57,7 +58,7 @@ rename_map = {
 }
 dfp = dfp.rename(columns=rename_map)
 
-# Rimozionione Sensed_ dai sensori (clogged view)
+# Rimozione Sensed_ dai sensori (clogged view)
 sensor_cols = [c for c in dfp.columns if c.startswith('Sensed_')]
 sensor_rename_map = {c: c.replace('Sensed_', '') for c in sensor_cols}
 dfp = dfp.rename(columns=sensor_rename_map)
@@ -76,6 +77,7 @@ fault_map = {
     'to_next_hpc_cycle': 'fault_hpc_cycle',
     'to_next_hpt_cycle': 'fault_hpt_cycle'
 }
+
 for source_col, fault_name in fault_map.items():
     dfp[fault_name] = 0
     dfp.loc[dfp[source_col] == 0, fault_name] = 1
@@ -104,59 +106,64 @@ cols_order = [
 
 dfp = dfp[cols_order]
 
+# for snap_id, group_data in dfp.groupby('snap'):
+#     print(f"Scrittura file per SNAP {snap_id}...")
+#     filename = f"snapshot_{snap_id}.csv"
+#     path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
+#     # index=False perché 'global_index' è già una colonna esplicita
+#     group_data.to_csv(path, index=False)
 
-
-for snap_id, group_data in dfp.groupby('snap'):
-    print(f"Scrittura file per SNAP {snap_id}...")
-    filename = f"snapshot_{snap_id}.csv"
-    path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
-    # index=False perché 'global_index' è già una colonna esplicita
-    group_data.to_csv(path, index=False)
-#path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="reformatted.csv")
-#dfp.to_csv(path, index=False)
+path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training.csv")
+dfp.to_csv(path, index=False)
 
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
+u.SENSORS = final_sensor_names
+del final_sensor_names, new_fault_columns, sensor_cols, sensor_rename_map
 
 # %%
-dfp['ww_cycle_index']  = dfp.groupby(['ww_cycle', "snap", "esn"]).cumcount()
-dfp['hpc_cycle_index'] = dfp.groupby(['hpc_cycle', "snap", "esn"]).cumcount()
-dfp['hpt_cycle_index'] = dfp.groupby(['hpt_cycle', "snap", "esn"]).cumcount()
+group = ['esn', 'snap']
+window = 50
+sortcols = ['esn', 'esn_index']
+features = ['mean', 'std',]
+sensors = ["Altitude","Mach","Pamb","Pt2","TAT","WFuel","VAFN","VBV","Fan_Speed","Core_Speed","T25","T3","Ps3","T45","P25","T5"]
 
-meta_cols = [
-    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
-    'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
-    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
-    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
-]
+dfa = u.preproc_features(dfp, group, sensors, features, sortcols, window_size=window, step=window//2)
 
-agg_logic = {}
-
-# Creiamo un nuovo indice pulito che conta le righe PER OGNI SNAPSHOT e PER OGNI MOTORE
-dfp['esn_index'] = dfp.groupby(['snap', 'esn']).cumcount()
-
-# Scegliamo solo ESN e il contatore di riga come chiavi.
-group_keys = ['esn', 'esn_index']
-
-# SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
-for col in final_sensor_names:
-    if col in dfp.columns:
-        agg_logic[col] = 'mean'
-
-# SULLE COLONNE META: prendiamo il PRIMO valore (perché è uguale in tutti gli snapshot di quel momento)
-for col in meta_cols:
-    if col in dfp.columns:
-        agg_logic[col] = 'first'
-
-# Rieseguiamo l'aggregazione usando queste nuove chiavi
-df_averaged = dfp.groupby(group_keys, as_index=False).agg(agg_logic)
-
-df_averaged = df_averaged.sort_values(['esn', 'esn_index'])
-
-# 6. SALVATAGGIO
-path_avg = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="averaged_final.csv")
-df_averaged.to_csv(path_avg, index=False)
+path_feat = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training_feature_table.csv")
+dfa.to_csv(path_feat, index=False)
 
 print(f"OPERAZIONE COMPLETATA.")
-print(f"Righe prima: {len(dfp)} | Righe dopo (mediate): {len(df_averaged)}")
-print(f"Rapporto di compressione: {len(dfp)/len(df_averaged):.1f}x (dovrebbe essere circa 8.0)")
+print(f"Righe prima: {len(dfp)} | Righe dopo (aggregate): {len(dfa)}")
+print(f"File salvato in: {path_feat}")
+
+
+# %%
+groups = list(dfa.groupby(['esn', 'snap']))
+n_groups = len(groups)
+
+# Creiamo una griglia (es. 3 colonne)
+cols = 4
+rows = (n_groups + cols - 1) // cols
+fig, axes = plt.subplots(rows, cols, figsize=(20, 5 * rows), constrained_layout=True)
+axes = axes.flatten() # Rendiamo l'array 1D per iterare facilmente
+
+for i, ((esn, snap), data) in enumerate(groups):
+    ax = axes[i]
+    
+    # Plot dei segnali
+    ax.plot(data["snap_index"], data["T45"], label="Orig", alpha=0.2, color='gray')
+    ax.plot(data["snap_index"], data["T45_std"], label="STD", alpha=0.7, color='orange')
+    ax.plot(data["snap_index"], data["T45_mean"], label="Mean", alpha=0.7, color='red')
+    
+    ax.set_title(f"ESN: {esn} | Snap: {snap}")
+    ax.set_xlabel("Snap Index")
+    ax.set_ylabel("T45")
+    ax.legend(loc='upper right', fontsize='small')
+    ax.grid(True, alpha=0.3)
+
+# Rimuoviamo eventuali axes vuoti se n_groups < rows*cols
+for j in range(i + 1, len(axes)):
+    fig.delaxes(axes[j])
+
+plt.show()
 

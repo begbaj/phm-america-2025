@@ -228,7 +228,7 @@ for d, e, sens, snap in u.ess_iter(df):
     print(f"Dataset Analysis:")
     print(f"-----------------")
     print(f"{e} - {sens} - snap {snap}")
-    print(f"RMS Value:    {alg.rms(d):.4f}")
+    print(f"RMS Value:    {alg.rms_signal(d):.4f}")
     print(f"Shape Factor: {alg.shape_factor(d):.4f}")
     print(f"Skewness:     {d[sens].skew():.4f}")
     print(f"Kurtosis:     {d[sens].kurtosis():.4f}")

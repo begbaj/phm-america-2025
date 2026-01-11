@@ -1,4 +1,5 @@
 import itertools
+from re import I
 from time import monotonic
 import pandas as pd
 import numpy as np
@@ -9,6 +10,7 @@ import progpy.mixture_of_experts
 import scipy as sp
 import scipy.stats as spstats
 import progpy
+import numba
 
 
 def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:
@@ -29,8 +31,11 @@ def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:
 
     return xf, yf
 
-def rms(signal):
-    return np.sqrt(np.mean(np.array(signal)**2))
+def rms(x):
+    return np.sqrt(np.mean(x**2))
+
+def rms_signal(signal):
+    return rms(np.array(signal))
 
 def moving_rms_with_stop(signal, stop, N, o=None):
     """
@@ -62,7 +67,7 @@ def moving_rms_with_stop(signal, stop, N, o=None):
             stop_ptr += 1
 
         window = signal[i:i + N]
-        res[group_id].append(rms(window))
+        res[group_id].append(rms_signal(window))
 
         i += o
 
@@ -74,13 +79,13 @@ def moving_rms(signal, N, o = None):
     if o is None:
         o = N
     while i + N < len(signal):
-        rmss.append(rms(signal[i:i+N]))
+        rmss.append(rms_signal(signal[i:i+N]))
         i += o
     return rmss
 
 def shape_factor(signal):
     mav = np.mean(np.abs(signal))
-    return rms(signal)/mav
+    return rms_signal(signal)/mav
 
 def skewness(signal, bias=False):
     return spstats.skew(signal, bias)
