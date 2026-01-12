@@ -27,7 +27,7 @@ from scipy.stats import skew, kurtosis
 
 # %load_ext autoreload
 # %autoreload 2
-from tools import utils as u, config as cfg, algorithmsas alg, plotting as up, features as f
+from tools import utils as u, config as cfg, algorithms as alg, plotting as up, features as f
 from tools.types.plotdata import PlotData
 from tools.types.enums import *
 
