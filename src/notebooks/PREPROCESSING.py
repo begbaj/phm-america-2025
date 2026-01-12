@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -27,7 +27,7 @@ from scipy.stats import skew, kurtosis
 
 # %load_ext autoreload
 # %autoreload 2
-from tools import utils as u, config as cfg, algorithms as alg, plotting as up, features as f
+from tools import utils as u, config as cfg, algorithmsas alg, plotting as up, features as f
 from tools.types.plotdata import PlotData
 from tools.types.enums import *
 
@@ -121,6 +121,49 @@ dfp.to_csv(path, index=False)
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
 u.SENSORS = final_sensor_names
 del new_fault_columns, sensor_cols, sensor_rename_map
+
+# %%
+dfp['ww_cycle_index']  = dfp.groupby(['ww_cycle', "snap", "esn"]).cumcount()
+dfp['hpc_cycle_index'] = dfp.groupby(['hpc_cycle', "snap", "esn"]).cumcount()
+dfp['hpt_cycle_index'] = dfp.groupby(['hpt_cycle', "snap", "esn"]).cumcount()
+
+meta_cols = [
+    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
+    'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
+    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
+    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+]
+
+agg_logic = {}
+
+# Creiamo un nuovo indice pulito che conta le righe PER OGNI SNAPSHOT e PER OGNI MOTORE
+dfp['esn_index'] = dfp.groupby(['snap', 'esn']).cumcount()
+
+# Scegliamo solo ESN e il contatore di riga come chiavi.
+group_keys = ['esn', 'esn_index']
+
+# SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
+for col in final_sensor_names:
+    if col in dfp.columns:
+        agg_logic[col] = 'mean'
+
+# SULLE COLONNE META: prendiamo il PRIMO valore (perché è uguale in tutti gli snapshot di quel momento)
+for col in meta_cols:
+    if col in dfp.columns:
+        agg_logic[col] = 'first'
+
+# Rieseguiamo l'aggregazione usando queste nuove chiavi
+df_averaged = dfp.groupby(group_keys, as_index=False).agg(agg_logic)
+
+df_averaged = df_averaged.sort_values(['esn', 'esn_index'])
+
+# 6. SALVATAGGIO
+path_avg = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="averaged_final.csv")
+df_averaged.to_csv(path_avg, index=False)
+
+print(f"OPERAZIONE COMPLETATA.")
+print(f"Righe prima: {len(dfp)} | Righe dopo (mediate): {len(df_averaged)}")
+print(f"Rapporto di compressione: {len(dfp)/len(df_averaged):.1f}x (dovrebbe essere circa 8.0)")
 
 # %% [markdown]
 # # estrazione feature basiche statistiche
