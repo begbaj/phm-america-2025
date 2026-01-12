@@ -4,7 +4,7 @@ SENSORS = ["Altitude", "Mach", "Pamb", "Pt2", "TAT", "WFuel", "VAFN", ...
 [scriptPath, ~, ~] = fileparts(mfilename('fullpath'));
 [parentPath, ~, ~] = fileparts(scriptPath);
 [granParentPath, ~, ~] = fileparts(parentPath);
-baseSavePath = fullfile(granParentPath, 'Data/CONDITION_INDICATORS');
+baseSavePath = fullfile(granParentPath, 'Data/');
 
 for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
     EVENT = i{1};
@@ -64,65 +64,80 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
             tempFeatureTable = removevars(tempFeatureTable, varsToDrop);
         end
         MovingFeatures = fillFeatureNaN(tempFeatureTable);
+        if iscategorical(MovingFeatures.esn)
+            MovingFeatures.esn = double(string(MovingFeatures.esn));
+        end
 
 
 
         %% PLOTTING FEATURES
-        target_sensor = "T3"; 
-        target_esn = MovingFeatures.esn(1); 
-        plotData = MovingFeatures(MovingFeatures.esn == target_esn, :);
-        colors = [0.00, 0.45, 0.74;   % Blu (Mean)
-                  0.85, 0.33, 0.10;   % Arancio (Std)
-                  0.47, 0.67, 0.19;   % Verde (Kurtosis)
-                  0.64, 0.08, 0.18];  % Amaranto (Skewness)
-        if ~isempty(plotData)
-            hFig = figure('Units', 'normalized', 'Position', [0.1 0.1 0.5 0.8], 'Color', 'w');
-            t = tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
-            txtTitle = "Feature Statistiche: " + target_sensor;
-            txtSub   = "ESN: " + string(target_esn) + " - Snapshot: " + string(SNAPSHOT);
-            title(t, {['\fontsize{14}', char(txtTitle)], ['\fontsize{10}\color[rgb]{0.4 0.4 0.4}', char(txtSub)]}, 'FontWeight', 'bold');
-            x = plotData.('wid');
-            % --- 1. TREND PRINCIPALE (Mean con Area di Varianza) ---
-            ax1 = nexttile;
-            hold on;
-            mu = plotData.("mean_" + target_sensor);
-            sigma = plotData.("std_" + target_sensor);
-            % Ombreggiatura per la deviazione standard
-            fill([x; flipud(x)], [mu-sigma; flipud(mu+sigma)], colors(1,:), ...
-                'FaceAlpha', 0.1, 'EdgeColor', 'none', 'HandleVisibility', 'off');
-            plot(x, mu, '-o', 'Color', colors(1,:), 'LineWidth', 1.8, ...
-                'MarkerSize', 5, 'MarkerFaceColor', 'w', 'DisplayName', 'Moving Mean');
-            grid on; ax1.GridAlpha = 0.4;
-            ylabel('Mean', 'FontWeight', 'bold');
-            legend('Location', 'best', 'Box', 'off');
-            % --- 2. DISPERSIONE E RMS ---
-            ax2 = nexttile;
-            hold on;
-            plot(x, sigma, '-d', 'Color', colors(2,:), 'LineWidth', 1.5, 'MarkerSize', 4, 'DisplayName', 'Std Dev');
-            plot(x, plotData.("rms_" + target_sensor), '--', 'Color', [0.4 0.4 0.4], 'DisplayName', 'RMS');
-            grid on; ax2.GridAlpha = 0.4;
-            ylabel('Std/RMS', 'FontWeight', 'bold');
-            legend('Location', 'best', 'Box', 'off');
-            % --- 3. FORMA DELLA DISTRIBUZIONE (Kurtosis & Skewness) ---
-            ax3 = nexttile;
-            yyaxis left
-            s = stem(x, plotData.("kurtosis_" + target_sensor), 'filled', 'DisplayName', 'Kurtosis');
-            s.Color = colors(3,:); s.MarkerSize = 4;
-            ylabel('Kurtosis', 'FontWeight', 'bold');
-            ax3.YColor = colors(3,:);
-            yyaxis right
-            plot(x, plotData.("skewness_" + target_sensor), '-p', 'Color', colors(4,:), ...
-                'MarkerFaceColor', colors(4,:), 'MarkerSize', 6, 'DisplayName', 'Skewness');
-            ylabel('Skewness', 'FontWeight', 'bold');
-            ax3.YColor = colors(4,:);
-            grid on; 
-            xlabel(['Ciclo (', char(EVENT_INDEX), ')'], 'FontWeight', 'bold');
-            % Link degli assi per zoom sincronizzato
-            linkaxes([ax1, ax2, ax3], 'x');
-            drawnow;
-        else
-            warning('Nessun dato trovato per il motore %d nello snapshot %d', target_esn, SNAPSHOT);
-        end
+        % for target_esn = [101, 102, 103, 104]
+        %     for target_sensor = SENSORS
+        %         plotData = MovingFeatures(MovingFeatures.esn == target_esn, :);
+        %         colors = [0.00, 0.45, 0.74;   % Blu (Mean)
+        %                   0.85, 0.33, 0.10;   % Arancio (Std)
+        %                   0.47, 0.67, 0.19;   % Verde (Kurtosis)
+        %                   0.64, 0.08, 0.18];  % Amaranto (Skewness)
+        %         if ~isempty(plotData)
+        %             hFig = figure('Units', 'normalized', 'Position', [0.1 0.1 0.5 0.8], 'Color', 'w');
+        %             t = tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
+        %             txtTitle = "Feature Statistiche: " + target_sensor;
+        %             txtSub   = "ESN: " + string(target_esn) + " - Snapshot: " + string(SNAPSHOT);
+        %             title(t, {['\fontsize{14}', char(txtTitle)], ['\fontsize{10}\color[rgb]{0.4 0.4 0.4}', char(txtSub)]}, 'FontWeight', 'bold');
+        %             x = plotData.('wid');
+        %             % --- 1. TREND PRINCIPALE (Mean con Area di Varianza) ---
+        %             ax1 = nexttile;
+        %             hold on;
+        %             mu = plotData.("mean_" + target_sensor);
+        %             sigma = plotData.("std_" + target_sensor);
+        %             % Ombreggiatura per la deviazione standard
+        %             fill([x; flipud(x)], [mu-sigma; flipud(mu+sigma)], colors(1,:), ...
+        %                 'FaceAlpha', 0.1, 'EdgeColor', 'none', 'HandleVisibility', 'off');
+        %             plot(x, mu, '-o', 'Color', colors(1,:), 'LineWidth', 1.8, ...
+        %                 'MarkerSize', 5, 'MarkerFaceColor', 'w', 'DisplayName', 'Moving Mean');
+        %             grid on; ax1.GridAlpha = 0.4;
+        %             ylabel('Mean', 'FontWeight', 'bold');
+        %             legend('Location', 'best', 'Box', 'off');
+        %             % --- 2. DISPERSIONE E RMS ---
+        %             ax2 = nexttile;
+        %             hold on;
+        %             plot(x, sigma, '-d', 'Color', colors(2,:), 'LineWidth', 1.5, 'MarkerSize', 4, 'DisplayName', 'Std Dev');
+        %             plot(x, plotData.("rms_" + target_sensor), '--', 'Color', [0.4 0.4 0.4], 'DisplayName', 'RMS');
+        %             grid on; ax2.GridAlpha = 0.4;
+        %             ylabel('Std/RMS', 'FontWeight', 'bold');
+        %             legend('Location', 'best', 'Box', 'off');
+        %             % --- 3. FORMA DELLA DISTRIBUZIONE (Kurtosis & Skewness) ---
+        %             ax3 = nexttile;
+        %             yyaxis left
+        %             s = stem(x, plotData.("kurtosis_" + target_sensor), 'filled', 'DisplayName', 'Kurtosis');
+        %             s.Color = colors(3,:); s.MarkerSize = 4;
+        %             ylabel('Kurtosis', 'FontWeight', 'bold');
+        %             ax3.YColor = colors(3,:);
+        %             yyaxis right
+        %             plot(x, plotData.("skewness_" + target_sensor), '-p', 'Color', colors(4,:), ...
+        %                 'MarkerFaceColor', colors(4,:), 'MarkerSize', 6, 'DisplayName', 'Skewness');
+        %             ylabel('Skewness', 'FontWeight', 'bold');
+        %             ax3.YColor = colors(4,:);
+        %             grid on; 
+        %             xlabel(['Ciclo (', char(EVENT_INDEX), ')'], 'FontWeight', 'bold');
+        %             % Link degli assi per zoom sincronizzato
+        %             linkaxes([ax1, ax2, ax3], 'x');
+        %             drawnow;
+        %             % SALVATAGGIO
+        %             savePath = baseSavePath + "FEATURE_STATISTICHE/" + string(EVENT) + "/"; 
+        %             if ~exist(savePath, 'dir'), mkdir(savePath); end
+        %             fileName = fullfile(savePath, string(EVENT) + "_Feature_Statistiche_ESN_" + target_esn + "_Sensore_" + target_sensor + "_Snapshot_" + string(SNAPSHOT) + ".png");
+        %             frame = getframe(hFig);
+        %             img = frame2im(frame);
+        %             imwrite(img, fileName);
+        %             disp("Figura salvata correttamente in: " + fileName);
+        %             close(hFig);
+        %         else
+        %             warning('Nessun dato trovato per il motore %d nello snapshot %d', target_esn, SNAPSHOT);
+        %         end
+        %     end
+        % end
+   
         
         
         %% RANKING CON ONE-WAY ANOVA
@@ -147,7 +162,7 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
                 tempTable.TimeIndex = (1:height(tempTable))';
                 % Rimuoviamo le variabili non necessarie
                 % Teniamo TimeIndex come variabile temporale di riferimento
-                temp = removevars(tempTable, {'esn', 'wid', EVENT, 'GroupCount'}); 
+                temp = removevars(tempTable, ["esn", "wid", string(EVENT), "GroupCount", string(EVENT_FAULT)]); 
                 ensembleData{end+1} = temp;
             end
         end
@@ -217,10 +232,9 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
             'ColumnName', top10Features.Properties.VariableNames, ...
             'Units', 'Normalized', 'Position', [0.53, 0.05, 0.42, 0.38]);
         % SALVATAGGIO
-        savePath = baseSavePath + "/" + string(EVENT) + "/"; 
+        savePath = baseSavePath + "CONDITION_INDICATORS/" + string(EVENT) + "/"; 
         if ~exist(savePath, 'dir'), mkdir(savePath); end
         fileName = fullfile(savePath, string(EVENT) + "_Feature_Ranking_Comparison_Snapshot_" + string(SNAPSHOT) + ".png");
-        
         frame = getframe(fig);
         img = frame2im(frame);
         imwrite(img, fileName);
