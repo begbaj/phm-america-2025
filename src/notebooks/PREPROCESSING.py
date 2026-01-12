@@ -44,6 +44,8 @@ from tools.types.enums import *
 # Reset dell'indice per preservare l'indice originale come 'global_index'
 train = u.load_training()()
 dfp = train.reset_index().rename(columns={"index": "global_index"})
+dfp = u.process_pipeline(dfp)
+
 
 # Rinominazione di alcune colonne per semplicità di scrittura
 rename_map = {
@@ -118,7 +120,7 @@ dfp.to_csv(path, index=False)
 
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
 u.SENSORS = final_sensor_names
-del final_sensor_names, new_fault_columns, sensor_cols, sensor_rename_map
+del new_fault_columns, sensor_cols, sensor_rename_map
 
 # %% [markdown]
 # # estrazione feature basiche statistiche
@@ -175,18 +177,18 @@ plt.show()
 # # Estrazione feature sulle performance del motore
 
 # %%
-features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
-target = 'HPC'
+#features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
+features = []
+target = 'HPT'
+statistical_features = ['mean', 'rms']
 fulltarget = f'to_next_{target.lower()}_cycle'
 colname = f.get_all_performance_colnames()
-dff = f.performance_features(dfp, features)
-dff = f.calc_statistical_features(dff, features=['mean'], columns=colname, groupby=["esn", "snap"], window_size=50, step=25).dropna()
-# val = f.evaluate_correlation(dff, target='to_next_hpt_cycle', groupby=['esn', 'snap'])
-val = f.evaluate_correlation_per_snap(dff, target=fulltarget, top_n=10)
+# dff, val = f.pipeline_hpc(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
 
 # 4. Creazione della Pivot Table per il confronto
 # Mostra come la correlazione di Spearman cambia per la stessa feature tra diversi snap
-feature_evolution = val.pivot(index='snap', columns='feature', values='spearman_corr')
+# feature_evolution = val.pivot(index='snap', columns='feature', values='spearman_corr')
 
 # 5. Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
 per = val.sort_values(by='pearson_corr', key=abs, ascending=False).head(10)
@@ -195,65 +197,39 @@ tot = val.sort_values(by='tot_val', key=abs, ascending=False).head(10)
 
 print("-" * 30)
 print("TOP 10 PEARSON (Across all snaps):")
-print(per[['snap', 'feature', 'pearson_corr', 'n_samples']])
+print(per)
 
 print("\nTOP 10 SPEARMAN (Across all snaps):")
-print(spe[['snap', 'feature', 'spearman_corr', 'n_samples']])
-
+print(spe)
 
 print("-" * 30)
 print(f"Total Unique Best Features: {len(tot)}")
-print(tot[['snap', 'feature', 'pearson_corr', 'spearman_corr']])
+print(tot)
+run = u.get_timestamp()
 
 # %%
-max_esn_to_plot = 1
-for esn in range(101, 105):
-    esn_data = dff[dff['esn'] == esn]
-    for snap in esn_data['snap'].unique():
-        group_data = esn_data[esn_data['snap'] == snap].sort_values('esn_index')
-        snap_best_features = val[val['snap'] == snap]
-        snap_best_features = snap_best_features[snap_best_features['feature'] == "DP_TH_HPC_2" ]
-        
-        for _, row in snap_best_features.iterrows():
-            feat_name = row['feature']
+filter_feature = None               #"DP_TH_HPC_2"  # oppure None
+max_features_to_show = 10           # Limite per non intasare la RAM
+esn_list = [101, 102, 103, 104]     # I motori che vuoi controllare
 
-            # Inizializzazione Figura
-            fig, ax1 = plt.subplots(figsize=(18, 10))
-            
-            plt.title(f"MOTOR ANALYSIS | ESN: {esn} - Phase: {snap}\nFeature: {feat_name}")
-            ax1.set_xlabel('Time (Cycles)')
-            ax1.set_ylabel(f'Value: {feat_name}', color='tab:blue', fontweight='bold')
-
-            # 1. Plot della Feature reale
-            l1, = ax1.plot(group_data['esn_index'], group_data[feat_name], 
-                           label=f'Actual {feat_name}', color='tab:blue', linewidth=2, marker='o', markersize=4, alpha=0.7)
-
-            # 3. Linee verticali per i guasti (HPT Fault)
-            fault_indices = group_data.loc[group_data[f'fault_{target.lower()}_cycle'] == 1, 'esn_index']
-            for f_idx in fault_indices:
-                ax1.axvline(x=f_idx, color='red', linestyle=':', alpha=0.8, label='Fault Event')
-
-            fault_indices = group_data.loc[group_data[f'fault_ww_cycle'] == 1, 'esn_index']
-            for f_idx in fault_indices:
-                ax1.axvline(x=f_idx, color='red', linestyle=':', alpha=0.8, label='Fault Event')
-
-            # 4. Secondo Asse (Destra) per il Target (RUL)
-            ax2 = ax1.twinx()
-            ax2.set_ylabel(f'RUL (To Next {target})', color='tab:orange', fontweight='bold')
-            l3, = ax2.plot(group_data['esn_index'], group_data[fulltarget], 
-                           color='tab:orange', label='Target (RUL)', alpha=0.8, linewidth=2)
+plots = up.plot_features(dff, esn_list, tot, target, fulltarget, filter_feature, max_features_to_show)
+for (fig, figname) in plots:
+    fig.show()
+    path = u.plot_path("features_plots", f"{target}", f"{run}", "Aggregated (snap collapse)" ,filename=figname)
+    fig.savefig(path)
 
 
-            # --- Estetica e Legenda ---
-            ax1.grid(True, linestyle='--', alpha=0.5)
-            lines = [l1, l3]
-            labels = [l.get_label() for l in lines]
-            # Evitiamo duplicati nella legenda per il Fault Event
-            unique_labels = dict(zip(labels, lines))
-            ax1.legend(unique_labels.values(), unique_labels.keys(), loc='lower left', frameon=True, shadow=True)
+# %%
+filter_feature = None               #"DP_TH_HPC_2"  # oppure None
+max_features_to_show = 10           # Limite per non intasare la RAM
+esn_list = [101, 102, 103, 104]     # I motori che vuoi controllare
 
-            plt.tight_layout()
-            plt.show()
+plots = up.plot_features_per_snap(dff, esn_list, tot, target, fulltarget, filter_feature, max_features_to_show)
+for (fig, figname) in plots:
+    fig.show()
+    path = u.plot_path("features_plots", f"{target}", f"{run}", "Disaggregated (snap divided)" ,filename=figname)
+    fig.savefig(path)
+
 
 # %%
 for g in dff.groupby(['esn', 'snap']):

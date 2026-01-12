@@ -242,9 +242,9 @@ def evaluate_correlation(df: pd.DataFrame, target: str, groupby: list[str] = ['e
         row['spearman_pval'] = s_pval
         row['spearman_abs'] = abs(s_corr)
 
-        # linear_regression
-        linreg = spst.linregress(data[col], data[target])
-        row['linear_regression'] = linreg
+        # # linear_regression
+        # linreg = spst.linregress(data[col], data[target])
+        # row['linear_regression'] = linreg
 
         row['tot_val'] = abs(s_corr)*0.8 + abs(p_corr)*0.2
 
@@ -276,3 +276,16 @@ def evaluate_correlation_per_snap(df: pd.DataFrame, target: str, top_n: int = 5)
     report_df = pd.concat(all_snap_results).reset_index(drop=True)
     cols = ['snap', 'feature', 'spearman_corr', 'pearson_corr', 'tot_val', 'n_samples']
     return report_df[cols]
+
+def pipeline_hpc(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
+    dff = df.groupby(['esn', "esn_index"], as_index=False).mean()
+    dff = performance_features(dff, features)
+    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=25).dropna()
+    val = evaluate_correlation(dff, target=target, groupby=['esn', 'global_index'])
+    return (dff, val)
+
+def pipeline_hpt(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
+    dff = performance_features(df, features)
+    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=25).dropna()
+    val = evaluate_correlation_per_snap(dff, target=target)
+    return (dff, val)

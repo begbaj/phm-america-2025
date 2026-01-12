@@ -1,4 +1,5 @@
 import os.path as path
+from datetime import datetime
 import os
 import pandas as pd
 import numpy as np
@@ -12,6 +13,9 @@ import random
 import tools.config as c
 from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 import tools.features as f
+from scipy import stats
+from pykalman import KalmanFilter
+from sklearn.ensemble import IsolationForest
 
 ###
 ### ENUMS
@@ -34,6 +38,12 @@ META_COLS = [
 ]
 
 
+def get_timestamp():
+    """
+    Restituisce il timestamp attuale nel formato stringa YYMMHHmm.
+    Esempio: 12 gennaio 2026 alle 10:45 -> '26011045'
+    """
+    return datetime.now().strftime("%y%m%H%M")
 
 def preproc_features(dfi, group, incols, features, sortcol, window_size=None,step=1, outcols=None):
     f._feature_aggregator(dfi, group, incols, features, sortcol, window_size=window_size, step=step, outcols=outcols)
@@ -339,6 +349,190 @@ def refactor_table(df: DataFrame, snap: int, span: int) -> DataFrame:
     for column in final_table.columns:
         final_table[column] = final_table[column].transform(lambda x: x.ewm(span=span, adjust=False).mean())
     return final_table
+
+def apply_kalman(series: Series, transition_matrices=[1], observation_matrices=[1]) -> np.ndarray:
+    """
+    Applica il filtro di Kalman a una serie di dati, gestendo i valori mancanti (NaN).
+    
+    :param series: La serie di dati da filtrare.
+    :param transition_matrices: Matrice di transizione per il filtro di Kalman. Default [1].
+    :param observation_matrices: Matrice di osservazione per il filtro di Kalman. Default [1].
+    :return: Array con i dati filtrati appiattiti.
+    """
+    try:
+        from pykalman import KalmanFilter
+    except ImportError:
+        raise ImportError("pykalman is required for apply_kalman")
+
+    # Inizializza il filtro di Kalman
+    kf = KalmanFilter(transition_matrices=transition_matrices, observation_matrices=observation_matrices)
+    
+    # Se la serie è tutta NaN, ritorna la serie originale
+    if series.isnull().all():
+        return series
+    
+    # Maschera i valori non validi (NaN)
+    masked_data = np.ma.masked_invalid(series.values)
+    
+    # Applica il filtro
+    (filtered_means, _) = kf.filter(masked_data)
+    
+    return filtered_means.flatten()
+
+def missingfill(df: DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], sensor_cols=None) -> DataFrame:
+    """
+    Riempie i valori mancanti (NaN) integrando i dati presenti negli altri motori.
+    
+    Strategia:
+    1. Calcola la media della flotta (tutti i motori disponibili) per lo stesso (Snapshot, Ciclo).
+    2. Riempie i NaN con questa media.
+    3. Per i valori ancora mancanti (es. nessun dato nella flotta per quel punto), esegue interpolazione lineare per ESN.
+    
+    :param df: DataFrame contenente i dati.
+    :param align_cols: Colonne usate per allineare i cicli tra motori.
+    :param sensor_cols: Lista di sensori da processare. Se None, usa i SENSORS globali.
+    :return: DataFrame con i missing values riempiti.
+    """
+    # 1. Determinazione colonne sensori
+    if sensor_cols is None:
+        # Usa i sensori globali definiti in questo modulo
+        raw_sensors = list(SENSORS)
+    else:
+        raw_sensors = list(sensor_cols)
+        
+    # Risoluzione nomi sensori (se sono Enum)
+    valid_cols = []
+    for s in raw_sensors:
+        s_name = s.value if hasattr(s, 'value') else str(s)
+        if s_name in df.columns:
+            valid_cols.append(s_name)
+    
+    if not valid_cols:
+        print("Nessuna colonna sensore valida trovata per missingfill.")
+        return df
+
+    df_out = df.copy()
+    
+    print(f"Esecuzione missingfill su {len(valid_cols)} sensori...")
+    
+    # 2. Riempimento tramite Media Flotta (Fleet Mean)
+    # Verifica che le colonne di allineamento esistano
+    if all(col in df_out.columns for col in align_cols):
+        try:
+            # Calcola media raggruppata per align_cols sui sensori
+            # transform('mean') restituisce un DF/Series allineato all'originale con le medie dei gruppi
+            fleet_means = df_out.groupby(align_cols)[valid_cols].transform('mean')
+            
+            # Sostituzione dei NaN con la media calcolata
+            df_out[valid_cols] = df_out[valid_cols].fillna(fleet_means)
+        except Exception as e:
+            print(f"Warning: Errore durante il calcolo della media flotta: {e}")
+    else:
+        print(f"Warning: Colonne di allineamento {align_cols} non trovate. Salto step flotta.")
+        
+    # 3. Interpolazione Residua (Per ESN)
+    # Se la media flotta non ha coperto tutto (es. cicli dove nessuno ha dati), eseguiamo forward fill
+    if 'ESN' in df_out.columns:
+        # Applica interpolazione per ogni sensore, raggruppando per ESN
+        for col in valid_cols:
+            # Interpolazione residua: Forward Fill come richiesto
+            df_out[col] = df_out.groupby('ESN')[col].transform(lambda x: x.ffill())
+            
+            # Fallback: Backward Fill per coprire eventuali NaN all'inizio della serie
+            df_out[col] = df_out.groupby('ESN')[col].transform(lambda x: x.bfill())
+
+    return df_out
+
+    print("Pipeline completata.")
+    return df_filled
+
+def remove_outliers(df: DataFrame, sensor_cols=None, threshold=3, method='zscore') -> DataFrame:
+    """
+    Identifica e rimuove gli outliers dai sensori, impostandoli a NaN.
+    Supporta metodi basati su Z-score, IQR e Isolation Forest.
+    
+    :param df: DataFrame di input.
+    :param sensor_cols: Lista di sensori.
+    :param threshold: Soglia per lo z-score (default 3) o moltiplicatore per IQR (default 1.5/3).
+    :param method: 'zscore', 'iqr', o 'isoforest'.
+    :return: DataFrame con outliers sostituiti da NaN.
+    """
+    df_out = df.copy()
+    
+    if sensor_cols is None:
+        target_sensors = [s.value if hasattr(s, 'value') else s for s in SENSORS]
+    else:
+        target_sensors = [s.value if hasattr(s, 'value') else s for s in sensor_cols]
+    
+    target_sensors = [s for s in target_sensors if s in df_out.columns]
+
+    if method == 'zscore':
+        for sensor in target_sensors:
+            # Calcolo z-score ignorando i NaN
+            series = df_out[sensor]
+            if series.dropna().empty: continue
+            z_scores = np.abs(stats.zscore(series, nan_policy='omit'))
+            df_out.loc[z_scores > threshold, sensor] = np.nan
+            
+    elif method == 'iqr':
+        for sensor in target_sensors:
+            Q1 = df_out[sensor].quantile(0.25)
+            Q3 = df_out[sensor].quantile(0.75)
+            IQR = Q3 - Q1
+            lower_bound = Q1 - threshold * IQR
+            upper_bound = Q3 + threshold * IQR
+            df_out.loc[(df_out[sensor] < lower_bound) | (df_out[sensor] > upper_bound), sensor] = np.nan
+            
+    elif method == 'isoforest':
+        for sensor in target_sensors:
+            series_nonan = df_out[sensor].dropna()
+            if series_nonan.empty: continue
+            data = series_nonan.values.reshape(-1, 1)
+            # Contamination 'auto' o basata sulla soglia se interpretata come percentuale
+            iso = IsolationForest(contamination='auto', random_state=42)
+            preds = iso.fit_predict(data)
+            # preds == -1 sono gli outliers
+            outlier_indices = series_nonan.index[preds == -1]
+            df_out.loc[outlier_indices, sensor] = np.nan
+                
+    return df_out
+
+def process_pipeline(df: DataFrame, sensor_cols=None, outlier_method='zscore') -> DataFrame:
+    """
+    Esegue la pipeline completa di preprocessing:
+    1. remove_outliers: Identifica e imposta a NaN i valori anomali.
+    2. missingfill: Riempie i NaN usando media flotta e forward fill.
+    3. apply_kalman: Applica il filtro di Kalman per smoothing.
+    
+    :param df: DataFrame di input.
+    :param sensor_cols: Lista opzionale di colonne sensori.
+    :param outlier_method: Metodo per la rimozione outliers ('zscore', 'iqr', 'isoforest').
+    :return: DataFrame processato.
+    """
+    # 0. Outlier Removal
+    print(f"Avvio Pipeline: Step 0 - Outlier Removal ({outlier_method})...")
+    df_cleaned = remove_outliers(df, sensor_cols=sensor_cols, method=outlier_method)
+
+    # 1. Missing Fill
+    print("Avvio Pipeline: Step 1 - Missing Fill...")
+    df_filled = missingfill(df_cleaned, sensor_cols=sensor_cols)
+    
+    # Identifica sensori per Kalman
+    if sensor_cols is None:
+        target_sensors = [s.value if hasattr(s, 'value') else s for s in SENSORS]
+    else:
+        target_sensors = [s.value if hasattr(s, 'value') else s for s in sensor_cols]
+        
+    target_sensors = [s for s in target_sensors if s in df_filled.columns]
+    
+    # 2. Kalman
+    print("Avvio Pipeline: Step 2 - Kalman Filter...")
+    if 'ESN' in df_filled.columns and 'Snapshot' in df_filled.columns:
+        for sensor in target_sensors:
+            df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
+    
+    print("Pipeline completata.")
+    return df_filled
 
 
 

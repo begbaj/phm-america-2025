@@ -391,3 +391,151 @@ def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=Tr
 
     plt.close(fig)
     return fig
+
+
+def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: str, fulltarget: str, filter_feature: str | None = None, max_features_to_show: int = 6):
+    if filter_feature:
+        target_features = [filter_feature]
+    else:
+        # Prende le migliori feature assolute (senza snap)
+        target_features = tot['feature'].unique()[:max_features_to_show]
+
+    figs = []
+    for esn in esn_list:
+        esn_data = dff[dff['esn'] == esn].sort_values('esn_index')
+        if esn_data.empty: continue
+
+        n_features = len(target_features)
+        n_cols = min(3, n_features)
+        n_rows = (n_features + n_cols - 1) // n_cols
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(40, 6 * n_rows), squeeze=False)
+        fig.suptitle(f"ANALISI CICLO DI VITA | ESN: {esn}", fontsize=16, fontweight='bold', y=1.02)
+        
+        axes_flat = axes.flatten()
+
+        for i, feat_name in enumerate(target_features):
+            if feat_name not in esn_data.columns: continue
+            
+            ax1 = axes_flat[i]
+            
+            # 1. Plot della Feature (Asse Sinistro)
+            color_feat = 'tab:blue'
+            l1, = ax1.plot(esn_data['esn_index'], esn_data[feat_name], 
+                        color=color_feat, linewidth=1.5, label=f'Feature: {feat_name}')
+            ax1.set_ylabel(feat_name, color=color_feat, fontweight='bold')
+            ax1.set_xlabel('Cicli (Time)')
+
+            # 2. Plot del Target/RUL (Asse Destro)
+            ax2 = ax1.twinx()
+            color_rul = 'tab:green'
+            l2, = ax2.plot(esn_data['esn_index'], esn_data[fulltarget], 
+                        color=color_rul, linestyle='--', alpha=0.7, label='Target (RUL)')
+            ax2.set_ylabel('RUL', color=color_rul, fontweight='bold')
+
+            # 3. Linee di Fault (HPC)
+            fault_col = f'fault_{target.lower()}_cycle'
+            if fault_col in esn_data.columns:
+                for f_idx in esn_data.loc[esn_data[fault_col] == 1, 'esn_index']:
+                    ax1.axvline(x=f_idx, color='red', linestyle=':', alpha=0.8, label='Fault')
+
+            ax1.set_title(f"Trend: {feat_name}")
+            ax1.grid(True, axis='both', alpha=0.3)
+
+        # Pulizia subplot vuoti
+        for j in range(i + 1, len(axes_flat)):
+            axes_flat[j].set_visible(False)
+
+        fig.tight_layout()
+        figname = f"features_esn_{esn}.png"
+        figs.append((fig, figname))
+    return figs
+
+def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: str, fulltarget: str, filter_feature: str | None = None, max_features_per_snap: int = 6):
+    """
+    Genera plot organizzati per ESN e per SNAP (fasi temporali).
+    Ritorna una lista di tuple (figura, nome_file).
+    """
+    figs = []
+
+    for esn in esn_list:
+        esn_all_data = dff[dff['esn'] == esn]
+        if esn_all_data.empty:
+            continue
+
+        # Iteriamo su ogni fase (snap) disponibile per questo motore
+        for snap in sorted(esn_all_data['snap'].unique()):
+            group_data = esn_all_data[esn_all_data['snap'] == snap].sort_values('esn_index')
+            
+            # 1. Selezione Feature per questo snap specifico
+            if filter_feature:
+                snap_best = tot[(tot['snap'] == snap) & (tot['feature'] == filter_feature)]
+            else:
+                # Prende le migliori N feature per questo snap basandosi sulla correlazione totale
+                snap_best = tot[tot['snap'] == snap].sort_values('tot_val', key=abs, ascending=False).head(max_features_per_snap)
+
+            target_features = snap_best['feature'].unique().tolist()
+            n_features = len(target_features)
+            
+            if n_features == 0:
+                continue
+
+            # 2. Configurazione Griglia Subplot (Massimo 3 colonne)
+            n_cols = min(3, n_features)
+            n_rows = (n_features + n_cols - 1) // n_cols
+            
+            # Utilizziamo una larghezza generosa (es. 12 per asse) per visibilità ottimale
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 10, 6 * n_rows), squeeze=False)
+            fig.suptitle(f"PHASE ANALYSIS | ESN: {esn} | SNAP: {snap}", fontsize=18, fontweight='bold', y=1.02)
+            
+            axes_flat = axes.flatten()
+
+            # 3. Ciclo di Plotting sulle Feature identificate
+            for i, feat_name in enumerate(target_features):
+                if feat_name not in group_data.columns:
+                    continue
+                
+                ax1 = axes_flat[i]
+                
+                # ASSE SINISTRO: Feature reale (Line + Points per vedere la granularità dello snap)
+                color_feat = 'tab:blue'
+                l1, = ax1.plot(group_data['esn_index'], group_data[feat_name], 
+                               color=color_feat, linewidth=2, marker='o', markersize=4, 
+                               alpha=0.7, label=f'Actual {feat_name}')
+                
+                ax1.set_title(f"Feature: {feat_name}", fontsize=14, pad=10)
+                ax1.set_xlabel('Cycles')
+                ax1.set_ylabel('Feature Value', color=color_feat, fontweight='bold')
+                ax1.tick_params(axis='y', labelcolor=color_feat)
+
+                # ASSE DESTRO: Target/RUL
+                ax2 = ax1.twinx()
+                color_rul = 'tab:green'
+                l2, = ax2.plot(group_data['esn_index'], group_data[fulltarget], 
+                               color=color_rul, linestyle='--', linewidth=2, label='RUL Trend')
+                
+                ax2.set_ylabel(f'To Next {target}', color=color_rul, fontweight='bold')
+                ax2.tick_params(axis='y', labelcolor=color_rul)
+
+                # LINEE DI FAULT (Verticali)
+                fault_col = f'fault_{target.lower()}_cycle'
+                if fault_col in group_data.columns:
+                    faults = group_data.loc[group_data[fault_col] == 1, 'esn_index']
+                    for f_idx in faults:
+                        ax1.axvline(x=f_idx, color='red', linestyle=':', linewidth=2, alpha=0.8)
+
+                # Estetica e Legenda
+                ax1.grid(True, linestyle='--', alpha=0.5)
+                lines = [l1, l2]
+                labels = [l.get_label() for l in lines]
+                ax1.legend(lines, labels, loc='best', frameon=True, fontsize=9)
+
+            # Nascondi subplot vuoti
+            for j in range(i + 1, len(axes_flat)):
+                axes_flat[j].set_visible(False)
+
+            fig.tight_layout()
+            figname = f"features_esn{esn}_snap{snap}.png"
+            figs.append((fig, figname))
+            
+    return figs

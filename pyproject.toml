@@ -99,6 +99,7 @@ dependencies = [
   "pure-eval==0.2.3",
   "pycparser==2.23",
   "pygments==2.19.2",
+  "pykalman>=0.11.1",
   "pyparsing==3.2.5",
   "python-dateutil==2.9.0.post0",
   "python-json-logger==4.0.0",

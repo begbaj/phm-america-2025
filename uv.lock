@@ -2069,6 +2069,7 @@ dependencies = [
     { name = "pure-eval" },
     { name = "pycparser" },
     { name = "pygments" },
+    { name = "pykalman" },
     { name = "pyparsing" },
     { name = "python-dateutil" },
     { name = "python-json-logger" },
@@ -2213,6 +2214,7 @@ requires-dist = [
     { name = "pure-eval", specifier = "==0.2.3" },
     { name = "pycparser", specifier = "==2.23" },
     { name = "pygments", specifier = "==2.19.2" },
+    { name = "pykalman", specifier = ">=0.11.1" },
     { name = "pyparsing", specifier = "==3.2.5" },
     { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "python-json-logger", specifier = "==4.0.0" },
@@ -2572,6 +2574,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+]
+
+[[package]]
+name = "pykalman"
+version = "0.11.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "scikit-base" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/ff/04552f8842ccfde126fddddc99559de13bb7df81f91d85c9a955605a62f3/pykalman-0.11.1.tar.gz", hash = "sha256:3cf7cd8f5c96d51e3285aaef12eb2818fe872e092c3d649f1e4033c42639b806", size = 244192, upload-time = "2025-12-31T21:51:21.307Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/be/2ca309d43b156749012e136785500fc88b1ff9da6d9d37feb5e305277a59/pykalman-0.11.1-py2.py3-none-any.whl", hash = "sha256:74dd9234f3d5abb22c630c4373cea15deb3348e3925019650592532855ace347", size = 251823, upload-time = "2025-12-31T21:51:19.485Z" },
 ]
 
 [[package]]
@@ -2977,6 +2995,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/13/64/b4d76f227d5c45a7e0b796c674fd81b0a6c4fbd48dc29271857d8219571c/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_aarch64.whl", hash = "sha256:dff13836529b921e22f15cb099751209a60009731a68519630a24d61f0b1b30a", size = 573981, upload-time = "2025-11-30T20:24:32.934Z" },
     { url = "https://files.pythonhosted.org/packages/20/91/092bacadeda3edf92bf743cc96a7be133e13a39cdbfd7b5082e7ab638406/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:1b151685b23929ab7beec71080a8889d4d6d9fa9a983d213f07121205d48e2c4", size = 599782, upload-time = "2025-11-30T20:24:35.169Z" },
     { url = "https://files.pythonhosted.org/packages/d1/b7/b95708304cd49b7b6f82fdd039f1748b66ec2b21d6a45180910802f1abf1/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:ac37f9f516c51e5753f27dfdef11a88330f04de2d564be3991384b2f3535d02e", size = 562191, upload-time = "2025-11-30T20:24:36.853Z" },
+]
+
+[[package]]
+name = "scikit-base"
+version = "0.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/4d/53b477e05ba7897026133543114c48c9e67646180b85a9e3bd6edb6e5223/scikit_base-0.13.0.tar.gz", hash = "sha256:436c26067173a7235c465c64ac105008f6f889f09308c5e4e4a16e21c38c3ddc", size = 127431, upload-time = "2025-10-08T20:39:35.509Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/1c/7c00d3823bef4ef2e5a95507475bc5cf3bdabf00c8577f8bb5ff406e9f2e/scikit_base-0.13.0-py3-none-any.whl", hash = "sha256:efe7df0f09854b9f28e9532f6be87ef433dd8f1358cabd24ebf168aa4ccca1fc", size = 151529, upload-time = "2025-10-08T20:39:33.951Z" },
 ]
 
 [[package]]
