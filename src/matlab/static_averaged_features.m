@@ -9,7 +9,6 @@ baseSavePath = fullfile(granParentPath, 'Data/AVERAGED');
 for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
     EVENT = i{1};
     T = readtable("data/snapshot_tables/averaged_final.csv");
-    T = stc(T); % stc fa la pulizia dei dati (però è da rivedere come funzione)
     % ho scritto una nuova funzione perchè il modo in cui trattiamo i dati
     % adesso è differente da prima e ho pensato dovesse essere opportuno fare
     % la pulizia in modo diverso, ma non ne sono certo ;)
@@ -40,7 +39,7 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
         sel = T.esn == uEsn(idxE);
         T.wid(sel) = floor((0:sum(sel)-1)' / K);
     end
-    % Spe funzioni per i sensori
+    % Specifica delle funzioni statistiche per i sensori
     tempFeatureTable = groupsummary(T, {'esn', char(EVENT), 'wid'}, ...
         {@mean, @std, @rms, @kurtosis, @skewness, @max}, [SENSORS, EVENT_FAULT]);
     % Rinominazione colonna fault
@@ -68,7 +67,7 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
     end
 
 
-    % % PLOTTING FEATURES
+    % %% PLOTTING FEATURES
     % for target_esn = [101, 102, 103, 104]
     %     for target_sensor = SENSORS
     %         plotData = MovingFeatures(MovingFeatures.esn == target_esn, :);
@@ -145,7 +144,6 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
         
         
     %% MONOTONICITY, PROGNOSABILITY E TRENDABILITY
-    % 1. Organize data: Create a cell array where each cell is one engine's history
     uniqueESNs = unique(MovingFeatures.esn);
     ensembleData = {};
     for i = 1:length(uniqueESNs)
@@ -155,7 +153,6 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
             % Ordiniamo prima per ciclo e poi per finestra (wid)
             tempTable = sortrows(tempTable, {EVENT, 'wid'});
             % CREAZIONE TEMPO STRETTAMENTE CRESCENTE
-            % Creiamo un indice lineare (1, 2, 3, 4...) che rappresenta il tempo
             tempTable.TimeIndex = (1:height(tempTable))';
             % Rimuoviamo le variabili non necessarie
             % Teniamo TimeIndex come variabile temporale di riferimento
@@ -189,7 +186,6 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
         
     %% PLOTTING COMPARATIVO
     fig = figure('Units', 'normalized', 'Position', [0.1, 0.1, 0.8, 0.8], 'Name', 'Confronto Ranking Features');
-    % --- PREPARAZIONE DATI PER UITABLE ---
     dataAnova = table2cell(top10Ranking);
     idxStringsAnova = cellfun(@isstring, dataAnova) | cellfun(@iscategorical, dataAnova);
     dataAnova(idxStringsAnova) = cellfun(@char, dataAnova(idxStringsAnova), 'UniformOutput', false);
@@ -216,18 +212,24 @@ for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
     ylabel('CI Index Score');
     title('Top 10: Condition Indicators (M+T+P)/3');
     grid on;
-    % 3. Tabella ANOVA
+    % --- 3. Tabella ANOVA ---
     nexttile(3);
-    axis off;
+    axis off; 
     uit1 = uitable(fig, 'Data', dataAnova, ...
         'ColumnName', top10Ranking.Properties.VariableNames, ...
-        'Units', 'Normalized', 'Position', [0.05, 0.05, 0.42, 0.38]);
-    % 4. Tabella CI
+        'Units', 'Normalized', ...
+        'Position', [0.05, 0.05, 0.43, 0.38], ... 
+        'FontSize', 9, ...
+        'ColumnWidth', {140, 80}); 
+    % --- 4. Tabella CI ---
     nexttile(4);
     axis off;
     uit2 = uitable(fig, 'Data', dataCI, ...
         'ColumnName', top10Features.Properties.VariableNames, ...
-        'Units', 'Normalized', 'Position', [0.53, 0.05, 0.42, 0.38]);
+        'Units', 'Normalized', ...
+        'Position', [0.52, 0.05, 0.43, 0.38], ... 
+        'FontSize', 9, ...
+        'ColumnWidth', {140, 60, 60, 60, 60});
     % SALVATAGGIO
     savePath = baseSavePath + "/CONDITION_INDICATORS/" + string(EVENT) + "/"; 
     if ~exist(savePath, 'dir'), mkdir(savePath); end

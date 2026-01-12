@@ -39,7 +39,8 @@ FEATURES = ["mean_Altitude"; "std_Altitude"; "rms_Altitude"; "kurtosis_Altitude"
     "mean_T45"; "std_T45"; "rms_T45"; "kurtosis_T45"; "skewness_T45";
     "mean_P25"; "std_P25"; "rms_P25"; "kurtosis_P25"; "skewness_P25";
     "mean_T5"; "std_T5"; "rms_T5"; "kurtosis_T5"; "skewness_T5"];
-INDEPENDENT_VARIABLES = EVENT + "_index";
+%INDEPENDENT_VARIABLES = EVENT + "_index";
+INDEPENDENT_VARIABLES = "wid";
 CONDITION_VARIABLES = "fault_" + EVENT;
 
 % Create output ensemble.
