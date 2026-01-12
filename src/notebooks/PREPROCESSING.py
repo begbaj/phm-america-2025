@@ -108,12 +108,12 @@ cols_order = [
 
 dfp = dfp[cols_order]
 
-# for snap_id, group_data in dfp.groupby('snap'):
-#     print(f"Scrittura file per SNAP {snap_id}...")
-#     filename = f"snapshot_{snap_id}.csv"
-#     path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
-#     # index=False perché 'global_index' è già una colonna esplicita
-#     group_data.to_csv(path, index=False)
+for snap_id, group_data in dfp.groupby('snap'):
+    print(f"Scrittura file per SNAP {snap_id}...")
+    filename = f"snapshot_{snap_id}.csv"
+    path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
+    # index=False perché 'global_index' è già una colonna esplicita
+    group_data.to_csv(path, index=False)
 
 path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training.csv")
 dfp.to_csv(path, index=False)
@@ -179,18 +179,14 @@ plt.show()
 # %%
 #features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
 features = []
-target = 'HPT'
+target = 'HPC'
 statistical_features = ['mean', 'rms']
 fulltarget = f'to_next_{target.lower()}_cycle'
 colname = f.get_all_performance_colnames()
-# dff, val = f.pipeline_hpc(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
-dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+dff, val = f.pipeline_hpc(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+# dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
 
-# 4. Creazione della Pivot Table per il confronto
-# Mostra come la correlazione di Spearman cambia per la stessa feature tra diversi snap
-# feature_evolution = val.pivot(index='snap', columns='feature', values='spearman_corr')
-
-# 5. Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
+# Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
 per = val.sort_values(by='pearson_corr', key=abs, ascending=False).head(10)
 spe = val.sort_values(by='spearman_corr', key=abs, ascending=False).head(10)
 tot = val.sort_values(by='tot_val', key=abs, ascending=False).head(10)
