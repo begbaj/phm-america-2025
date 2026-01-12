@@ -1,20 +1,16 @@
 clear; clc; close all;
-%SENSORS = ["Altitude", "Mach", "Pamb", "Pt2", "TAT", "WFuel", "VAFN", ...
-    %"VBV","Fan_Speed", "Core_Speed", "T25", "T3", "Ps3", "T45", "P25", "T5"];
-SENSORS = ["Pt2", "WFuel", "VAFN", "VBV","Fan_Speed", ...
-    "Core_Speed", "T25", "T3", "Ps3", "T45", "P25", "T5"];
+SENSORS = ["Altitude", "Mach", "Pamb", "Pt2", "TAT", "WFuel", "VAFN", ...
+    "VBV","Fan_Speed", "Core_Speed", "T25", "T3", "Ps3", "T45", "P25", "T5"];
 [scriptPath, ~, ~] = fileparts(mfilename('fullpath'));
 [parentPath, ~, ~] = fileparts(scriptPath);
 [granParentPath, ~, ~] = fileparts(parentPath);
 baseSavePath = fullfile(granParentPath, 'Data/CONDITION_INDICATORS');
 
-%for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
-for i = {'hpc_cycle'}
+for i = {'hpc_cycle', 'hpt_cycle', 'ww_cycle'}
     EVENT = i{1};
     for SNAPSHOT = 1:8
         T = readtable("data/snapshot_tables/snapshot_" + string(SNAPSHOT) + ".csv");
         T = stc(T); % stc fa la pulizia dei dati (però è da rivedere come funzione)
-        T = removevars(T, {'Altitude', 'Mach', 'Pamb', 'TAT'});
         % ho scritto una nuova funzione perchè il modo in cui trattiamo i dati
         % adesso è differente da prima e ho pensato dovesse essere opportuno fare
         % la pulizia in modo diverso, ma non ne sono certo ;)
@@ -27,8 +23,8 @@ for i = {'hpc_cycle'}
         %% FEATURES
         % questo blocco serve a calcolare le features e inserirle nel workspace,
         % non fa altro
-        FeatureTable = groupsummary(T, {'esn', EVENT, char(EVENT_INDEX), char(EVENT_RUL), char(EVENT_FAULT)},...
-            {@rms, @std, @kurtosis, @skewness },...
+        FeatureTable = groupsummary(T, {'esn', char(EVENT), char(EVENT_INDEX), char(EVENT_RUL), char(EVENT_FAULT)},...
+            {@mean, @std, @rms, @kurtosis, @skewness },...
             SENSORS);
         FeatureTable = renamevars(FeatureTable, 'GroupCount', 'Cycle_Life');
         % features calcolate a seconda del raggruppamento esn -> snap -> ciclo di 
@@ -37,19 +33,95 @@ for i = {'hpc_cycle'}
 
         %% MOVING FEATURES
         K = 10; 
-        % creiamo delle "finestre" hardcoded nella tabella
-        T = sortrows(T, {'esn', EVENT, char(EVENT_INDEX), char(EVENT_RUL), char(EVENT_FAULT)});
-        T.wid = floor((0:height(T)-1)' / K);
-        tempFeatureTable = groupsummary(T, {'esn', EVENT, char(EVENT_INDEX), char(EVENT_RUL), char(EVENT_FAULT), 'wid'}, ...
-            {@rms, @std, @kurtosis, @skewness}, SENSORS);
-        MovingFeatures = fillFeatureNaN(tempFeatureTable);
-        % 1. Converte EVENT in double (per le metriche)
-        if iscategorical(MovingFeatures.(EVENT))
-            MovingFeatures.(EVENT) = double(string(MovingFeatures.(EVENT)));
+        T = sortrows(T, {'esn', EVENT, char(EVENT_INDEX)});
+        % Reset WID per ogni motore
+        T.wid = zeros(height(T), 1);
+        uEsn = unique(T.esn);
+        for idxE = 1:numel(uEsn)
+            sel = T.esn == uEsn(idxE);
+            T.wid(sel) = floor((0:sum(sel)-1)' / K);
         end
-        % 2. Converte esn in double (per evitare categorie vuote nel loop unique)
-        if iscategorical(MovingFeatures.esn)
-            MovingFeatures.esn = double(string(MovingFeatures.esn));
+        % Spe funzioni per i sensori
+        tempFeatureTable = groupsummary(T, {'esn', char(EVENT), 'wid'}, ...
+            {@mean, @std, @rms, @kurtosis, @skewness, @max}, [SENSORS, EVENT_FAULT]);
+        % Rinominazione colonna fault
+        oldFaultName = "fun6_" + EVENT_FAULT;
+        if ismember(oldFaultName, tempFeatureTable.Properties.VariableNames)
+            tempFeatureTable = renamevars(tempFeatureTable, oldFaultName, EVENT_FAULT);
+        end
+        % Rinominazione delle colonne dei sensori
+        funNames = {'mean', 'std', 'rms', 'kurtosis', 'skewness'};
+        for fn = 1:numel(funNames)
+            oldNames = "fun" + string(fn) + "_" + SENSORS;
+            newNames = string(funNames{fn}) + "_" + SENSORS;
+            existIdx = ismember(oldNames, tempFeatureTable.Properties.VariableNames);
+            tempFeatureTable = renamevars(tempFeatureTable, oldNames(existIdx), newNames(existIdx));
+        end
+        % drop di tutte le colonne inutili
+        allVars = tempFeatureTable.Properties.VariableNames;
+        varsToDrop = allVars(startsWith(allVars, "fun"));
+        if ~isempty(varsToDrop)
+            tempFeatureTable = removevars(tempFeatureTable, varsToDrop);
+        end
+        MovingFeatures = fillFeatureNaN(tempFeatureTable);
+
+
+
+        %% PLOTTING FEATURES
+        target_sensor = "T3"; 
+        target_esn = MovingFeatures.esn(1); 
+        plotData = MovingFeatures(MovingFeatures.esn == target_esn, :);
+        colors = [0.00, 0.45, 0.74;   % Blu (Mean)
+                  0.85, 0.33, 0.10;   % Arancio (Std)
+                  0.47, 0.67, 0.19;   % Verde (Kurtosis)
+                  0.64, 0.08, 0.18];  % Amaranto (Skewness)
+        if ~isempty(plotData)
+            hFig = figure('Units', 'normalized', 'Position', [0.1 0.1 0.5 0.8], 'Color', 'w');
+            t = tiledlayout(3, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
+            txtTitle = "Feature Statistiche: " + target_sensor;
+            txtSub   = "ESN: " + string(target_esn) + " - Snapshot: " + string(SNAPSHOT);
+            title(t, {['\fontsize{14}', char(txtTitle)], ['\fontsize{10}\color[rgb]{0.4 0.4 0.4}', char(txtSub)]}, 'FontWeight', 'bold');
+            x = plotData.('wid');
+            % --- 1. TREND PRINCIPALE (Mean con Area di Varianza) ---
+            ax1 = nexttile;
+            hold on;
+            mu = plotData.("mean_" + target_sensor);
+            sigma = plotData.("std_" + target_sensor);
+            % Ombreggiatura per la deviazione standard
+            fill([x; flipud(x)], [mu-sigma; flipud(mu+sigma)], colors(1,:), ...
+                'FaceAlpha', 0.1, 'EdgeColor', 'none', 'HandleVisibility', 'off');
+            plot(x, mu, '-o', 'Color', colors(1,:), 'LineWidth', 1.8, ...
+                'MarkerSize', 5, 'MarkerFaceColor', 'w', 'DisplayName', 'Moving Mean');
+            grid on; ax1.GridAlpha = 0.4;
+            ylabel('Mean', 'FontWeight', 'bold');
+            legend('Location', 'best', 'Box', 'off');
+            % --- 2. DISPERSIONE E RMS ---
+            ax2 = nexttile;
+            hold on;
+            plot(x, sigma, '-d', 'Color', colors(2,:), 'LineWidth', 1.5, 'MarkerSize', 4, 'DisplayName', 'Std Dev');
+            plot(x, plotData.("rms_" + target_sensor), '--', 'Color', [0.4 0.4 0.4], 'DisplayName', 'RMS');
+            grid on; ax2.GridAlpha = 0.4;
+            ylabel('Std/RMS', 'FontWeight', 'bold');
+            legend('Location', 'best', 'Box', 'off');
+            % --- 3. FORMA DELLA DISTRIBUZIONE (Kurtosis & Skewness) ---
+            ax3 = nexttile;
+            yyaxis left
+            s = stem(x, plotData.("kurtosis_" + target_sensor), 'filled', 'DisplayName', 'Kurtosis');
+            s.Color = colors(3,:); s.MarkerSize = 4;
+            ylabel('Kurtosis', 'FontWeight', 'bold');
+            ax3.YColor = colors(3,:);
+            yyaxis right
+            plot(x, plotData.("skewness_" + target_sensor), '-p', 'Color', colors(4,:), ...
+                'MarkerFaceColor', colors(4,:), 'MarkerSize', 6, 'DisplayName', 'Skewness');
+            ylabel('Skewness', 'FontWeight', 'bold');
+            ax3.YColor = colors(4,:);
+            grid on; 
+            xlabel(['Ciclo (', char(EVENT_INDEX), ')'], 'FontWeight', 'bold');
+            % Link degli assi per zoom sincronizzato
+            linkaxes([ax1, ax2, ax3], 'x');
+            drawnow;
+        else
+            warning('Nessun dato trovato per il motore %d nello snapshot %d', target_esn, SNAPSHOT);
         end
         
         
@@ -75,8 +147,7 @@ for i = {'hpc_cycle'}
                 tempTable.TimeIndex = (1:height(tempTable))';
                 % Rimuoviamo le variabili non necessarie
                 % Teniamo TimeIndex come variabile temporale di riferimento
-                temp = removevars(tempTable, {'esn', 'wid', EVENT, char(EVENT_INDEX), ...
-                    char(EVENT_RUL), char(EVENT_FAULT), 'GroupCount'}); 
+                temp = removevars(tempTable, {'esn', 'wid', EVENT, 'GroupCount'}); 
                 ensembleData{end+1} = temp;
             end
         end
