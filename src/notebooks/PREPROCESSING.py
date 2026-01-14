@@ -44,8 +44,18 @@ from tools.types.enums import *
 # Reset dell'indice per preservare l'indice originale come 'global_index'
 train = u.load_training()()
 dfp = train.reset_index().rename(columns={"index": "global_index"})
-dfp = u.process_pipeline(dfp)
+del train
 
+## PREPROCESSING
+
+dfp , history = u.process_pipeline(dfp,
+                                   outlier_method='isoforest',
+                                   outlier_threshold=0.08,
+                                   smoothing_window=200,
+                                   smoothing_step=100,
+                                   )
+
+### PREPROCESSING 
 
 # Rinominazione di alcune colonne per semplicità di scrittura
 rename_map = {
@@ -68,7 +78,7 @@ final_sensor_names = list(sensor_rename_map.values())
 
 # Nuovi indici
 dfp['esn_index'] = dfp.groupby('esn').cumcount()
-dfp['snap_index'] = dfp.groupby('snap').cumcount()
+dfp['snap_index'] = dfp.groupby(["esn", 'snap']).cumcount()
 dfp['ww_cycle_index']  = dfp.groupby(['ww_cycle', "snap", "esn"]).cumcount()
 dfp['hpc_cycle_index'] = dfp.groupby(['hpc_cycle', "snap", "esn"]).cumcount()
 dfp['hpt_cycle_index'] = dfp.groupby(['hpt_cycle', "snap", "esn"]).cumcount()
@@ -108,12 +118,12 @@ cols_order = [
 
 dfp = dfp[cols_order]
 
-for snap_id, group_data in dfp.groupby('snap'):
-    print(f"Scrittura file per SNAP {snap_id}...")
-    filename = f"snapshot_{snap_id}.csv"
-    path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
-    # index=False perché 'global_index' è già una colonna esplicita
-    group_data.to_csv(path, index=False)
+# for snap_id, group_data in dfp.groupby('snap'):
+#     print(f"Scrittura file per SNAP {snap_id}...")
+#     filename = f"snapshot_{snap_id}.csv"
+#     path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
+#     # index=False perché 'global_index' è già una colonna esplicita
+#     group_data.to_csv(path, index=False)
 
 path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training.csv")
 dfp.to_csv(path, index=False)
@@ -121,6 +131,9 @@ dfp.to_csv(path, index=False)
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
 u.SENSORS = final_sensor_names
 del new_fault_columns, sensor_cols, sensor_rename_map
+
+# %%
+up.plot_pipeline_comparison(history, "Sensed_T45")
 
 # %% [markdown]
 # # estrazione feature basiche statistiche
@@ -179,12 +192,12 @@ plt.show()
 # %%
 #features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
 features = []
-target = 'HPC'
+target = 'HPT'
 statistical_features = ['mean', 'rms']
 fulltarget = f'to_next_{target.lower()}_cycle'
 colname = f.get_all_performance_colnames()
-dff, val = f.pipeline_hpc(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
-# dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+#dff, val = f.pipeline_hpc(dfp, features, colname, statistical_features, window=100, step=100, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
 
 # Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
 per = val.sort_values(by='pearson_corr', key=abs, ascending=False).head(10)
@@ -210,7 +223,6 @@ esn_list = [101, 102, 103, 104]     # I motori che vuoi controllare
 
 plots = up.plot_features(dff, esn_list, tot, target, fulltarget, filter_feature, max_features_to_show)
 for (fig, figname) in plots:
-    fig.show()
     path = u.plot_path("features_plots", f"{target}", f"{run}", "Aggregated (snap collapse)" ,filename=figname)
     fig.savefig(path)
 

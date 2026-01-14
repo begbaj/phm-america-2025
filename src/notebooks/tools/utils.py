@@ -1,4 +1,5 @@
 import os.path as path
+import matplotlib.pyplot as plt
 from datetime import datetime
 import os
 import pandas as pd
@@ -443,9 +444,6 @@ def missingfill(df: DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], sens
 
     return df_out
 
-    print("Pipeline completata.")
-    return df_filled
-
 def remove_outliers(df: DataFrame, sensor_cols=None, threshold=3, method='zscore') -> DataFrame:
     """
     Identifica e rimuove gli outliers dai sensori, impostandoli a NaN.
@@ -497,42 +495,41 @@ def remove_outliers(df: DataFrame, sensor_cols=None, threshold=3, method='zscore
                 
     return df_out
 
-def process_pipeline(df: DataFrame, sensor_cols=None, outlier_method='zscore') -> DataFrame:
+def process_pipeline(df: pd.DataFrame, sensor_cols=None, outlier_method='zscore', outlier_threshold: int | float = 3, smoothing_window=5, smoothing_step=2) -> pd.DataFrame:
     """
-    Esegue la pipeline completa di preprocessing:
-    1. remove_outliers: Identifica e imposta a NaN i valori anomali.
-    2. missingfill: Riempie i NaN usando media flotta e forward fill.
-    3. apply_kalman: Applica il filtro di Kalman per smoothing.
-    
-    :param df: DataFrame di input.
-    :param sensor_cols: Lista opzionale di colonne sensori.
-    :param outlier_method: Metodo per la rimozione outliers ('zscore', 'iqr', 'isoforest').
-    :return: DataFrame processato.
+    Esegue la pipeline di preprocessing con visualizzazione comparativa finale.
     """
-    # 0. Outlier Removal
-    print(f"Avvio Pipeline: Step 0 - Outlier Removal ({outlier_method})...")
-    df_cleaned = remove_outliers(df, sensor_cols=sensor_cols, method=outlier_method)
+    # Salviamo i dati originali per il confronto finale
+    history = {}
+    history['Original'] = df.copy()
+
 
     # 1. Missing Fill
-    print("Avvio Pipeline: Step 1 - Missing Fill...")
-    df_filled = missingfill(df_cleaned, sensor_cols=sensor_cols)
+    print("Step 3: Filling Missing Values...")
+    df_filled = missingfill(df, sensor_cols=sensor_cols)
+    history['Missing Filled'] = df_filled.copy()
+
+    # 2. Outlier Removal
+    print(f"Step 2: Removing Outliers ({outlier_method})...")
+    df_cleaned = remove_outliers(df_filled, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold)
+    history['Outliers Removed'] = df_cleaned.copy()
     
     # Identifica sensori per Kalman
-    if sensor_cols is None:
-        target_sensors = [s.value if hasattr(s, 'value') else s for s in SENSORS]
-    else:
-        target_sensors = [s.value if hasattr(s, 'value') else s for s in sensor_cols]
-        
-    target_sensors = [s for s in target_sensors if s in df_filled.columns]
+    target_sensors = sensor_cols if sensor_cols else [s.value if hasattr(s, 'value') else s for s in SENSORS]
+    target_sensors = [s for s in target_sensors if s in df_cleaned.columns]
     
-    # 2. Kalman
-    print("Avvio Pipeline: Step 2 - Kalman Filter...")
-    if 'ESN' in df_filled.columns and 'Snapshot' in df_filled.columns:
-        for sensor in target_sensors:
-            df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
+    # 3. Kalman Filter
+    # print("Step 3: Applying Kalman Filter...")
+    # if 'ESN' in df_filled.columns and 'Snapshot' in df_filled.columns:
+    #     for sensor in target_sensors:
+    #         df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
+    print("Step 3: Smoothing...")
+    for sensor in target_sensors:
+        df_cleaned[sensor] = df_cleaned.groupby(["ESN", "Snapshot"])[sensor].transform(
+            lambda x: x.rolling(window=smoothing_window, min_periods=smoothing_step).mean()
+        ).reset_index(drop=True)
+    
+    history['Smoothing'] = df_cleaned.copy()
     
     print("Pipeline completata.")
-    return df_filled
-
-
-
+    return df_filled, history

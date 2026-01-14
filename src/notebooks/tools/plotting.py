@@ -448,6 +448,7 @@ def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: s
 
         fig.tight_layout()
         figname = f"features_esn_{esn}.png"
+        plt.show()
         figs.append((fig, figname))
     return figs
 
@@ -536,6 +537,36 @@ def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, 
 
             fig.tight_layout()
             figname = f"features_esn{esn}_snap{snap}.png"
+            plt.show()
             figs.append((fig, figname))
             
     return figs
+
+def plot_pipeline_comparison(history, sensor_name):
+    """Funzione helper per disegnare il confronto."""
+    steps = list(history.keys())
+    fig, axes = plt.subplots(len(steps), 1, figsize=(15, 4 * len(steps)), sharex=True)
+    fig.suptitle(f"DATA EVOLUTION PIPELINE | Sensor: {sensor_name}", fontsize=16, fontweight='bold', y=0.92)
+
+    colors = ['#95a5a6', '#e74c3c', '#f1c40f', '#2ecc71'] # Grigio, Rosso, Giallo, Verde
+
+    for i, step in enumerate(steps):
+        ax = axes[i]
+        data = history[step][sensor_name]
+        
+        # Plot del dato corrente
+        # ax.plot(data.index, data, label=step, color=colors[i], alpha=0.8, linewidth=1.5)
+        ax.scatter(data.index, data, s=1, label=step, color=colors[i], alpha=0.8, linewidth=1.5)
+        
+        # Se non è il primo step, plotta in sottofondo l'originale per vedere la differenza
+        # if i > 0:
+        #     ax.plot(history['Original'].index, history['Original'], color='gray', alpha=0.2, label='Original Reference', zorder=0)
+
+        ax.set_title(f"STEP {i}: {step}", fontsize=13, fontweight='bold', loc='left')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.legend(loc='upper right')
+        ax.set_ylabel("Value")
+
+    plt.xlabel("Index / Time")
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    plt.show()

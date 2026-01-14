@@ -43,7 +43,7 @@ class FPressureRatio(FPerformanceParameter):
 
 class FThermalEfficiency(FPerformanceParameter):
     """Efficienza Termica e Turbine"""
-    DELTA_PR_TH_HPC = ("ΔPR/ΔTH HPC", "(Ps3 / P25) / ((T25 - T3) / T25)", "DP_TH_HPC")
+    # DELTA_PR_TH_HPC = ("ΔPR/ΔTH HPC", "(Ps3 / P25) / ((T25 - T3) / T25)", "DP_TH_HPC")
     DELTA_PR_TH_HPC_2 = ("ΔPR/ΔTH HPC", "(Ps3 / P25) / (T3/T25)", "DP_TH_HPC_2")
     DELTA_T_HPT = ("ΔT Relativo HPT", "(T3 - T45) / T3", "THE_DELTA_T_HPT")
     DELTA_T_LPT = ("ΔT Relativo LPT", "(T45 - T5) / T45", "THE_DELTA_T_LPT")
@@ -280,12 +280,12 @@ def evaluate_correlation_per_snap(df: pd.DataFrame, target: str, top_n: int = 5)
 def pipeline_hpc(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
     dff = df.groupby(['esn', "esn_index"], as_index=False).mean()
     dff = performance_features(dff, features)
-    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=25).dropna()
+    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=step).dropna()
     val = evaluate_correlation(dff, target=target, groupby=['esn', 'global_index'])
     return (dff, val)
 
 def pipeline_hpt(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
     dff = performance_features(df, features)
-    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=25).dropna()
+    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=step).dropna()
     val = evaluate_correlation_per_snap(dff, target=target)
     return (dff, val)
