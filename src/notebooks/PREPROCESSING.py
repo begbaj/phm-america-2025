@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025
 #     language: python
 #     name: python3
 # ---
@@ -129,7 +129,7 @@ path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training.cs
 dfp.to_csv(path, index=False)
 
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
-u.SENSORS = final_sensor_names
+# u.SENSORS = final_sensor_names
 del new_fault_columns, sensor_cols, sensor_rename_map
 
 # %%
@@ -139,51 +139,51 @@ up.plot_pipeline_comparison(history, "Sensed_T45")
 # # estrazione feature basiche statistiche
 
 # %%
-group = ['esn', 'snap']
-window = 50
-sortcols = ['esn', 'esn_index']
-features = ['mean', 'std',]
-sensors = ["Altitude","Mach","Pamb","Pt2","TAT","WFuel","VAFN","VBV","Fan_Speed","Core_Speed","T25","T3","Ps3","T45","P25","T5"]
+# group = ['esn', 'snap']
+# window = 50
+# sortcols = ['esn', 'esn_index']
+# features = ['mean', 'std',]
+# sensors = ["Altitude","Mach","Pamb","Pt3","TAT","WFuel","VAFN","VBV","Fan_Speed","Core_Speed","T25","T3","Ps3","T45","P25","T5"]
 
-dfa = u.preproc_features(dfp, group, sensors, features, sortcols, window_size=window, step=window//2)
+# dfa = u.preproc_features(dfp, group, sensors, features, sortcols, window_size=window, step=window//2)
 
-path_feat = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training_feature_table.csv")
-dfa.to_csv(path_feat, index=False)
+# path_feat = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training_feature_table.csv")
+# dfa.to_csv(path_feat, index=False)
 
-print(f"OPERAZIONE COMPLETATA.")
-print(f"Righe prima: {len(dfp)} | Righe dopo (aggregate): {len(dfa)}")
-print(f"File salvato in: {path_feat}")
+# print(f"OPERAZIONE COMPLETATA.")
+# print(f"Righe prima: {len(dfp)} | Righe dopo (aggregate): {len(dfa)}")
+# print(f"File salvato in: {path_feat}")
 
 
 # %%
-groups = list(dfa.groupby(['esn', 'snap']))
-n_groups = len(groups)
+# groups = list(dfa.groupby(['esn', 'snap']))
+# n_groups = len(groups)
 
-# Creiamo una griglia (es. 3 colonne)
-cols = 4
-rows = (n_groups + cols - 1) // cols
-fig, axes = plt.subplots(rows, cols, figsize=(20, 5 * rows), constrained_layout=True)
-axes = axes.flatten() # Rendiamo l'array 1D per iterare facilmente
+# # Creiamo una griglia (es. 3 colonne)
+# cols = 4
+# rows = (n_groups + cols - 1) // cols
+# fig, axes = plt.subplots(rows, cols, figsize=(20, 5 * rows), constrained_layout=True)
+# axes = axes.flatten() # Rendiamo l'array 1D per iterare facilmente
 
-for i, ((esn, snap), data) in enumerate(groups):
-    ax = axes[i]
+# for i, ((esn, snap), data) in enumerate(groups):
+#     ax = axes[i]
     
-    # Plot dei segnali
-    ax.plot(data["snap_index"], data["T45"], label="Orig", alpha=0.2, color='gray')
-    ax.plot(data["snap_index"], data["T45_std"], label="STD", alpha=0.7, color='orange')
-    ax.plot(data["snap_index"], data["T45_mean"], label="Mean", alpha=0.7, color='red')
+#     # Plot dei segnali
+#     ax.plot(data["snap_index"], data["T45"], label="Orig", alpha=0.2, color='gray')
+#     ax.plot(data["snap_index"], data["T45_std"], label="STD", alpha=0.7, color='orange')
+#     ax.plot(data["snap_index"], data["T45_mean"], label="Mean", alpha=0.7, color='red')
     
-    ax.set_title(f"ESN: {esn} | Snap: {snap}")
-    ax.set_xlabel("Snap Index")
-    ax.set_ylabel("T45")
-    ax.legend(loc='upper right', fontsize='small')
-    ax.grid(True, alpha=0.3)
+#     ax.set_title(f"ESN: {esn} | Snap: {snap}")
+#     ax.set_xlabel("Snap Index")
+#     ax.set_ylabel("T45")
+#     ax.legend(loc='upper right', fontsize='small')
+#     ax.grid(True, alpha=0.3)
 
-# Rimuoviamo eventuali axes vuoti se n_groups < rows*cols
-for j in range(i + 1, len(axes)):
-    fig.delaxes(axes[j])
+# # Rimuoviamo eventuali axes vuoti se n_groups < rows*cols
+# for j in range(i + 1, len(axes)):
+#     fig.delaxes(axes[j])
 
-plt.show()
+# plt.show()
 
 
 # %% [markdown]
@@ -192,7 +192,7 @@ plt.show()
 # %%
 #features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
 features = []
-target = 'HPT'
+target = 'WW'
 statistical_features = ['mean', 'rms']
 fulltarget = f'to_next_{target.lower()}_cycle'
 colname = f.get_all_performance_colnames()
@@ -215,6 +215,14 @@ print("-" * 30)
 print(f"Total Unique Best Features: {len(tot)}")
 print(tot)
 run = u.get_timestamp()
+
+
+
+# %%
+path_feat = u.pathfinder(cfg.DATA_BASE_PATH, "features", filename=f"training_feature_{target}_{run}_metadata.csv")
+dff.to_csv(path_feat, index=False)
+path_feat = u.pathfinder(cfg.DATA_BASE_PATH, "features", filename=f"training_feature_{target}_{run}_data.csv")
+dff[tot["feature"]].to_csv(path_feat, index=False)
 
 # %%
 filter_feature = None               #"DP_TH_HPC_2"  # oppure None

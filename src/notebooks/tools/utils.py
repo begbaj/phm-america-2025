@@ -525,7 +525,7 @@ def process_pipeline(df: pd.DataFrame, sensor_cols=None, outlier_method='zscore'
     #         df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
     print("Step 3: Smoothing...")
     for sensor in target_sensors:
-        df_cleaned[sensor] = df_cleaned.groupby(["ESN", "Snapshot"])[sensor].transform(
+        df_cleaned[sensor] = df_cleaned.groupby(["ESN"])[sensor].transform(
             lambda x: x.rolling(window=smoothing_window, min_periods=smoothing_step).mean()
         ).reset_index(drop=True)
     
