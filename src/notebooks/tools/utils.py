@@ -495,45 +495,53 @@ def remove_outliers(df: DataFrame, sensor_cols=None, threshold=3, method='zscore
                 
     return df_out
 
-def preprocess_pipeline(df: pd.DataFrame, sensor_cols=None, outlier_method='zscore', outlier_threshold: int | float = 3, smoothing_window=5, smoothing_step=2) -> pd.DataFrame:
+def preprocess_pipeline(
+        df: pd.DataFrame,
+        sensor_cols=None,
+        outlier_method='zscore',
+        outlier_threshold: int | float = 3,
+        smoothing_window: int=5,
+        smoothing_step: int =2
+    ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """
     Esegue la pipeline di preprocessing con visualizzazione comparativa finale.
     """
-    # Salviamo i dati originali per il confronto finale
+
     history = {}
     history['Original'] = df.copy()
 
     # 1. Missing Fill
     print("Step 1: Filling Missing Values...")
-    df_filled = missingfill(df, sensor_cols=sensor_cols)
-    # history['Missing Filled'] = df_filled.copy()
+    dfo = missingfill(df, sensor_cols=sensor_cols)
+    history['Missing Filled First'] = dfo.copy()
 
     # 2. Outlier Removal
     print(f"Step 2: Removing Outliers ({outlier_method})...")
-    df_cleaned = remove_outliers(df_filled, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold)
-    history['Outliers Removed'] = df_cleaned.copy()
+    dfo = remove_outliers(dfo, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold)
+    history['Outliers Removed'] = dfo.copy()
 
     # 3. Missing Fill per gli outlier rimossi impostati a NaN
     print("Step 3: Filling Missing Values...")
-    df_refilled = missingfill(df_cleaned, sensor_cols=sensor_cols)
-    history['Missing Filled'] = df_refilled.copy()
+    dfo = missingfill(dfo, sensor_cols=sensor_cols)
+    history['Missing Filled Second'] = dfo.copy()
     
-    # Identifica sensori per Kalman
+    # Identifica sensori
     target_sensors = sensor_cols if sensor_cols else [s.value if hasattr(s, 'value') else s for s in SENSORS]
-    target_sensors = [s for s in target_sensors if s in df_refilled.columns]
+    target_sensors = [s for s in target_sensors if s in dfo.columns]
     
     # 3. Kalman Filter
     # print("Step 3: Applying Kalman Filter...")
     # if 'ESN' in df_filled.columns and 'Snapshot' in df_filled.columns:
     #     for sensor in target_sensors:
     #         df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
+
     print("Step 3: Smoothing...")
     for sensor in target_sensors:
-        df_refilled[sensor] = df_refilled.groupby(["ESN"])[sensor].transform(
+        dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(
             lambda x: x.rolling(window=smoothing_window, min_periods=smoothing_step).mean()
         ).reset_index(drop=True)
-    
-    history['Smoothing'] = df_refilled.copy()
+
+    history['Smoothing'] = dfo.copy()
     
     print("Pipeline completata.")
-    return df_refilled, history
+    return dfo, history

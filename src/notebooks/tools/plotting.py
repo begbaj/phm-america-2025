@@ -548,7 +548,7 @@ def plot_pipeline_comparison(history, sensor_name):
     fig, axes = plt.subplots(len(steps), 1, figsize=(15, 4 * len(steps)), sharex=True)
     fig.suptitle(f"DATA EVOLUTION PIPELINE | Sensor: {sensor_name}", fontsize=16, fontweight='bold', y=0.92)
 
-    colors = ['#95a5a6', '#e74c3c', '#f1c40f', '#2ecc71'] # Grigio, Rosso, Giallo, Verde
+    colors = ['#95a5a6', '#e74c3c', '#f1c40f', '#2ecc71', '#9143a3'] # Grigio, Rosso, Giallo, Verde
 
     for i, step in enumerate(steps):
         ax = axes[i]
