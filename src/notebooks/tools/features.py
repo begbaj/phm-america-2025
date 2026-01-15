@@ -29,7 +29,6 @@ class FPerformanceParameter(Enum):
         """
         Executes the formula string against the DataFrame columns.
         """
-        # We ensure numpy functions like sqrt are available within the eval context
         return df.eval(self.formula, engine='python')
 
 
@@ -110,7 +109,7 @@ def performance_features(df: pd.DataFrame, features: list[FPerformanceParameter]
 
     dfo = df.copy()
     for feat in features:
-        dfo[feat.colname] = feat(df)
+        dfo[feat.colname] = feat(dfo)
 
     return dfo
 
@@ -278,13 +277,13 @@ def evaluate_correlation_per_snap(df: pd.DataFrame, target: str, top_n: int = 5)
     return report_df[cols]
 
 def pipeline_hpc(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
-    dff = df.groupby(['esn', "esn_index"], as_index=False).mean()
-    dff = performance_features(dff, features)
+    #dff = df.groupby(['esn', "esn_index"], as_index=False).mean()
+    dff = performance_features(df, features)
     dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=step).dropna()
-    val = evaluate_correlation(dff, target=target, groupby=['esn', 'global_index'])
+    val = evaluate_correlation(dff, target=target, groupby=['esn'])
     return (dff, val)
 
-def pipeline_hpt(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
+def pipeline_hpt(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpt_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
     dff = performance_features(df, features)
     dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=step).dropna()
     val = evaluate_correlation_per_snap(dff, target=target)
