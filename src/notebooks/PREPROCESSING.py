@@ -27,7 +27,7 @@ from scipy.stats import skew, kurtosis
 
 # %load_ext autoreload
 # %autoreload 2
-from tools import utils as u, config as cfg, algorithms as alg, plotting as up, features as f
+from tools import utils as u, config as cfg, plotting as up, features as f
 from tools.types.plotdata import PlotData
 from tools.types.enums import *
 
@@ -48,7 +48,7 @@ del train
 
 ## PREPROCESSING
 
-dfp , history = u.process_pipeline(dfp,
+dfp , history = u.preprocess_pipeline(dfp,
                                    outlier_method='isoforest',
                                    outlier_threshold=0.08,
                                    smoothing_window=200,
@@ -66,7 +66,8 @@ rename_map = {
     'Cumulative_HPT_SVs': 'hpt_cycle',
     'Cycles_to_WW': 'to_next_ww_cycle',
     'Cycles_to_HPC_SV': 'to_next_hpc_cycle',
-    'Cycles_to_HPT_SV': 'to_next_hpt_cycle'
+    'Cycles_to_HPT_SV': 'to_next_hpt_cycle',
+    'Cycles_Since_New': 'cycle'
 }
 dfp = dfp.rename(columns=rename_map)
 
@@ -102,6 +103,7 @@ new_fault_columns = ['fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle']
 cols_order = [
     'snap_index',
     'esn',
+    'cycle',
     'snap',
     'esn_index',
     'global_index',
@@ -190,14 +192,57 @@ plt.show()
 # # Estrazione feature sulle performance del motore
 
 # %%
+# PROVA
+
+meta_cols = [
+    'cycle', 'snap_index',
+    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
+    'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
+    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
+    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+]
+
+agg_logic = {}
+
+test = dfp.copy()
+
+# Scegliamo solo ESN e il contatore di riga come chiavi.
+group_keys = ['esn', 'cycle']
+
+# SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
+for col in final_sensor_names:
+    if col in test.columns:
+        agg_logic[col] = 'mean'
+
+# SULLE COLONNE META: prendiamo il PRIMO valore (perché è uguale in tutti gli snapshot di quel momento)
+for col in meta_cols:
+    if col in test.columns:
+        agg_logic[col] = 'first'
+
+# Rieseguiamo l'aggregazione usando queste nuove chiavi
+df_averaged = test.groupby(group_keys, as_index=False).agg(agg_logic)
+
+df_averaged = df_averaged.rename(columns={'snap_index': 'esn_index'})
+df_averaged = df_averaged.sort_values(['esn', 'esn_index'])
+
+# 6. SALVATAGGIO
+path_avg = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="averaged_final.csv")
+df_averaged.to_csv(path_avg, index=False)
+
+print(f"OPERAZIONE COMPLETATA.")
+print(f"Righe prima: {len(test)} | Righe dopo (mediate): {len(df_averaged)}")
+print(f"Rapporto di compressione: {len(test)/len(df_averaged):.1f}x (dovrebbe essere circa 8.0)")
+
+# %%
 #features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
+to_calc = df_averaged.copy()
 features = []
-target = 'HPT'
+target = 'HPC'
 statistical_features = ['mean', 'rms']
 fulltarget = f'to_next_{target.lower()}_cycle'
 colname = f.get_all_performance_colnames()
-#dff, val = f.pipeline_hpc(dfp, features, colname, statistical_features, window=100, step=100, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
-dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+dff, val = f.pipeline_hpc(to_calc, features, colname, statistical_features, window=200, step=100, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+#dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
 
 # Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
 per = val.sort_values(by='pearson_corr', key=abs, ascending=False).head(10)

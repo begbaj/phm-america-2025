@@ -421,7 +421,7 @@ def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: s
             
             # 1. Plot della Feature (Asse Sinistro)
             color_feat = 'tab:blue'
-            l1, = ax1.plot(esn_data['esn_index'], esn_data[feat_name], 
+            l1, = ax1.plot(esn_data['esn_index'], esn_data[feat_name], 'o', 
                         color=color_feat, linewidth=1.5, label=f'Feature: {feat_name}')
             ax1.set_ylabel(feat_name, color=color_feat, fontweight='bold')
             ax1.set_xlabel('Cicli (Time)')
