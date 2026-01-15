@@ -237,29 +237,37 @@ print(f"Rapporto di compressione: {len(test)/len(df_averaged):.1f}x (dovrebbe es
 #features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
 to_calc = df_averaged.copy()
 features = []
-target = 'WW'
+target = 'HPT'
 statistical_features = ['mean', 'rms']
 fulltarget = f'to_next_{target.lower()}_cycle'
 colname = f.get_all_performance_colnames()
-dff, val = f.pipeline_hpc(to_calc, features, colname, statistical_features, window=200, step=100, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
-#dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+skip = 0
 
-# Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
-per = val.sort_values(by='pearson_corr', key=abs, ascending=False).head(10)
-spe = val.sort_values(by='spearman_corr', key=abs, ascending=False).head(10)
-tot = val.sort_values(by='tot_val', key=abs, ascending=False).head(10)
+if target == "HPC":
+    dff, val = f.pipeline_hpc(to_calc, features, colname, statistical_features, window=200, step=100, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+elif target == "HPT":
+    dff, val = f.pipeline_hpt(to_calc, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+else:
+    print("Non se po fa")
+    skip = 1
 
-print("-" * 30)
-print("TOP 10 PEARSON (Across all snaps):")
-print(per)
+if skip != 1:
+    # Estrazione delle migliori feature assolute (considerando tutti i raggruppamenti)
+    per = val.sort_values(by='pearson_corr', key=abs, ascending=False).head(10)
+    spe = val.sort_values(by='spearman_corr', key=abs, ascending=False).head(10)
+    tot = val.sort_values(by='tot_val', key=abs, ascending=False).head(10)
 
-print("\nTOP 10 SPEARMAN (Across all snaps):")
-print(spe)
+    print("-" * 30)
+    print("TOP 10 PEARSON (Across all snaps):")
+    print(per)
 
-print("-" * 30)
-print(f"Total Unique Best Features: {len(tot)}")
-print(tot)
-run = u.get_timestamp()
+    print("\nTOP 10 SPEARMAN (Across all snaps):")
+    print(spe)
+
+    print("-" * 30)
+    print(f"Total Unique Best Features: {len(tot)}")
+    print(tot)
+    run = u.get_timestamp()
 
 
 

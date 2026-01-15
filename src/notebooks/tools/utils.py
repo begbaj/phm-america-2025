@@ -1,22 +1,29 @@
-import os.path as path
-import matplotlib.pyplot as plt
 from datetime import datetime
-import os
-import pandas as pd
-import numpy as np
-from types import FunctionType
-from pandas import DataFrame, Series
 from enum import Enum
+from pandas import DataFrame, Series
 from plotly.graph_objs import Data
+from pykalman import KalmanFilter
+from scipy import stats
+from sklearn.decomposition import PCA
+from sklearn.ensemble import IsolationForest
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
 from tools import plotting
 from tools.config import DATA_PATH, PLOT_PATH
+from tools.types.enums import ESENSORS, RepairEventType, Snapshots
+from types import FunctionType
+from xgboost import XGBRegressor
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import os.path as path
+import pandas as pd
 import random
 import tools.config as c
-from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 import tools.features as f
-from scipy import stats
-from pykalman import KalmanFilter
-from sklearn.ensemble import IsolationForest
 
 ###
 ### ENUMS
@@ -32,10 +39,10 @@ SNAPSHOTS = range(1,9)
 SENSORS = ESENSORS.values()
 FEATURES = ["mean", "std", "kurtosis", "skewness"]
 META_COLS = [
-    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
-    'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
-    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
-    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+    'cycle', 'esn', 'esn_index', 'fault_hpc_cycle', 'fault_hpt_cycle',
+    'fault_ww_cycle', 'global_index', 'hpc_cycle', 'hpc_cycle_index', 'hpt_cycle', 'hpt_cycle_index',
+    'snap', 'snap_index', 'to_next_hpc_cycle', 'to_next_hpt_cycle', 'to_next_ww_cycle', 'ww_cycle',
+    'ww_cycle_index'
 ]
 
 
@@ -545,3 +552,99 @@ def preprocess_pipeline(
     
     print("Pipeline completata.")
     return dfo, history
+
+def train_evaluate_logo_pca(df, features, target_col, n_components=10, model_type='xgb'):
+    """
+    Esegue Leave-One-Group-Out (LOGO) su ESN integrando Scaler e PCA.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame contenente una colonna 'esn' per il raggruppamento
+    features : list
+        Lista dei nomi delle colonne delle feature
+    target_col : str
+        Nome della colonna target (RUL o simile)
+    n_components : int, default=10
+        Numero di componenti PCA
+    model_type : str, default='xgb'
+        Tipo di modello: 'xgb' (XGBoost), 'rf' (RandomForest), 'lr' (LinearRegression)
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame con colonne: 'esn', 'cycle', 'True_RUL', 'Pred_RUL'
+    """
+    
+    esn_list = df['esn'].unique()
+    results = []
+    
+    print(f"\n--- LOGO Cross-Validation su {len(esn_list)} motori ---")
+    print(f"Target: {target_col} | Modello: {model_type} | PCA Comp: {n_components}")
+    print(f"{'Test ESN':<12} {'RMSE':<10} {'R2':<10}")
+    print("-" * 32)
+    
+    for test_esn in esn_list:
+        # 1. Split Train/Test basato sull'ESN
+        train_data = df[df['esn'] != test_esn]
+        test_data = df[df['esn'] == test_esn]
+        
+        X_train_raw = train_data[features]
+        y_train = train_data[target_col]
+        X_test_raw = test_data[features]
+        y_test = test_data[target_col]
+
+        # 2. Imputazione (se ci sono NaNs)
+        imputer = SimpleImputer(strategy='mean')
+        X_train_imp = imputer.fit_transform(X_train_raw)
+        X_test_imp = imputer.transform(X_test_raw)
+        
+        # 3. Scaling (Fondamentale prima della PCA)
+        scaler = StandardScaler()
+        X_train_sc = scaler.fit_transform(X_train_imp)
+        X_test_sc = scaler.transform(X_test_imp)
+        
+        # 4. PCA: Calcolata SOLO sul Train
+        pca = PCA(n_components=n_components)
+        X_train_final = pca.fit_transform(X_train_sc)
+        X_test_final = pca.transform(X_test_sc)
+        
+        # 5. Selezione Modello
+        if model_type == 'rf':
+            model = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=42)
+        elif model_type == 'xgb':
+            model = XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=6, n_jobs=-1, random_state=42, verbosity=0)
+        else:
+            model = LinearRegression()
+            
+        # 6. Training e Predizione
+        model.fit(X_train_final, y_train)
+        preds = model.predict(X_test_final)
+        
+        # 7. Salvataggio risultati del fold
+        fold_res = pd.DataFrame({
+            'esn': test_data['esn'].values,
+            'cycle': test_data['cycle'].values,
+            'True_RUL': y_test.values,
+            'Pred_RUL': preds
+        })
+        results.append(fold_res)
+        
+        # Metriche fold corrente
+        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        r2 = r2_score(y_test, preds)
+        print(f"{test_esn:<12} {rmse:<10.2f} {r2:<10.4f}")
+
+    # Concatenazione di tutti i risultati
+    all_results = pd.concat(results, ignore_index=True)
+    
+    # Metriche Globali
+    global_rmse = np.sqrt(mean_squared_error(all_results['True_RUL'], all_results['Pred_RUL']))
+    global_r2 = r2_score(all_results['True_RUL'], all_results['Pred_RUL'])
+    print(f"\n{'='*32}")
+    print(f"--- METRICHE GLOBALI ---")
+    print(f"Global RMSE: {global_rmse:.2f}")
+    print(f"Global R2:   {global_r2:.4f}")
+    print(f"{'='*32}\n")
+    
+    return all_results

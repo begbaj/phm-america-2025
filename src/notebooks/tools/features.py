@@ -5,11 +5,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.stats as spst
 from typing import Dict, List, Tuple
+from tools import utils as u
 
-DESCRIPTIVE_COLUMNS = ['snap_index', 'esn', 'snap', 'esn_index', 'global_index', 'ww_cycle_index',
-    'hpc_cycle_index', 'hpt_cycle_index', 'ww_cycle', 'hpc_cycle', 'hpt_cycle', 'to_next_ww_cycle',
-    'to_next_hpc_cycle', 'to_next_hpt_cycle', 'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
-] 
 
 custom_functions = {
     'rms': lambda x: np.sqrt(np.mean(x**2))
@@ -143,7 +140,7 @@ def calc_statistical_features(df: pd.DataFrame, features: list[str] = [], column
 
     calc_cols = [
         c for c in columns 
-        if c in dfo.columns and c not in groupby and c not in sortby and c not in DESCRIPTIVE_COLUMNS
+        if c in dfo.columns and c not in groupby and c not in sortby and c not in u.META_COLS
     ]
     
     if not calc_cols:
@@ -220,7 +217,7 @@ def evaluate_correlation(df: pd.DataFrame, target: str, groupby: list[str] = ['e
     for g in groupby:
         cols.remove(g)
 
-    for g in DESCRIPTIVE_COLUMNS:
+    for g in u.META_COLS:
         try:
             cols.remove(g)
         except ValueError:
