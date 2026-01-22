@@ -395,7 +395,10 @@ def plot_stat_feat(data: dict, pdata: PlotData, repair: RepairEventType, stop=Tr
 
 def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: str, fulltarget: str, filter_feature: str | None = None, max_features_to_show: int = 6):
     if filter_feature:
-        target_features = [filter_feature]
+        if type(filter_feature) is list:
+            target_features = filter_feature
+        else:
+            target_features = [filter_feature]
     else:
         # Prende le migliori feature assolute (senza snap)
         target_features = tot['feature'].unique()[:max_features_to_show]

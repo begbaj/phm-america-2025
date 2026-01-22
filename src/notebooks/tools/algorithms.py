@@ -170,3 +170,8 @@ def evaluate_feature_groups_stats(featgroups: dict[str, list[tuple[int, float]]]
         results[feat_name] = {}
         results[feat_name]["monotonicity"] = m
     return results
+
+def looc(df: pd.DataFrame, model, features: list[str], target: str) -> dict[str, float]:
+    """
+    Leave-one-out cross-validation
+    """
