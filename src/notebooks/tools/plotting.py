@@ -29,6 +29,7 @@ from typing import overload
 from tools.types.plotdata import PlotData
 from tools.types.enums import ESENSORS, RepairEventType
 import os
+import seaborn as sns
 
 _colormap = "viridis"
 
@@ -573,3 +574,100 @@ def plot_pipeline_comparison(history, sensor_name):
     plt.xlabel("Index / Time")
     plt.tight_layout(rect=[0, 0, 1, 0.90])
     plt.show()
+
+
+
+def plot_residuals_dashboard(df, residual_cols):
+    """
+    Crea una dashboard dove ogni figura rappresenta un sensore di residuo.
+    In ogni figura, c'è un subplot per ogni ESN con ogni snapshot.
+    """
+    engine_ids = df['esn'].unique()
+    n_engines = len(engine_ids)
+    
+    # Calcolo righe e colonne per la griglia dei subplot (es. 4 motori per riga)
+    cols = 3
+    rows = (n_engines + cols - 1) // cols
+
+    for res_col in residual_cols:
+        fig, axes = plt.subplots(rows, cols, figsize=(18, 5 * rows), sharex=False)
+        fig.suptitle(f'Analisi Residui: {res_col}', fontsize=20, y=1.02)
+        
+        axes = axes.flatten() # Rendiamo la griglia un array lineare per ciclarci sopra
+        
+        for i, esn in enumerate(engine_ids):
+            ax = axes[i]
+            # Filtriamo i dati per il motore specifico
+            engine_data = df[df['esn'] == esn]
+            
+            # Plottiamo ogni snapshot con un colore diverso
+            sns.lineplot(
+                data=engine_data, 
+                x='snap_index', 
+                y=res_col, 
+                hue='snap', 
+                ax=ax, 
+                palette='viridis',
+                legend='full' if i == 0 else False # Legenda solo sul primo grafico
+            )
+            
+            ax.set_title(f'ESN: {esn}')
+            ax.set_xlabel('Cicli')
+            ax.set_ylabel('Residuo')
+            ax.axhline(0, color='red', linestyle='--', alpha=0.5) # Linea dello zero (riferimento "sano")
+
+        # Rimuoviamo i subplot vuoti se n_engines non è multiplo di cols
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+            
+        plt.tight_layout()
+        plt.show()
+
+
+def plot_engine_level_residuals(df, residual_cols):
+    engine_ids = df['esn'].unique()
+    n_engines = len(engine_ids)
+    
+    cols = 3
+    rows = (n_engines + cols - 1) // cols
+
+    for res_col in residual_cols:
+        fig, axes = plt.subplots(rows, cols, figsize=(18, 5 * rows))
+        fig.suptitle(f'Engine-Level Residuals: {res_col}', fontsize=22, y=1.02)
+        
+        axes = axes.flatten()
+        
+        for i, esn in enumerate(engine_ids):
+            ax = axes[i]
+            # Filtro dati per il motore specifico
+            engine_data = df[df['esn'] == esn]
+            
+            # DISEGNO IL SEGNALE UNICO (Ex mediana)
+            # Rimuoviamo hue='snap' perché non c'è più
+            sns.lineplot(
+                data=engine_data, 
+                x='snap_index', 
+                y=res_col, 
+                ax=ax, 
+                color='blue',
+                linewidth=1,
+                label='Engine-Level'
+            )
+            
+            ax.set_title(f'ESN: {esn}', fontweight='bold')
+            ax.set_xlabel('Cicli')
+            ax.set_ylabel('Residuo')
+            
+            # Linea di riferimento zero (motore sano)
+            ax.axhline(0, color='red', linestyle='--', alpha=0.5)
+            
+            if i == 0:
+                ax.legend()
+
+        # Rimuoviamo i subplot vuoti
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+            
+        plt.tight_layout()
+        plt.show()
+        
