@@ -585,7 +585,6 @@ def plot_residuals_dashboard(df, residual_cols):
     engine_ids = df['esn'].unique()
     n_engines = len(engine_ids)
     
-    # Calcolo righe e colonne per la griglia dei subplot (es. 4 motori per riga)
     cols = 3
     rows = (n_engines + cols - 1) // cols
 
@@ -593,14 +592,14 @@ def plot_residuals_dashboard(df, residual_cols):
         fig, axes = plt.subplots(rows, cols, figsize=(18, 5 * rows), sharex=False)
         fig.suptitle(f'Analisi Residui: {res_col}', fontsize=20, y=1.02)
         
-        axes = axes.flatten() # Rendiamo la griglia un array lineare per ciclarci sopra
+        axes = axes.flatten()
         
         for i, esn in enumerate(engine_ids):
             ax = axes[i]
-            # Filtriamo i dati per il motore specifico
+            # Filtro per il motore specifico
             engine_data = df[df['esn'] == esn]
             
-            # Plottiamo ogni snapshot con un colore diverso
+            # Plotto ogni snapshot con un colore diverso
             sns.lineplot(
                 data=engine_data, 
                 x='snap_index', 
@@ -608,15 +607,15 @@ def plot_residuals_dashboard(df, residual_cols):
                 hue='snap', 
                 ax=ax, 
                 palette='viridis',
-                legend='full' if i == 0 else False # Legenda solo sul primo grafico
-            )
+                legend='full' if i == 0 else False
+                )
             
             ax.set_title(f'ESN: {esn}')
             ax.set_xlabel('Cicli')
             ax.set_ylabel('Residuo')
-            ax.axhline(0, color='red', linestyle='--', alpha=0.5) # Linea dello zero (riferimento "sano")
+            # Linea dello zero (riferimento "sano")
+            ax.axhline(0, color='red', linestyle='--', alpha=0.5)
 
-        # Rimuoviamo i subplot vuoti se n_engines non è multiplo di cols
         for j in range(i + 1, len(axes)):
             fig.delaxes(axes[j])
             
@@ -624,7 +623,7 @@ def plot_residuals_dashboard(df, residual_cols):
         plt.show()
 
 
-def plot_engine_level_residuals(df, residual_cols):
+def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
     engine_ids = df['esn'].unique()
     n_engines = len(engine_ids)
     
@@ -633,7 +632,7 @@ def plot_engine_level_residuals(df, residual_cols):
 
     for res_col in residual_cols:
         fig, axes = plt.subplots(rows, cols, figsize=(18, 5 * rows))
-        fig.suptitle(f'Engine-Level Residuals: {res_col}', fontsize=22, y=1.02)
+        fig.suptitle(f'Engine-Level Residuals: {res_col} - event: {event}', fontsize=22, y=1.02)
         
         axes = axes.flatten()
         
@@ -642,29 +641,108 @@ def plot_engine_level_residuals(df, residual_cols):
             # Filtro dati per il motore specifico
             engine_data = df[df['esn'] == esn]
             
-            # DISEGNO IL SEGNALE UNICO (Ex mediana)
-            # Rimuoviamo hue='snap' perché non c'è più
             sns.lineplot(
                 data=engine_data, 
                 x='snap_index', 
                 y=res_col, 
                 ax=ax, 
-                color='blue',
+                color='black',
                 linewidth=1,
                 label='Engine-Level'
             )
+
+            # Cerco lo snap_index dove to_next_col è 0
+            event_cycles = engine_data.loc[engine_data[to_next_col] == 0, 'snap_index']
+            if not event_cycles.empty:
+                # Itero sui valori trovati
+                for idx, val_x in enumerate(event_cycles):
+                    # Aggiungo la label solo alla prima linea per non sporcare la legenda
+                    label_text = f'{event}' if idx == 0 else ""
+                    
+                    ax.axvline(
+                        x=val_x, 
+                        color='red', 
+                        linestyle='-.', 
+                        linewidth=1.5, 
+                        alpha=0.7, 
+                        label=label_text
+                    )
             
             ax.set_title(f'ESN: {esn}', fontweight='bold')
             ax.set_xlabel('Cicli')
             ax.set_ylabel('Residuo')
             
             # Linea di riferimento zero (motore sano)
-            ax.axhline(0, color='red', linestyle='--', alpha=0.5)
+            ax.axhline(0, color='blue', linestyle='--', alpha=0.5)
             
             if i == 0:
                 ax.legend()
 
-        # Rimuoviamo i subplot vuoti
+        # Rimuovo i subplot vuoti
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+            
+        plt.tight_layout()
+        plt.show()
+
+
+
+def plot_engine_level_hi(df, residual_cols, to_next_col, event):
+    engine_ids = df['esn'].unique()
+    n_engines = len(engine_ids)
+    cols = 3
+    rows = (n_engines + cols - 1) // cols
+
+    for res_col in residual_cols:
+        fig, axes = plt.subplots(rows, cols, figsize=(18, 5 * rows))
+        fig.suptitle(f'{event.upper()} Health Index: {res_col} vs Cycles to Event ({event.upper()})', fontsize=22, y=1.02)
+        
+        axes = axes.flatten()
+        
+        for i, esn in enumerate(engine_ids):
+            ax = axes[i]
+            engine_data = df[df['esn'] == esn].sort_values('snap_index')
+            
+            # --- ASSE 1: Health Index (HI) ---
+            sns.lineplot(
+                data=engine_data, 
+                x='snap_index', 
+                y=res_col, 
+                ax=ax, 
+                color='blue',
+                linewidth=2,
+                label='Health Index (HI)'
+            )
+            ax.set_ylabel('Health Index', color='blue', fontweight='bold')
+            ax.tick_params(axis='y', labelcolor='blue')
+
+            # --- ASSE 2: To Next Event (Cicli Residui) ---
+            ax2 = ax.twinx()
+            sns.lineplot(
+                data=engine_data,
+                x='snap_index',
+                y=to_next_col,
+                ax=ax2,
+                color='red',
+                linestyle='-.',
+                linewidth=1.5,
+                alpha=0.7,
+                label=f'Cycles to {event}'
+            )
+            ax2.set_ylabel('Cycles to Event', color='red', fontweight='bold')
+            ax2.tick_params(axis='y', labelcolor='red')
+
+            ax.set_title(f'ESN: {esn}', fontweight='bold')
+            ax.set_xlabel('Cycles')
+
+            if i == 0:
+                lines, labels = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax.legend(lines + lines2, labels + labels2, loc='upper left')
+            else:
+                ax.get_legend().remove() if ax.get_legend() else None
+
+        # Rimuovo i subplot vuoti
         for j in range(i + 1, len(axes)):
             fig.delaxes(axes[j])
             

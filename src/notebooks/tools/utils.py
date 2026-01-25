@@ -4,6 +4,7 @@ from pandas import DataFrame, Series
 from plotly.graph_objs import Data
 from pykalman import KalmanFilter
 from scipy import stats
+from scipy.optimize import minimize
 from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.ensemble import RandomForestRegressor
@@ -648,3 +649,31 @@ def train_evaluate_logo_pca(df, features, target_col, n_components=10, model_typ
     print(f"{'='*32}\n")
     
     return all_results
+
+
+
+
+def calculate_hpt_health_index(df, t3_col, t45_col):
+    """
+    Calcola l'Health Index HPT stimando alpha per ogni motore.
+    """
+    def objective(alpha, t3, t45):
+        # Esempio di minimizzazione: vogliamo che HI sia stabile o segua il trend HPC
+        hi = -alpha * t3 - t45
+        return np.std(hi) # Semplificazione: minimizziamo la varianza nel baseline
+
+    df['HI_HPT'] = np.nan
+    
+    for esn in df['esn'].unique():
+        engine_mask = df['esn'] == esn
+        t3_data = df.loc[engine_mask, t3_col].values
+        t45_data = df.loc[engine_mask, t45_col].values
+        
+        # Stima di alpha (puoi anche usare una regressione lineare se hai un target HPC)
+        res = minimize(objective, x0=1.0, args=(t3_data, t45_data))
+        best_alpha = res.x[0]
+        
+        # Calcolo HI finale per il motore
+        df.loc[engine_mask, 'HI_HPT'] = -best_alpha * t3_data - t45_data
+        
+    return df

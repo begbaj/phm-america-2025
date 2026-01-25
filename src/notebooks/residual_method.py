@@ -20,6 +20,9 @@
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from scipy.optimize import minimize
+# %load_ext autoreload
+# %autoreload 2
 from tools import utils as u, config as cfg, plotting as up
 
 # %% [markdown]
@@ -177,22 +180,69 @@ print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide
 # Plotting dei risultati generali
 # up.plot_residuals_dashboard(dfr, res_cols)
 # Plotting della media dei residui
+event = 'hpt'
+to_next_col = f'to_next_{event}_cycle'
 dfr_mean = dfr.copy()
 dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].transform(
     lambda x: x.rolling(window=100, min_periods=1).mean()
 )
 dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].bfill()
+dfr_mean[to_next_col] = dfr[to_next_col]
 up.plot_residuals_dashboard(dfr_mean, res_cols)
 
 # %%
+event = 'hpt'
+to_next_col = f'to_next_{event}_cycle'
 # Plotting con filtro mediana
 dfr_median = dfr_mean.copy()
+# Definisco le logiche di aggregazione
+agg_logic = {col: 'median' for col in res_cols}
+agg_logic[to_next_col] = 'first'
 # Creo i residui "Engine-Level Residuals" facendo la mediana tra gli snapshot
-dfr_median = dfr_median.groupby(['esn', 'snap_index'])[res_cols].median().reset_index()
+dfr_median = dfr_mean.groupby(['esn', 'snap_index']).agg(agg_logic).reset_index()
 # Salvataggio
 path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training_with_residuals_median.csv")
 dfr_median.to_csv(path, index=False)
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
 # Plotting
-up.plot_engine_level_residuals(dfr_median, res_cols)
+up.plot_engine_level_residuals(dfr_median, res_cols, to_next_col, event)
 
+
+# %% [markdown]
+# ## HPT Health Index
+
+# %%
+def fit_hpt_mapping(df, hi_col, target_to_next):
+    """
+    Stabilisce il mapping lineare tra HI e i cicli rimanenti.
+    """
+    df['HI_HPT_pred_cycles'] = np.nan
+    
+    for esn in df['esn'].unique():
+        engine_data = df[df['esn'] == esn].dropna(subset=[hi_col, target_to_next])
+        
+        if len(engine_data) > 2:
+            X = engine_data[[hi_col]].values
+            y = engine_data[target_to_next].values
+            
+            model = LinearRegression()
+            model.fit(X, y)
+            
+            # Predizione su tutto il range del motore
+            all_X = df.loc[df['esn'] == esn, [hi_col]].values
+            df.loc[df['esn'] == esn, 'HI_HPT_pred_cycles'] = model.predict(all_X)
+            
+    return df
+
+
+# %%
+event = 'hpt'
+to_next_col = f'to_next_{event}_cycle'
+# Calcolo HPT Health Index
+dfr_median = u.calculate_hpt_health_index(dfr_median, 'T3_res', 'T45_res')
+
+# Mapping dei cicli
+dfr_median = fit_hpt_mapping(dfr_median, 'HI_HPT', to_next_col)
+
+# Plotting
+up.plot_engine_level_hi(dfr_median, ['HI_HPT'], to_next_col, event)
