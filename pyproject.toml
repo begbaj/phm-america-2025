@@ -125,6 +125,8 @@ dependencies = [
   "terminado==0.18.1",
   "tinycss2==1.4.0",
   "tomli==2.3.0",
+  "torch>=2.10.0",
+  "torchvision>=0.25.0",
   "tornado==6.5.4",
   "traitlets==5.14.3",
   "typing-extensions==4.15.0",

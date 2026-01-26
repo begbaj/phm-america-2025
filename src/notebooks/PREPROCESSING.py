@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025
+#     display_name: phm-america-2025 (3.14.2)
 #     language: python
 #     name: python3
 # ---
@@ -562,7 +562,7 @@ from sklearn.metrics import mean_absolute_error
 WINDOW_SIZE = 30  
 BATCH_SIZE = 64
 LR = 0.0005
-EPOCHS = 40
+EPOCHS = 400
 MAX_RUL = 12500    
 target_col = "to_next_hpc_cycle"
 
@@ -643,23 +643,41 @@ class RULTransformer(nn.Module):
         return self.head(x[:, -1, :])
 
 # --- 5. TRAINING ---
+# --- 5. TRAINING ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 1. Initialize Model
 model = RULTransformer(input_dim=X_train_pca.shape[1]).to(device)
+
+# 2. Define Loss Function (The missing part!)
+criterion = nn.MSELoss() 
+
+# 3. Define Optimizer and Scheduler
 optimizer = optim.Adam(model.parameters(), lr=0.0005)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-# Inserisci scheduler.step() alla fine di ogni epoca nel loop di training
 
 print(f"Training su {device}...")
+
 for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
+    
     for batch_x, batch_y in train_loader:
         batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+        
         optimizer.zero_grad()
+        
+        # Now 'criterion' is defined, so this works:
         loss = criterion(model(batch_x), batch_y)
+        
         loss.backward()
         optimizer.step()
+        
         total_loss += loss.item()
+    
+    # Update learning rate at the end of the epoch
+    scheduler.step() 
+    
     if (epoch+1) % 5 == 0:
         print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_loader):.4f}")
 
