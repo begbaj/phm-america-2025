@@ -547,35 +547,59 @@ def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, 
     return figs
 
 def plot_pipeline_comparison(history, sensor_name):
-    """Funzione helper per disegnare il confronto."""
+    """Genera un confronto della pipeline con confronto Boxplot Prima/Dopo nello Step 2."""
     steps = list(history.keys())
-    fig, axes = plt.subplots(len(steps), 1, figsize=(15, 4 * len(steps)), sharex=True)
-    fig.suptitle(f"DATA EVOLUTION PIPELINE | Sensor: {sensor_name}", fontsize=16, fontweight='bold', y=0.92)
+    n_steps = len(steps)
+    
+    fig, axes = plt.subplots(n_steps, 1, figsize=(15, 4 * n_steps))
+    fig.suptitle(f"DATA EVOLUTION PIPELINE | Sensor: {sensor_name}", 
+                 fontsize=18, fontweight='bold', y=0.98)
 
-    colors = ['#95a5a6', '#e74c3c', '#f1c40f', '#2ecc71', '#9143a3'] # Grigio, Rosso, Giallo, Verde
+    colors = ['#95a5a6', '#e74c3c', '#f1c40f', '#2ecc71', '#9143a3']
+    boxplot_index = 2
 
     for i, step in enumerate(steps):
         ax = axes[i]
-        data = history[step][sensor_name]
+        data_current = history[step][sensor_name].dropna()
         
-        # Plot del dato corrente
-        # ax.plot(data.index, data, label=step, color=colors[i], alpha=0.8, linewidth=1.5)
-        ax.scatter(data.index, data, s=1, label=step, color=colors[i], alpha=0.8, linewidth=1.5)
-        
-        # Se non è il primo step, plotta in sottofondo l'originale per vedere la differenza
-        # if i > 0:
-        #     ax.plot(history['Original'].index, history['Original'], color='gray', alpha=0.2, label='Original Reference', zorder=0)
+        # --- LOGICA BOXPLOT DI CONFRONTO (STEP 2) ---
+        if i == boxplot_index:
+            # Recuperiamo i dati dello step precedente per il confronto
+            prev_step = steps[i-1]
+            data_prev = history[prev_step][sensor_name].dropna()
+            
+            # Creiamo i due boxplot affiancati
+            # Nota: passiamo una lista di array [precedente, attuale]
+            bp = ax.boxplot([data_prev, data_current], vert=True, patch_artist=True, widths=0.5)
+            
+            # Coloriamo i due box in modo diverso per distinguerli
+            bp['boxes'][0].set(facecolor=colors[i-1], alpha=0.5) # Colore dello step precedente
+            bp['boxes'][1].set(facecolor=colors[i], alpha=0.8)   # Colore dello step attuale
+            
+            # Estetica mediana e outlier
+            plt.setp(bp['medians'], color='yellow', linewidth=2)
+            plt.setp(bp['fliers'], marker='o', markersize=3, alpha=0.2)
+            
+            ax.set_xticks([1, 2])
+            ax.set_xticklabels([f"BEFORE ({prev_step})", f"AFTER ({step})"], fontweight='bold')
+            ax.set_ylabel("Value Range")
+            ax.set_title(f"STEP {i}: OUTLIERS REMOVAL", fontsize=14, fontweight='bold', loc='left')
 
-        ax.set_title(f"STEP {i}: {step}", fontsize=13, fontweight='bold', loc='left')
-        ax.grid(True, linestyle='--', alpha=0.5)
+        # --- LOGICA SCATTER PER GLI ALTRI STEP ---
+        else:
+            data = history[step][sensor_name]
+            ax.scatter(data.index, data, s=2, label=step, color=colors[i], alpha=0.6)
+            ax.plot(data.index, data, color=colors[i], alpha=0.2, linewidth=0.5)
+            
+            ax.set_title(f"STEP {i}: {step.upper()}", fontsize=14, fontweight='bold', loc='left')
+            ax.set_xlabel("Cycles / Index")
+            ax.set_ylabel("Sensor Value")
+
+        ax.grid(True, linestyle='--', alpha=0.4)
         ax.legend(loc='upper right')
-        ax.set_ylabel("Value")
 
-    plt.xlabel("Index / Time")
-    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.show()
-
-
 
 def plot_residuals_dashboard(df, residual_cols):
     """
