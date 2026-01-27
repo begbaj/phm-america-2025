@@ -624,7 +624,7 @@ def plot_residuals_dashboard(df, residual_cols):
 
 
 def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
-    engine_ids = df['esn'].unique()
+    engine_ids = [101, 102, 103, 104]
     n_engines = len(engine_ids)
     
     cols = 3
@@ -688,7 +688,7 @@ def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
 
 
 def plot_engine_level_hi(df, residual_cols, to_next_col, event):
-    engine_ids = df['esn'].unique()
+    engine_ids = [101, 102, 103, 104]
     n_engines = len(engine_ids)
     cols = 3
     rows = (n_engines + cols - 1) // cols
