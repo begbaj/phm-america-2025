@@ -65,9 +65,10 @@ dfp = dfp.rename(columns=sensor_rename_map)
 final_sensor_names = list(sensor_rename_map.values())
 
 # Controllo finale dei NaN
+dfp = dfp.dropna()
 cols_to_fill = final_sensor_names
-dfp[cols_to_fill] = dfp.groupby(['esn', 'snap'])[cols_to_fill].ffill()
-dfp[cols_to_fill] = dfp.groupby(['esn', 'snap'])[cols_to_fill].bfill()
+#dfp[cols_to_fill] = dfp.groupby(['esn', 'snap'])[cols_to_fill].ffill()
+#dfp[cols_to_fill] = dfp.groupby(['esn', 'snap'])[cols_to_fill].bfill()
 
 # Nuovi indici
 dfp['esn_index'] = dfp.groupby('esn').cumcount()
@@ -177,27 +178,27 @@ print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide
 # #### Plotting dei residui
 
 # %%
-# Plotting dei risultati generali
-# up.plot_residuals_dashboard(dfr, res_cols)
 # Plotting della media dei residui
 event = 'hpt'
 to_next_col = f'to_next_{event}_cycle'
 dfr_mean = dfr.copy()
 dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].transform(
-    lambda x: x.rolling(window=100, min_periods=1).mean()
+    lambda x: x.rolling(window=40, min_periods=1).mean()
 )
 dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].bfill()
 dfr_mean[to_next_col] = dfr[to_next_col]
-up.plot_residuals_dashboard(dfr_mean, res_cols)
+# up.plot_residuals_dashboard(dfr_mean, res_cols)
 
 # %%
-event = 'hpt'
-to_next_col = f'to_next_{event}_cycle'
+to_next_cols = []
+events = u.EVENTS
+for event in events:
+    to_next_cols.append(f'to_next_{event}_cycle')
 # Plotting con filtro mediana
 dfr_median = dfr_mean.copy()
 # Definisco le logiche di aggregazione
 agg_logic = {col: 'median' for col in res_cols}
-agg_logic[to_next_col] = 'first'
+agg_logic.update({col: 'first' for col in to_next_cols})
 # Creo i residui "Engine-Level Residuals" facendo la mediana tra gli snapshot
 dfr_median = dfr_mean.groupby(['esn', 'snap_index']).agg(agg_logic).reset_index()
 # Salvataggio
@@ -207,42 +208,19 @@ print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide
 # Plotting
 up.plot_engine_level_residuals(dfr_median, res_cols, to_next_col, event)
 
-
 # %% [markdown]
 # ## HPT Health Index
 
 # %%
-def fit_hpt_mapping(df, hi_col, target_to_next):
-    """
-    Stabilisce il mapping lineare tra HI e i cicli rimanenti.
-    """
-    df['HI_HPT_pred_cycles'] = np.nan
-    
-    for esn in df['esn'].unique():
-        engine_data = df[df['esn'] == esn].dropna(subset=[hi_col, target_to_next])
-        
-        if len(engine_data) > 2:
-            X = engine_data[[hi_col]].values
-            y = engine_data[target_to_next].values
-            
-            model = LinearRegression()
-            model.fit(X, y)
-            
-            # Predizione su tutto il range del motore
-            all_X = df.loc[df['esn'] == esn, [hi_col]].values
-            df.loc[df['esn'] == esn, 'HI_HPT_pred_cycles'] = model.predict(all_X)
-            
-    return df
-
-
-# %%
+to_next_hpt_col = 'to_next_hpt_cycle'
+to_next_hpc_col = 'to_next_hpc_cycle'
 event = 'hpt'
-to_next_col = f'to_next_{event}_cycle'
 # Calcolo HPT Health Index
-dfr_median = u.calculate_hpt_health_index(dfr_median, 'T3_res', 'T45_res')
+dfr_hpt = dfr_median.copy()
+dfr_hpt = u.calculate_hpt_health_index_all(dfr_hpt, 'T3_res', 'T45_res', to_next_hpc_col)
 
 # Mapping dei cicli
-dfr_median = fit_hpt_mapping(dfr_median, 'HI_HPT', to_next_col)
+dfr_hpt, params = u.fit_hpt_mapping(dfr_hpt, to_next_hpt_col)
 
 # Plotting
-up.plot_engine_level_hi(dfr_median, ['HI_HPT'], to_next_col, event)
+up.plot_engine_level_hi(dfr_hpt, ['HI_HPT'], to_next_hpt_col, event)

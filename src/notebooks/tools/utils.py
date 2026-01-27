@@ -30,7 +30,7 @@ import tools.features as f
 ### ENUMS
 ###
 
-EVENTS = ["wws", "hpc", "hpt"]
+EVENTS = ["ww", "hpc", "hpt"]
 
 ESN = range(101, 105)
 """
@@ -653,27 +653,96 @@ def train_evaluate_logo_pca(df, features, target_col, n_components=10, model_typ
 
 
 
-def calculate_hpt_health_index(df, t3_col, t45_col):
-    """
-    Calcola l'Health Index HPT stimando alpha per ogni motore.
-    """
-    def objective(alpha, t3, t45):
-        # Esempio di minimizzazione: vogliamo che HI sia stabile o segua il trend HPC
-        hi = -alpha * t3 - t45
-        return np.std(hi) # Semplificazione: minimizziamo la varianza nel baseline
+def calculate_hpt_health_index(df, t3_col, t45_col, to_next_hpc_col):
+    df['HI_HPT'] = np.nan
 
+    for esn in df['esn'].unique():
+        engine_data = df[df['esn'] == esn].sort_values('snap_index')
+
+        # Individuo l'evento HPC
+        zero_indices = engine_data.index[engine_data[to_next_hpc_col] == 0].tolist()
+
+        if zero_indices:
+            idx_zero = zero_indices[-2]
+            pos_zero = engine_data.index.get_indexer([idx_zero])[0]
+
+            # Prendo una finestra a cavallo dell'evento di manutenzione dell'hpc
+            start = max(0, pos_zero - 10)
+            end = min(len(engine_data), pos_zero + 11)
+            calib_window = engine_data.iloc[start:end]
+
+            # Funzione obiettivo: minimizzare la deviazione standard dell'HI
+            # mentre l'altro componente (HPC) viene sostituito
+            def objective(a):
+                hi = -a * calib_window[t3_col] - calib_window[t45_col]
+                return np.std(hi)
+
+            res = minimize(objective, x0=1.0)
+            best_alpha = res.x[0]
+
+        else:
+            # Fallback se non c'è l'evento: uso tutto il motore
+            best_alpha = 1.0 # o una media globale
+
+        # Applico l'alpha trovato a tutto il motore
+        df.loc[df['esn'] == esn, 'HI_HPT'] = -best_alpha * engine_data[t3_col] - engine_data[t45_col]
+
+    return df
+
+
+def calculate_hpt_health_index_all(df, t3_col, t45_col, to_next_hpc_col):
     df['HI_HPT'] = np.nan
     
     for esn in df['esn'].unique():
         engine_mask = df['esn'] == esn
-        t3_data = df.loc[engine_mask, t3_col].values
-        t45_data = df.loc[engine_mask, t45_col].values
+        engine_data = df[engine_mask].sort_values('snap_index')
         
-        # Stima di alpha (puoi anche usare una regressione lineare se hai un target HPC)
-        res = minimize(objective, x0=1.0, args=(t3_data, t45_data))
-        best_alpha = res.x[0]
+        # Pulizia dati: rimuoviamo eventuali NaN per la calibrazione
+        calib_data = engine_data.dropna(subset=[t3_col, t45_col, to_next_hpc_col])
         
-        # Calcolo HI finale per il motore
-        df.loc[engine_mask, 'HI_HPT'] = -best_alpha * t3_data - t45_data
+        if not calib_data.empty:
+            # FUNZIONE OBIETTIVO:
+            # Vogliamo che HI_HPT non "segua" il trend dell'HPC.
+            # Minimizziamo la deviazione standard dell'HI su tutta la vita.
+            def objective(a):
+                hi = -a * calib_data[t3_col] - calib_data[t45_col]
+                return np.std(hi)
+            
+            res = minimize(objective, x0=1.0)
+            best_alpha = res.x[0]
+        else:
+            best_alpha = 1.0
+            
+        # Applichiamo a tutto il motore
+        df.loc[engine_mask, 'HI_HPT'] = -best_alpha * engine_data[t3_col] - engine_data[t45_col]
         
     return df
+
+
+def fit_hpt_mapping(df, to_next_hpt_col):
+    """
+    Usa l'evento HPT per definire la retta di predizione 
+    assumendo cicli = 0 all'evento HPT.
+    """
+    engine_params_hpt = {}
+    
+    for esn in df['esn'].unique():
+        engine_data = df[df['esn'] == esn].dropna(subset=['HI_HPT', to_next_hpt_col])
+        
+        if not engine_data.empty:
+            # Regressione lineare: HI_HPT -> to_next_hpt_cycle
+            X = engine_data[['HI_HPT']].values
+            y = engine_data[to_next_hpt_col].values
+            
+            model = LinearRegression().fit(X, y)
+            
+            # Salviamo i parametri specifici per questo motore
+            engine_params_hpt[esn] = {
+                'slope': model.coef_[0],
+                'intercept': model.intercept_
+            }
+            
+            # Creiamo la colonna della predizione lineare
+            df.loc[df['esn'] == esn, 'hpt_linear_pred'] = model.predict(X)
+            
+    return df, engine_params_hpt
