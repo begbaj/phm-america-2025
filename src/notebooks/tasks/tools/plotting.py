@@ -809,77 +809,180 @@ def plot_engine_level_hi(df, residual_cols, to_next_col, event):
         return plt.figure()
 
 
-def plot_rul_prediction(y_test, y_pred, window_size, is_reset=None):
+# Unified Styling Constants for RUL Plots
+RUL_STYLE = {
+    'real_color': '#1f77b4',     # Deep Blue
+    'pred_color': '#d62728',     # Vivid Red
+    'real_alpha': 0.6,
+    'pred_alpha': 0.9,
+    'linewidth_real': 2.5,
+    'linewidth_pred': 2.0,
+    'grid_alpha': 0.3,
+    'bg_color': '#f8f9fa'
+}
+
+def _save_plot(fig, filename):
+    """Helper to save plot to the default output directory"""
+    if not filename:
+        return
+    
+    # Ensure directory exists
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output_plots")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    path = os.path.join(output_dir, filename)
+    fig.savefig(path, bbox_inches='tight')
+    print(f"Plot saved to: {path}")
+
+def _apply_standard_style(ax, title, target, ylabel='Cycles to Event'):
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+    ax.set_xlabel('Cycles (Time)', fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.grid(True, linestyle='--', alpha=RUL_STYLE['grid_alpha'])
+    ax.set_facecolor(RUL_STYLE['bg_color'])
+    ax.legend(loc='upper right', frameon=True, shadow=True)
+
+def plot_training_dashboard(results_dict, target="HPC", filename=None, show=True):
     """
-    Genera un plot che confronta il RUL reale con quello predetto.
+    Generates a dashboard combining results from all trained models.
+    results_dict: { 'Model Name': (y_true, y_pred), ... }
     """
-    plt.figure(figsize=(15, 6))
-    plt.plot(y_test.index, y_test.values, label='RUL Reale', color='blue', alpha=0.4)
-    plt.plot(y_test.index, y_pred, label=f'RUL Predetta (Window={window_size})', color='red', linewidth=1.5)
+    n_models = len(results_dict)
+    if n_models == 0: return None
+    
+    fig, axes = plt.subplots(n_models, 1, figsize=(15, 6 * n_models), squeeze=False)
+    fig.suptitle(f'RUL PREDICTION DASHBOARD - TARGET: {target}', fontsize=20, fontweight='bold', y=1.02)
+    
+    for i, (name, (y_true, y_pred)) in enumerate(results_dict.items()):
+        ax = axes[i, 0]
+        
+        # Ensure we are dealing with numpy arrays for consistent plotting
+        true_vals = y_true.values if hasattr(y_true, 'values') else y_true
+        pred_vals = y_pred.values if hasattr(y_pred, 'values') else y_pred
+        
+        ax.plot(true_vals, label=f'True RUL', 
+                color=RUL_STYLE['real_color'], alpha=RUL_STYLE['real_alpha'], 
+                linewidth=RUL_STYLE['linewidth_real'])
+        
+        ax.plot(pred_vals, label=f'Pred RUL ({name})', 
+                color=RUL_STYLE['pred_color'], alpha=RUL_STYLE['pred_alpha'], 
+                linewidth=RUL_STYLE['linewidth_pred'], linestyle='--')
+        
+        _apply_standard_style(ax, f'Model: {name}', target)
 
-    if is_reset is not None:
-        for r in y_test[is_reset].index:
-            plt.axvline(x=r, color='green', linestyle='--', alpha=0.3)
+    plt.tight_layout()
+    if filename:
+        _save_plot(fig, filename)
+    
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
-    plt.title(f'Predizione RUL con Finestra di {window_size} Campioni')
-    plt.legend()
-    plt.grid(True, alpha=0.2)
-    plt.show()
-    return plt.gcf()
+def plot_rul_prediction(y_test, y_pred, window_size, is_reset=None, target="HPC", filename=None, show=True):
+    """
+    Genera un plot che confronta il RUL reale con quello predetto (Linear Regression).
+    """
+    fig, ax = plt.subplots(figsize=(15, 6))
+    
+    true_vals = y_test.values if hasattr(y_test, 'values') else y_test
+    ax.plot(true_vals, label=f'True RUL', 
+            color=RUL_STYLE['real_color'], alpha=RUL_STYLE['real_alpha'], 
+            linewidth=RUL_STYLE['linewidth_real'])
+    
+    ax.plot(y_pred, label=f'Pred RUL (LR)', 
+            color=RUL_STYLE['pred_color'], alpha=RUL_STYLE['pred_alpha'], 
+            linewidth=RUL_STYLE['linewidth_pred'])
 
+    _apply_standard_style(ax, f'RUL Prediction - Linear Regression', target)
+    
+    if filename:
+        _save_plot(fig, filename)
+    
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
-def plot_rul_prediction_rf(y_test, y_pred, is_reset=None):
+def plot_rul_prediction_rf(y_test, y_pred, is_reset=None, target="HPC", filename=None, show=True):
     """
     Genera un plot che confronta il RUL reale con quello predetto per il RandomForest.
     """
-    plt.figure(figsize=(15, 7))
+    fig, ax = plt.subplots(figsize=(15, 6))
 
-    # Plot RUL Reale e Predetta
-    plt.plot(y_test.index, y_test.values, label='RUL Reale (Cycles_to_HPC_SV)', color='blue', alpha=0.6, linewidth=2)
-    plt.plot(y_test.index, y_pred, label='RUL Predetta (Random Forest)', color='red', linestyle='--', alpha=0.9)
+    true_vals = y_test.values if hasattr(y_test, 'values') else y_test
+    ax.plot(true_vals, label=f'True RUL', 
+            color=RUL_STYLE['real_color'], alpha=RUL_STYLE['real_alpha'], 
+            linewidth=RUL_STYLE['linewidth_real'])
+    
+    ax.plot(y_pred, label=f'Pred RUL (RF)', 
+            color=RUL_STYLE['pred_color'], alpha=RUL_STYLE['pred_alpha'], 
+            linewidth=RUL_STYLE['linewidth_pred'], linestyle='--')
 
-    # Evidenziamo graficamente i 5 chunk
-    if is_reset is not None:
-        resets = y_test[is_reset].index
-        for i, r in enumerate(resets):
-            plt.axvline(x=r, color='green', linestyle=':', label='Reset / Nuovo Chunk' if i == 0 else "")
+    _apply_standard_style(ax, f'RUL Prediction - Random Forest', target)
+    
+    if filename:
+        _save_plot(fig, filename)
+    
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
-    plt.title('Predizione RUL per Chunk (Motore 104) - Random Forest')
-    plt.xlabel('Indice Temporale')
-    plt.ylabel('Cicli al prossimo HPC')
-    plt.legend()
-    plt.grid(True, alpha=0.2)
-    plt.show()
-    return plt.gcf()
-
-
-def plot_rul_prediction_xgb(y_test_real, y_pred_smooth):
+def plot_rul_prediction_xgb(y_test_real, y_pred_smooth, target="HPC", filename=None, show=True):
     """
     Genera un plot che confronta il RUL reale con quello predetto per il modello XGBoost.
     """
-    plt.figure(figsize=(15, 6))
-    plt.plot(y_test_real, label='RUL Reale', color='royalblue', alpha=0.5, linewidth=2)
-    plt.plot(y_pred_smooth, label='RUL Predetta (XGB + PCA)', color='crimson', linestyle='--')
+    fig, ax = plt.subplots(figsize=(15, 6))
+    
+    true_vals = y_test_real.values if hasattr(y_test_real, 'values') else y_test_real
+    ax.plot(true_vals, label=f'True RUL', 
+            color=RUL_STYLE['real_color'], alpha=RUL_STYLE['real_alpha'], 
+            linewidth=RUL_STYLE['linewidth_real'])
+    
+    ax.plot(y_pred_smooth, label=f'Pred RUL (XGB)', 
+            color=RUL_STYLE['pred_color'], alpha=RUL_STYLE['pred_alpha'], 
+            linewidth=RUL_STYLE['linewidth_pred'], linestyle='--')
 
-    plt.title('RUL Ottimizzata (Motore 104) - Solo Feature Selezionate + PCA')
-    plt.ylabel('Cicli al prossimo HPC')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
-    return plt.gcf()
+    _apply_standard_style(ax, f'RUL Prediction - XGBoost (PCA Optimized)', target)
+    
+    if filename:
+        _save_plot(fig, filename)
+    
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
-
-def plot_rul_prediction_transformer(y_test_seq, y_pred):
+def plot_rul_prediction_transformer(y_test_seq, y_pred, target="HPC", filename=None, show=True):
     """
     Genera un plot che confronta il RUL reale con quello predetto per il modello Transformer.
     """
-    plt.figure(figsize=(15, 6))
-    plt.plot(y_test_seq, label='RUL Reale (104)', color='blue', alpha=0.5)
-    plt.plot(y_pred, label='Predizione Transformer', color='red', linestyle='--')
-    plt.title('RUL Transformer - Motore 104')
-    plt.legend()
-    plt.show()
-    return plt.gcf()
+    fig, ax = plt.subplots(figsize=(15, 6))
+    
+    true_vals = y_test_seq.values if hasattr(y_test_seq, 'values') else y_test_seq
+    ax.plot(true_vals, label=f'True RUL', 
+            color=RUL_STYLE['real_color'], alpha=RUL_STYLE['real_alpha'], 
+            linewidth=RUL_STYLE['linewidth_real'])
+    
+    ax.plot(y_pred, label=f'Pred RUL (Transformer)', 
+            color=RUL_STYLE['pred_color'], alpha=RUL_STYLE['pred_alpha'], 
+            linewidth=RUL_STYLE['linewidth_pred'], linestyle=':')
+
+    _apply_standard_style(ax, f'RUL Prediction - Transformer Network', target)
+    
+    if filename:
+        _save_plot(fig, filename)
+    
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
 
 def plot_feature_importance(importances: pd.Series):

@@ -467,7 +467,7 @@
 
                     {% elif task.name == '03_train_models.py' %}
                     <div class="task-section pipeline-block">
-                        <h4>🎯 Training Target</h4>
+                        <h4>🎯 Training Target & Baseline</h4>
                         <div class="form-row">
                             <label for="target-training-{{ task.name|replace('.', '_') }}">Target Event:</label>
                             <select id="target-training-{{ task.name|replace('.', '_') }}" onchange="saveFormState()">
@@ -475,16 +475,64 @@
                                 <option value="HPT">HPT (High Pressure Turbine)</option>
                                 <option value="WW">WW (Water Wash)</option>
                             </select>
+                            <label for="healthy_window-{{ task.name|replace('.', '_') }}">Healthy Window (Cycles):</label>
+                            <input type="number" id="healthy_window-{{ task.name|replace('.', '_') }}" value="100" style="width: 80px;" onchange="saveFormState()">
                         </div>
                     </div>
 
                     <div class="task-section steps-block">
-                        <h4>Model Selection</h4>
-                        <div class="form-row">
+                        <h4>Model Selection & Parameters</h4>
+                        <div class="form-row" style="margin-bottom: 20px;">
                             <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="linear" checked onchange="saveFormState()"> Linear Regression</label>
                             <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="rf" checked onchange="saveFormState()"> Random Forest</label>
                             <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="xgb" checked onchange="saveFormState()"> XGBoost</label>
                             <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="transformer" checked onchange="saveFormState()"> Transformer</label>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                            <fieldset>
+                                <legend>🌲 Random Forest</legend>
+                                <div class="form-row">
+                                    <label>Estimators:</label>
+                                    <input type="number" id="rf_n_estimators-{{ task.name|replace('.', '_') }}" value="200" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                                <div class="form-row">
+                                    <label>Max Depth:</label>
+                                    <input type="number" id="rf_max_depth-{{ task.name|replace('.', '_') }}" value="15" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                            </fieldset>
+
+                            <fieldset>
+                                <legend>🚀 XGBoost</legend>
+                                <div class="form-row">
+                                    <label>Estimators:</label>
+                                    <input type="number" id="xgb_n_estimators-{{ task.name|replace('.', '_') }}" value="600" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                                <div class="form-row">
+                                    <label>Learning Rate:</label>
+                                    <input type="number" step="0.01" id="xgb_learning_rate-{{ task.name|replace('.', '_') }}" value="0.05" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                                <div class="form-row">
+                                    <label>Max Depth:</label>
+                                    <input type="number" id="xgb_max_depth-{{ task.name|replace('.', '_') }}" value="5" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                            </fieldset>
+
+                            <fieldset>
+                                <legend>🤖 Transformer</legend>
+                                <div class="form-row">
+                                    <label>Epochs:</label>
+                                    <input type="number" id="trans_epochs-{{ task.name|replace('.', '_') }}" value="400" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                                <div class="form-row">
+                                    <label>Batch Size:</label>
+                                    <input type="number" id="trans_batch_size-{{ task.name|replace('.', '_') }}" value="64" style="width: 70px;" onchange="saveFormState()">
+                                </div>
+                                <div class="form-row">
+                                    <label>Learning Rate:</label>
+                                    <input type="number" step="0.0001" id="trans_learning_rate-{{ task.name|replace('.', '_') }}" value="0.0005" style="width: 80px;" onchange="saveFormState()">
+                                </div>
+                            </fieldset>
                         </div>
                     </div>
 
@@ -498,6 +546,8 @@
                                 <option value="HPT">HPT (High Pressure Turbine)</option>
                                 <option value="WW">WW (Water Wash)</option>
                             </select>
+                            <label for="healthy_window-{{ task.name|replace('.', '_') }}">Healthy Window (Baseline):</label>
+                            <input type="number" id="healthy_window-{{ task.name|replace('.', '_') }}" value="100" style="width: 80px;" onchange="saveFormState()">
                         </div>
                     </div>
 
@@ -752,6 +802,10 @@
                 if (targetRulElem) {
                     body.target_rul = targetRulElem.value;
                 }
+                const hwElem = document.getElementById('healthy_window-' + taskId);
+                if (hwElem) {
+                    body.healthy_window = hwElem.value;
+                }
             }
 
             // Training parameters (only for 03_train_models.py)
@@ -760,6 +814,21 @@
                 if (targetTrainingElem) {
                     body.target_training = targetTrainingElem.value;
                 }
+                const hwElem = document.getElementById('healthy_window-' + taskId);
+                if (hwElem) {
+                    body.healthy_window = hwElem.value;
+                }
+                
+                // Collect model-specific params
+                const modelParams = [
+                    'rf_n_estimators', 'rf_max_depth',
+                    'xgb_n_estimators', 'xgb_learning_rate', 'xgb_max_depth',
+                    'trans_epochs', 'trans_batch_size', 'trans_learning_rate'
+                ];
+                modelParams.forEach(p => {
+                    const el = document.getElementById(p + '-' + taskId);
+                    if (el) body[p] = el.value;
+                });
             }
 
             try {

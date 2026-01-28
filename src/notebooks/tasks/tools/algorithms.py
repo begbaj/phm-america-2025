@@ -323,7 +323,7 @@ def train_evaluate_logo_pca(
 
 
 def train_linear_regression(
-    dff: pd.DataFrame, tot: pd.DataFrame, window_size: int = 5000, target: str = None
+    dff: pd.DataFrame, tot: pd.DataFrame, window_size: int = 5000, target: str = "HPC", filename: str = None, show_plot: bool = True
 ):
     """
     Trains Linear Regression using ONLY the features from feature engineering.
@@ -398,12 +398,13 @@ def train_linear_regression(
 
     # --- STEP 5: Visualizzazione ---
     up.plot_rul_prediction(y_test, y_pred, window_size=len(X_test),
-                           is_reset=None)
+                           is_reset=None, target=target, filename=filename, show=show_plot)
 
     return model, y_pred
 
 
-def train_transformer(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
+def train_transformer(dff: pd.DataFrame, tot: pd.DataFrame, target: str = "HPC", 
+                      epochs: int = 400, batch_size: int = 64, lr: float = 0.0005, filename: str = None, show_plot: bool = True):
     """
     Trains Transformer using ONLY the features from feature engineering.
     dff: DataFrame with engineered features
@@ -457,9 +458,9 @@ def train_transformer(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
 
     # --- 1. CONFIGURAZIONE ---
     WINDOW_SIZE = 30
-    BATCH_SIZE = 64
-    LR = 0.0005
-    EPOCHS = 400
+    BATCH_SIZE = batch_size
+    LR = lr
+    EPOCHS = epochs
     MAX_RUL = 12500
 
     # --- 2. PREPARAZIONE DATI (Memory Efficient) ---
@@ -565,7 +566,7 @@ def train_transformer(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = RULTransformer(input_dim=X_train_pca.shape[1]).to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.0005)
+    optimizer = optim.Adam(model.parameters(), lr=LR)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
     print(f"Training su {device}...")
@@ -596,14 +597,15 @@ def train_transformer(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
     with torch.no_grad():
         y_pred = model(torch.tensor(X_test_seq).to(device)).cpu().numpy()
 
-    up.plot_rul_prediction_transformer(y_test_seq, y_pred)
+    up.plot_rul_prediction_transformer(y_test_seq, y_pred, target=target, filename=filename, show=show_plot)
 
     print(f"MAE Transformer: {mean_absolute_error(y_test_seq, y_pred):.2f}")
 
     return model, y_pred
 
 
-def train_xgboost(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
+def train_xgboost(dff: pd.DataFrame, tot: pd.DataFrame, target: str = "HPC",
+                  n_estimators: int = 600, learning_rate: float = 0.05, max_depth: int = 5, filename: str = None, show_plot: bool = True):
     """
     Trains XGBoost using ONLY the features from feature engineering.
     dff: DataFrame with engineered features
@@ -699,36 +701,20 @@ def train_xgboost(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
 
     # --- 5. ADDESTRAMENTO OTTIMIZZATO (XGBoost Hist) ---
     # tree_method='hist' è essenziale per la velocità computazionale
-    xgb = XGBRegressor(
+    best_model = XGBRegressor(
         objective="reg:squarederror",
         tree_method="hist",
         n_jobs=-1,
         random_state=42,
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+        max_depth=max_depth,
         # Aggiungiamo regolarizzazione per evitare il "jittering" delle immagini 6 e 7
         reg_lambda=2.0,
         reg_alpha=0.5,
     )
 
-    param_dist = {
-        "n_estimators": [600, 1000],
-        "learning_rate": [0.01, 0.05],
-        "max_depth": [3, 5, 7],
-        "subsample": [0.8],
-        "colsample_bytree": [0.8],
-    }
-
-    # RandomizedSearch per velocità
-    random_search = RandomizedSearchCV(
-        xgb,
-        param_distributions=param_dist,
-        n_iter=10,
-        cv=3,
-        scoring="neg_mean_absolute_error",
-        n_jobs=-1,
-    )
-
-    random_search.fit(X_train_pca, y_train)
-    best_model = random_search.best_estimator_
+    best_model.fit(X_train_pca, y_train)
 
     # --- 6. PREDIZIONE E POST-PROCESSING ---
     y_pred = best_model.predict(X_test_pca)
@@ -740,14 +726,15 @@ def train_xgboost(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
     y_pred_smooth = np.maximum(0, y_pred_smooth)
 
     # --- 7. VISUALIZZAZIONE ---
-    up.plot_rul_prediction_xgb(y_test_real, y_pred_smooth)
+    up.plot_rul_prediction_xgb(y_test_real, y_pred_smooth, target=target, filename=filename, show=show_plot)
 
     print(f"MAE Finale: {mean_absolute_error(y_test_real, y_pred_smooth):.2f}")
 
     return best_model, y_pred_smooth
 
 
-def train_random_forest(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None):
+def train_random_forest(dff: pd.DataFrame, tot: pd.DataFrame, target: str = "HPC",
+                        n_estimators: int = 200, max_depth: int = 15, filename: str = None, show_plot: bool = True):
     """
     Trains Random Forest using ONLY the features from feature engineering.
     dff: DataFrame with engineered features
@@ -819,7 +806,7 @@ def train_random_forest(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None
 
     # --- STEP 4: Random Forest Regressor ---
     rf_model = RandomForestRegressor(
-        n_estimators=200, max_depth=15, random_state=42, n_jobs=-1
+        n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1
     )
     rf_model.fit(X_train, y_train)
 
@@ -829,7 +816,7 @@ def train_random_forest(dff: pd.DataFrame, tot: pd.DataFrame, target: str = None
 
     # --- STEP 6: Visualizzazione ---
     try:
-        up.plot_rul_prediction_rf(y_test, y_pred)
+        up.plot_rul_prediction_rf(y_test, y_pred, target=target, filename=filename, show=show_plot)
     except Exception as e:
         print(f"Warning: Could not plot RF predictions: {e}")
 

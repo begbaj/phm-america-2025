@@ -62,9 +62,35 @@ async def run_task(task_name: str, request: Request):
         # RESIDUAL ANALYSIS specific options
         if "target_rul" in body and body["target_rul"]:
             cmd += ["--target-rul", str(body["target_rul"]) ]
+        if "healthy_window" in body and body["healthy_window"]:
+            cmd += ["--healthy-window", str(body["healthy_window"]) ]
         # MODEL TRAINING specific options
         if "target_training" in body and body["target_training"]:
             cmd += ["--target-training", str(body["target_training"]) ]
+        if "healthy_window" in body and body["healthy_window"]:
+            cmd += ["--healthy-window", str(body["healthy_window"]) ]
+        
+        # Random Forest params
+        if "rf_n_estimators" in body and body["rf_n_estimators"]:
+            cmd += ["--rf-n-estimators", str(body["rf_n_estimators"]) ]
+        if "rf_max_depth" in body and body["rf_max_depth"]:
+            cmd += ["--rf-max-depth", str(body["rf_max_depth"]) ]
+            
+        # XGBoost params
+        if "xgb_n_estimators" in body and body["xgb_n_estimators"]:
+            cmd += ["--xgb-n-estimators", str(body["xgb_n_estimators"]) ]
+        if "xgb_learning_rate" in body and body["xgb_learning_rate"]:
+            cmd += ["--xgb-learning-rate", str(body["xgb_learning_rate"]) ]
+        if "xgb_max_depth" in body and body["xgb_max_depth"]:
+            cmd += ["--xgb-max-depth", str(body["xgb_max_depth"]) ]
+            
+        # Transformer params
+        if "trans_epochs" in body and body["trans_epochs"]:
+            cmd += ["--trans-epochs", str(body["trans_epochs"]) ]
+        if "trans_batch_size" in body and body["trans_batch_size"]:
+            cmd += ["--trans-batch-size", str(body["trans_batch_size"]) ]
+        if "trans_learning_rate" in body and body["trans_learning_rate"]:
+            cmd += ["--trans-learning-rate", str(body["trans_learning_rate"]) ]
 
     # Esegui il task in un sottoprocesso
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -20,9 +20,12 @@ def main():
     parser = argparse.ArgumentParser(description='Residual Analysis')
     parser.add_argument('--target-rul', type=str, default='HPT', choices=['HPC', 'HPT', 'WW'],
                         help='Target RUL to use for comparison (default: HPT)')
+    parser.add_argument('--healthy-window', type=int, default=100,
+                        help='Number of initial cycles to consider as healthy baseline for regression (default: 100)')
     args = parser.parse_args()
     
     target_rul = args.target_rul
+    healthy_window = args.healthy_window
     rul_col_map = {
         'HPC': 'Cycles_to_HPC_SV',
         'HPT': 'Cycles_to_HPT_SV',
@@ -31,6 +34,7 @@ def main():
     rul_column = rul_col_map.get(target_rul, 'Cycles_to_HPT_SV')
     
     print(f"Using target RUL: {target_rul} (column: {rul_column})")
+    print(f"Using healthy window: {healthy_window} cycles")
     # Carica i dati grezzi (per avere gli snapshot)
     train = u.load_training()()
     
@@ -62,13 +66,13 @@ def main():
 
     # OTTIMIZZAZIONE: Usa solo uno o pochi window_size per ridurre il tempo
     # windows_to_test = range(5, 150, 22)  # Troppo lento: 7 window_size * 4 ESN * ~1000 sliding windows = 28k+ fits!
-    windows_to_test = [100]  # Usa un unico window_size ottimale
+    windows_to_test = [healthy_window]  # Usa il healthy_window definito dall'utente
     
     # Alternativamente, se vuoi più window_size, aumenta lo step del sliding window
     sliding_window_step = 50  # Invece di 1, usa step più grande per ridurre iterazioni
 
     for window_size in windows_to_test:
-        print(f"--- Elaborazione Window Size: {window_size} ---")
+        print(f"--- Elaborazione Baseline Healthy Window: {window_size} ---")
         
         # Reset residui
         df[res_cols] = np.nan
@@ -79,41 +83,34 @@ def main():
             if len(esn_data) < window_size + 2:
                 continue
             
-            # Usa sliding window sulla colonna Cycles_Since_New con step > 1
-            # Per ridurre il numero di iterazioni: len(esn_data) / 50 invece di len(esn_data)
-            indices = range(0, len(esn_data) - window_size, sliding_window_step)
-            print(f"  ESN {esn}: {len(indices)} sliding windows da processare")
+            # FIT DEL MODELLO SULLA FINESTRA SANA (Iniziale)
+            train_baseline = esn_data.iloc[:window_size]
+            X_train_baseline = train_baseline[operating_vars].dropna()
+            if len(X_train_baseline) < 5: # Servono almeno alcuni punti per un fit decente
+                print(f"  ESN {esn}: Troppi pochi dati validi nella healthy window ({len(X_train_baseline)})")
+                continue
+                
+            y_train_baseline = train_baseline.loc[X_train_baseline.index, degradation_vars]
             
-            for i in indices:
-                train_data = esn_data.iloc[i:i + window_size]
-                test_data = esn_data.iloc[i + window_size:]
+            try:
+                baseline_model = LinearRegression()
+                baseline_model.fit(X_train_baseline, y_train_baseline)
                 
-                # Rimuovi valori NaN dalle operating vars
-                X_train = train_data[operating_vars].dropna()
-                if len(X_train) < 2:
-                    continue
+                # Applica il modello a TUTTI i dati del motore per ottenere i residui
+                X_all = esn_data[operating_vars].dropna()
+                y_pred_all = baseline_model.predict(X_all)
+                y_actual_all = esn_data.loc[X_all.index, degradation_vars].values
                 
-                y_train = train_data.loc[X_train.index, degradation_vars]
+                residuals_values = y_actual_all - y_pred_all
+                residuals = pd.DataFrame(residuals_values, columns=degradation_vars, index=X_all.index)
+                residuals = residuals.rename(columns=rename_vars_map)
                 
-                try:
-                    model = LinearRegression()
-                    model.fit(X_train, y_train)
-                    
-                    X_test = test_data[operating_vars].dropna()
-                    if len(X_test) == 0:
-                        continue
-                    
-                    y_pred = model.predict(X_test)
-                    y_actual = test_data.loc[X_test.index, degradation_vars].values
-                    residuals_values = y_actual - y_pred
-                    
-                    residuals = pd.DataFrame(residuals_values, columns=degradation_vars, index=X_test.index)
-                    residuals = residuals.rename(columns=rename_vars_map)
-                    
-                    df.loc[residuals.index, res_cols] = residuals
-                except Exception as e:
-                    print(f"Warning: Errore nel calcolo residui per ESN {esn}, window starting at {i}: {e}")
-                    continue
+                df.loc[residuals.index, res_cols] = residuals
+                print(f"  ESN {esn}: Residui calcolati rispetto alla healthy window (0-{window_size})")
+                
+            except Exception as e:
+                print(f"Warning: Errore nel calcolo residui baseline per ESN {esn}: {e}")
+                continue
 
         # 2. PREPARAZIONE DATI PER PLOTTING (Smoothing)
         dfmean = df.copy()
