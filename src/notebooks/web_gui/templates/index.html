@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PHM America 2025 - Task Runner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: auto;
+        }
+
+        header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2.2em;
+        }
+
+        header p {
+            color: #666;
+            font-size: 0.95em;
+        }
+
+        h2 {
+            color: #333;
+            margin: 30px 0 20px 0;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .task-list {
+            display: grid;
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .task-item {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+        }
+
+        .task-item:hover {
+            box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+            transform: translateY(-2px);
+        }
+
+        .task-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .task-header:hover {
+            background: linear-gradient(135deg, #5568d3 0%, #663a8f 100%);
+        }
+
+        .task-name {
+            font-weight: 600;
+            font-size: 1.1em;
+        }
+
+        .toggle-arrow {
+            transition: transform 0.3s ease;
+            font-size: 1.3em;
+        }
+
+        .task-item.collapsed .toggle-arrow {
+            transform: rotate(-90deg);
+        }
+
+        .task-content {
+            padding: 25px;
+            max-height: 2000px;
+            overflow: hidden;
+            transition: max-height 0.4s ease, opacity 0.4s ease;
+            opacity: 1;
+        }
+
+        .task-item.collapsed .task-content {
+            max-height: 0;
+            opacity: 0;
+            padding: 0 25px;
+        }
+
+        .task-section {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+
+        .task-section h4 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 0.95em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .preprocessing-block { background: #f0f8ff; border-left: 4px solid #667eea; }
+        .pipeline-block { background: #fffbf0; border-left: 4px solid #ff9800; }
+        .steps-block { background: #f0fff4; border-left: 4px solid #4caf50; }
+
+        .form-row {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 0.95em;
+            color: #555;
+        }
+
+        label input[type="checkbox"] {
+            cursor: pointer;
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            background: white;
+        }
+
+        fieldset {
+            border: 1px solid #ddd !important;
+            border-radius: 8px !important;
+            padding: 15px !important;
+            margin: 0 !important;
+        }
+
+        legend {
+            font-weight: 600 !important;
+            color: #333 !important;
+            padding: 0 10px !important;
+            font-size: 0.95em !important;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 8px;
+            font-size: 0.95em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .task-results {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+
+        .task-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.85em;
+            line-height: 1.5;
+            margin-top: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .task-output.error {
+            color: #f48771;
+            border-left: 3px solid #f44336;
+        }
+
+        .task-output.success {
+            color: #89d185;
+            border-left: 3px solid #4caf50;
+        }
+
+        .plot-container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+
+        .plot-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .plot-item {
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+            background: #f5f5f5;
+            aspect-ratio: 4/3;
+        }
+
+        .plot-item:hover {
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+            transform: translateY(-4px);
+        }
+
+        .plot-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(102, 126, 234, 0.3);
+            border-radius: 50%;
+            border-top-color: #667eea;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: white;
+            padding: 16px 24px;
+            border-radius: 8px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+            animation: slideIn 0.3s ease;
+            z-index: 1000;
+            max-width: 400px;
+        }
+
+        .toast.success {
+            border-left: 4px solid #4caf50;
+            color: #2e7d32;
+        }
+
+        .toast.error {
+            border-left: 4px solid #f44336;
+            color: #c62828;
+        }
+
+        .toast.info {
+            border-left: 4px solid #2196f3;
+            color: #1565c0;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+
+        .toast.removing {
+            animation: slideOut 0.3s ease forwards;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .status-badge.success {
+            background: #c8e6c9;
+            color: #2e7d32;
+        }
+
+        .status-badge.error {
+            background: #ffcdd2;
+            color: #c62828;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 40px 20px;
+        }
+
+        .empty-state-icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0 10px;
+            }
+
+            h1 {
+                font-size: 1.5em;
+            }
+
+            .form-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            input[type="text"],
+            input[type="number"],
+            select {
+                width: 100%;
+            }
+
+            .plot-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .task-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔧 PHM America 2025 - Task Runner</h1>
+            <p>Preprocessing, Feature Engineering, and Model Training Orchestration</p>
+        </header>
+
+        <div class="task-list">
+            <h2>Available Tasks</h2>
+            {% for task in tasks %}
+            <div class="task-item">
+                <div class="task-header" onclick="toggleTask(this)">
+                    <span class="task-name">📝 {{ task.name }}</span>
+                    <span class="toggle-arrow">▶</span>
+                </div>
+                <div class="task-content">
+                    {% if task.name == '02_feature_engineering.py' %}
+                    <div class="task-section pipeline-block">
+                        <h4>📊 Feature Engineering Pipeline</h4>
+                        <div class="form-row">
+                            <label for="target-{{ task.name|replace('.', '_') }}">Target:</label>
+                            <select id="target-{{ task.name|replace('.', '_') }}" onchange="saveFormState()">
+                                <option value="HPC">HPC (High Pressure Compressor)</option>
+                                <option value="HPT">HPT (High Pressure Turbine)</option>
+                                <option value="WW">WW (Water Wash)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Statistical Features to Generate:</label>
+                            <label><input type="checkbox" id="stat-mean-{{ task.name|replace('.', '_') }}" value="mean" checked onchange="saveFormState()"> Mean</label>
+                            <label><input type="checkbox" id="stat-rms-{{ task.name|replace('.', '_') }}" value="rms" checked onchange="saveFormState()"> RMS</label>
+                            <label><input type="checkbox" id="stat-std-{{ task.name|replace('.', '_') }}" value="std" onchange="saveFormState()"> Std Dev</label>
+                            <label><input type="checkbox" id="stat-min-{{ task.name|replace('.', '_') }}" value="min" onchange="saveFormState()"> Min</label>
+                            <label><input type="checkbox" id="stat-max-{{ task.name|replace('.', '_') }}" value="max" onchange="saveFormState()"> Max</label>
+                        </div>
+                        <div class="form-row">
+                            <label for="pipeline-window-{{ task.name|replace('.', '_') }}">Rolling Window:</label>
+                            <input type="number" id="pipeline-window-{{ task.name|replace('.', '_') }}" value="100" onchange="saveFormState()">
+                            <label for="pipeline-step-{{ task.name|replace('.', '_') }}">Min Period:</label>
+                            <input type="number" id="pipeline-step-{{ task.name|replace('.', '_') }}" value="25" onchange="saveFormState()">
+                        </div>
+                    </div>
+
+                    {% elif task.name == '03_train_models.py' %}
+                    <div class="task-section pipeline-block">
+                        <h4>🎯 Training Target</h4>
+                        <div class="form-row">
+                            <label for="target-training-{{ task.name|replace('.', '_') }}">Target Event:</label>
+                            <select id="target-training-{{ task.name|replace('.', '_') }}" onchange="saveFormState()">
+                                <option value="HPC">HPC (High Pressure Compressor)</option>
+                                <option value="HPT">HPT (High Pressure Turbine)</option>
+                                <option value="WW">WW (Water Wash)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="task-section steps-block">
+                        <h4>Model Selection</h4>
+                        <div class="form-row">
+                            <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="linear" checked onchange="saveFormState()"> Linear Regression</label>
+                            <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="rf" checked onchange="saveFormState()"> Random Forest</label>
+                            <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="xgb" checked onchange="saveFormState()"> XGBoost</label>
+                            <label><input type="checkbox" name="models-{{ task.name|replace('.', '_') }}" value="transformer" checked onchange="saveFormState()"> Transformer</label>
+                        </div>
+                    </div>
+
+                    {% elif task.name == '04_residual_analysis.py' %}
+                    <div class="task-section pipeline-block">
+                        <h4>📊 Residual Analysis Configuration</h4>
+                        <div class="form-row">
+                            <label for="target-rul-{{ task.name|replace('.', '_') }}">Target RUL:</label>
+                            <select id="target-rul-{{ task.name|replace('.', '_') }}" onchange="saveFormState()">
+                                <option value="HPC">HPC (High Pressure Compressor)</option>
+                                <option value="HPT">HPT (High Pressure Turbine)</option>
+                                <option value="WW">WW (Water Wash)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    {% elif task.name == '01_preprocess.py' %}
+                    <!-- PREPROCESSING PARAMETERS -->
+                    <div class="task-section preprocessing-block">
+                        <h4>⚙️ Preprocessing Methods</h4>
+                        <div class="form-row">
+                            <label for="outlier-method-{{ task.name|replace('.', '_') }}">Outlier Detection:</label>
+                            <select id="outlier-method-{{ task.name|replace('.', '_') }}" onchange="saveFormState()">
+                                <option value="isoforest">Isolation Forest</option>
+                                <option value="zscore">Z-score</option>
+                                <option value="iqr">IQR</option>
+                            </select>
+                            <label for="outlier-threshold-{{ task.name|replace('.', '_') }}">Threshold:</label>
+                            <input type="number" step="0.01" id="outlier-threshold-{{ task.name|replace('.', '_') }}" value="0.08" onchange="saveFormState()">
+                        </div>
+
+                        <div class="form-row">
+                            <label for="smoothing-method-{{ task.name|replace('.', '_') }}">Smoothing Method:</label>
+                            <select id="smoothing-method-{{ task.name|replace('.', '_') }}" onchange="saveFormState()">
+                                <option value="rolling_mean">Rolling Mean</option>
+                                <option value="exponential">Exponential (EMA)</option>
+                                <option value="savitzky_golay">Savitzky-Golay</option>
+                            </select>
+                            <label for="smoothing-window-{{ task.name|replace('.', '_') }}">Window:</label>
+                            <input type="number" id="smoothing-window-{{ task.name|replace('.', '_') }}" value="100" onchange="saveFormState()">
+                            <label for="smoothing-step-{{ task.name|replace('.', '_') }}">Min Period:</label>
+                            <input type="number" id="smoothing-step-{{ task.name|replace('.', '_') }}" value="25" onchange="saveFormState()">
+                        </div>
+                    </div>
+
+                    <!-- EXECUTION STEPS -->
+                    <div class="task-section steps-block">
+                        <h4>📋 Execution Steps</h4>
+                        <div class="form-row">
+                            <label><input type="checkbox" name="steps-{{ task.name|replace('.', '_') }}" value="preprocess" checked onchange="saveFormState()"> Preprocess Data</label>
+                            <label><input type="checkbox" name="steps-{{ task.name|replace('.', '_') }}" value="aggregate" checked onchange="saveFormState()"> Aggregate Snapshots</label>
+                            <label><input type="checkbox" name="steps-{{ task.name|replace('.', '_') }}" value="save" checked onchange="saveFormState()"> Save Outputs</label>
+                        </div>
+                        <div class="form-row">
+                            <label><input type="checkbox" name="steps-{{ task.name|replace('.', '_') }}" value="plot_agg" onchange="saveFormState()"> Plot Aggregated</label>
+                            <label><input type="checkbox" name="steps-{{ task.name|replace('.', '_') }}" value="plot_snap" onchange="saveFormState()"> Plot Per-Snapshot</label>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="button-group">
+                        <button onclick="runTask('{{ task.name }}')">▶ Run Task</button>
+                        <button style="background: linear-gradient(135deg, #999 0%, #666 100%);" onclick="resetForm('{{ task.name }}')">↺ Reset</button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="task-results">
+            <h2>📤 Task Results</h2>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button id="copy-output-btn" style="background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%); display: none;" onclick="copyOutput()">📋 Copy Output</button>
+            </div>
+            <div id="results">
+                <div class="empty-state">
+                    <div class="empty-state-icon">✨</div>
+                    <p>No tasks executed yet. Select a task above and click "Run Task" to begin.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="plot-container">
+            <h2>📈 Output Plots</h2>
+            <div id="plots" class="plot-grid">
+                <div class="empty-state">
+                    <div class="empty-state-icon">🖼</div>
+                    <p>No plots generated yet.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script>
+        // ============== UTILITIES ==============
+        function toggleTask(header) {
+            const taskItem = header.parentElement;
+            taskItem.classList.toggle('collapsed');
+        }
+
+        function saveFormState() {
+            const formData = {};
+            document.querySelectorAll('input, select').forEach(el => {
+                if (el.type === 'checkbox') {
+                    formData[el.id] = el.checked;
+                } else {
+                    formData[el.id] = el.value;
+                }
+            });
+            localStorage.setItem('preprocessingFormState', JSON.stringify(formData));
+        }
+
+        function loadFormState() {
+            const saved = localStorage.getItem('preprocessingFormState');
+            if (saved) {
+                try {
+                    const formData = JSON.parse(saved);
+                    Object.keys(formData).forEach(id => {
+                        const el = document.getElementById(id);
+                        if (el) {
+                            if (el.type === 'checkbox') {
+                                el.checked = formData[id];
+                            } else {
+                                el.value = formData[id];
+                            }
+                        }
+                    });
+                } catch (e) {
+                    console.error('Error loading form state:', e);
+                }
+            }
+        }
+
+        function resetForm(taskName) {
+            const taskItem = Array.from(document.querySelectorAll('.task-item')).find(item => 
+                item.textContent.includes(taskName)
+            );
+            if (taskItem) {
+                taskItem.querySelectorAll('input, select').forEach(el => {
+                    if (el.type === 'checkbox') {
+                        el.checked = el.defaultChecked;
+                    } else {
+                        el.value = el.defaultValue;
+                    }
+                });
+                saveFormState();
+                showToast(`Form reset for ${taskName}`, 'info');
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.add('removing');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        function validateForm(taskName) {
+            // Only validate steps for preprocessing task
+            if (taskName === '01_preprocess.py') {
+                const stepsCheckboxes = document.querySelectorAll(`input[name="steps-${taskName.replace(/\./g, '_')}"]:checked`);
+                if (stepsCheckboxes.length === 0) {
+                    showToast('Please select at least one step', 'error');
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        function copyOutput() {
+            const resultsDiv = document.getElementById('results');
+            const text = resultsDiv.innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Output copied to clipboard', 'success');
+            }).catch(() => {
+                showToast('Failed to copy output', 'error');
+            });
+        }
+
+        // ============== MAIN TASK EXECUTION ==============
+        async function runTask(taskName) {
+            if (!validateForm(taskName)) return;
+
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `<p style="text-align: center;"><span class="loading-spinner"></span> Running ${taskName}...</p>`;
+
+            const body = {};
+            const taskId = taskName.replace(/\./g, '_');
+
+            // Generic selectors (target for 02_feature_engineering.py and 03_train_models.py)
+            const selId = 'target-' + taskId;
+            const selElem = document.getElementById(selId);
+            if (selElem) {
+                body.target = selElem.value;
+            }
+
+            // Collect model checkboxes (only for 03_train_models.py)
+            const modelCheckboxes = document.querySelectorAll(`input[name="models-${taskId}"]:checked`);
+            if (modelCheckboxes && modelCheckboxes.length > 0) {
+                body.models = Array.from(modelCheckboxes).map(cb => cb.value);
+            }
+
+            // Collect step checkboxes (only for 01_preprocess.py)
+            const stepsCheckboxes = document.querySelectorAll(`input[name="steps-${taskId}"]:checked`);
+            if (stepsCheckboxes && stepsCheckboxes.length > 0) {
+                body.steps = Array.from(stepsCheckboxes).map(cb => cb.value);
+            }
+
+            // Preprocessing parameters (only for 01_preprocess.py)
+            if (taskName === '01_preprocess.py') {
+                const preprocessElements = ['outlier_method', 'outlier_threshold', 'smoothing_window', 'smoothing_step', 'smoothing_method'];
+                preprocessElements.forEach(elemName => {
+                    const elem = document.getElementById(elemName + '-' + taskId);
+                    if (elem) {
+                        body[elemName] = elem.value;
+                    }
+                });
+            }
+
+            // Pipeline parameters (only for 02_feature_engineering.py)
+            if (taskName === '02_feature_engineering.py') {
+                const pipelineElements = ['pipeline_window', 'pipeline_step'];
+                pipelineElements.forEach(elemName => {
+                    const elem = document.getElementById(elemName + '-' + taskId);
+                    if (elem) {
+                        body[elemName] = elem.value;
+                    }
+                });
+                // Collect selected statistical features
+                const statFeatures = ['mean', 'rms', 'std', 'min', 'max'];
+                const selectedStats = [];
+                statFeatures.forEach(feat => {
+                    const elem = document.getElementById('stat-' + feat + '-' + taskId);
+                    if (elem && elem.checked) {
+                        selectedStats.push(feat);
+                    }
+                });
+                if (selectedStats.length > 0) {
+                    body.statistical_features = selectedStats.join(',');
+                }
+            }
+
+            // Residual Analysis parameters (only for 04_residual_analysis.py)
+            if (taskName === '04_residual_analysis.py') {
+                const targetRulElem = document.getElementById('target-rul-' + taskId);
+                if (targetRulElem) {
+                    body.target_rul = targetRulElem.value;
+                }
+            }
+
+            // Training parameters (only for 03_train_models.py)
+            if (taskName === '03_train_models.py') {
+                const targetTrainingElem = document.getElementById('target-training-' + taskId);
+                if (targetTrainingElem) {
+                    body.target_training = targetTrainingElem.value;
+                }
+            }
+
+            try {
+                const response = await fetch(`/run_task/${taskName}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await response.json();
+
+                let outputHtml = `<div style="margin-bottom: 20px;">`;
+                outputHtml += `<span class="status-badge ${data.status}">${data.status.toUpperCase()}</span>`;
+                outputHtml += `<p><strong>${taskName}</strong> - ${data.message}</p></div>`;
+
+                if (data.stdout) {
+                    outputHtml += `<h3 style="margin-top: 20px; color: #333;">Output:</h3>`;
+                    outputHtml += `<pre class="task-output success">${escapeHtml(data.stdout)}</pre>`;
+                }
+                if (data.stderr) {
+                    outputHtml += `<h3 style="margin-top: 20px; color: #333;">Errors:</h3>`;
+                    outputHtml += `<pre class="task-output error">${escapeHtml(data.stderr)}</pre>`;
+                }
+
+                resultsDiv.innerHTML = outputHtml;
+                showToast(`Task ${data.status === 'success' ? 'completed' : 'failed'}`, data.status);
+                document.getElementById('copy-output-btn').style.display = 'block';
+                refreshPlots();
+            } catch (error) {
+                resultsDiv.innerHTML = `<pre class="task-output error">Error: ${error.message}</pre>`;
+                showToast('Network or execution error', 'error');
+            }
+        }
+
+        async function refreshPlots() {
+            const plotsDiv = document.getElementById('plots');
+            plotsDiv.innerHTML = '<div style="text-align: center; width: 100%;"><span class="loading-spinner"></span> Loading plots...</div>';
+
+            try {
+                const response = await fetch('/list_plots');
+                const data = await response.json();
+
+                if (data.plots && data.plots.length > 0) {
+                    plotsDiv.innerHTML = '';
+                    data.plots.forEach(plotUrl => {
+                        const plotItem = document.createElement('div');
+                        plotItem.className = 'plot-item';
+                        const img = document.createElement('img');
+                        img.src = plotUrl;
+                        img.alt = 'Generated Plot';
+                        plotItem.appendChild(img);
+                        plotsDiv.appendChild(plotItem);
+                    });
+                } else {
+                    plotsDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🖼</div><p>No plots generated yet.</p></div>';
+                }
+            } catch (error) {
+                plotsDiv.innerHTML = `<div class="empty-state"><p style="color: #f44336;">Error loading plots: ${error.message}</p></div>`;
+            }
+        }
+
+        // ============== INITIALIZATION ==============
+        document.addEventListener('DOMContentLoaded', () => {
+            loadFormState();
+            refreshPlots();
+        });
+    </script>
+</body>
+</html>
