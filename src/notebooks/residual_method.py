@@ -135,13 +135,13 @@ rename_vars_map = {
     'T5': 'T5_res'
 }
 
-for esn in engine_ids:
+for esn in u.ESN:
     for snap in u.SNAPSHOTS:
         # 1. Filtro i dati per il singolo motore e il singolo snapshot
         dfr_engine = dfr[(dfr['esn'] == esn) & (dfr['snap'] == snap)].sort_values('snap_index')
 
         # 2. Selezioniamo il "periodo sano"
-        train_data = dfr_engine.iloc[:20]
+        train_data = dfr_engine.iloc[:50]
         
         X_train = train_data[operating_vars]
         y_train = train_data[degradation_vars]
@@ -187,7 +187,7 @@ dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].transform(
 )
 dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].bfill()
 dfr_mean[to_next_col] = dfr[to_next_col]
-# up.plot_residuals_dashboard(dfr_mean, res_cols)
+#up.plot_residuals_dashboard(dfr_mean, res_cols)
 
 # %%
 to_next_cols = []
@@ -206,21 +206,74 @@ path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training_wi
 dfr_median.to_csv(path, index=False)
 print("-- Operazione Completata: Tutti i file sono stati salvati in formato Wide --")
 # Plotting
-up.plot_engine_level_residuals(dfr_median, res_cols, to_next_col, event)
+#up.plot_engine_level_residuals(dfr_median, res_cols, to_next_col, event)
 
 # %% [markdown]
 # ## HPT Health Index
 
 # %%
+# NORMALIZZAZIONE
+
 to_next_hpt_col = 'to_next_hpt_cycle'
 to_next_hpc_col = 'to_next_hpc_cycle'
+dfr_hpt = dfr_median.copy()
+
+def standardize_residuals(df, cols=['T3_res', 'T45_res']):
+    df_std = df.copy()
+    for col in cols:
+        # Standardizzazione: (valore - media) / deviazione_standard
+        mean = df_std[col].mean()
+        std = df_std[col].std()
+        df_std[col] = (df_std[col] - mean) / std
+    return df_std
+
+# Applica PRIMA di calcolare l'HI
+dfr_median_std = standardize_residuals(dfr_hpt)
+
+
+# %%
+# PROVA
+
+# --- CONFIGURAZIONE ---
+to_next_hpt_col = 'to_next_hpt_cycle'
+to_next_hpc_col = 'to_next_hpc_cycle'
+
+# 1. PRE-PROCESSING (Standardizzazione)
+# Come discusso, l'SVR è sensibilissimo alle scale. Standardizziamo i residui.
+dfr_std = u.standardize_residuals(dfr_median, cols=['T3_res', 'T45_res'])
+
+# 2. CALCOLO HEALTH INDEX (Metodo Paper)
+# Usiamo l'evento HPC per trovare l'alfa ottimale
+dfr_std = u.calculate_hpt_health_index(dfr_std, 'T3_res', 'T45_res', to_next_hpc_col)
+
+# 3. TUNING (Grid Search)
+# Eseguiamo la ricerca dei parametri migliori basandoci sul punteggio TWE
+# Nota: puoi farlo su un subset di motori per risparmiare tempo: df=dfr_std.iloc[:5000]
+best_params = u.perform_grid_search(dfr_std, 'HI_HPT', to_next_hpt_col)
+
+# 4. FINAL MAPPING (SVR con Best Params)
+# Applichiamo l'SVR definitivo usando i parametri trovati
+dfr_std, svr_models = u.fit_hpt_mapping_svr(
+    dfr_std, 
+    'HI_HPT', 
+    to_next_hpt_col, 
+    C=best_params['C'], 
+    epsilon=best_params['epsilon'], 
+    gamma=best_params['gamma']
+)
+
+# 5. VISUALIZZAZIONE
+up.plot_engine_level_hi(dfr_std, ['HI_HPT_pred_svr'], to_next_hpt_col, event='hpt')
+
+# %%
 event = 'hpt'
 # Calcolo HPT Health Index
-dfr_hpt = dfr_median.copy()
-dfr_hpt = u.calculate_hpt_health_index_all(dfr_hpt, 'T3_res', 'T45_res', to_next_hpc_col)
+dfr_hpt = u.calculate_hpt_health_index_all(dfr_median_std, 'T3_res', 'T45_res', to_next_hpc_col)
 
 # Mapping dei cicli
-dfr_hpt, params = u.fit_hpt_mapping(dfr_hpt, to_next_hpt_col)
+#dfr_hpt, params = u.fit_hpt_mapping(dfr_hpt, to_next_hpt_col)
+dfr_hpt, models = u.fit_hpt_mapping_svr(dfr_hpt, 'HI_HPT', to_next_hpt_col)
+# dfr_hpt, params = u.fit_piecewise_auto(dfr_hpt, 'HI_HPT', to_next_hpt_col)
 
 # Plotting
 up.plot_engine_level_hi(dfr_hpt, ['HI_HPT'], to_next_hpt_col, event)

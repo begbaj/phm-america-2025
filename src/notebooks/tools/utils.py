@@ -25,6 +25,10 @@ import pandas as pd
 import random
 import tools.config as c
 import tools.features as f
+from sklearn.svm import SVR
+import pwlf
+from sklearn.model_selection import ParameterGrid
+
 
 ###
 ### ENUMS
@@ -693,9 +697,12 @@ def calculate_hpt_health_index(df, t3_col, t45_col, to_next_hpc_col):
 def calculate_hpt_health_index_all(df, t3_col, t45_col, to_next_hpc_col):
     df['HI_HPT'] = np.nan
     
-    for esn in df['esn'].unique():
+    for esn in ESN:
         engine_mask = df['esn'] == esn
         engine_data = df[engine_mask].sort_values('snap_index')
+        # Centratura dei dati (Mean Removal) per ogni motore
+        # engine_data[t3_col] = engine_data[t3_col] - engine_data[t3_col].mean()
+        # engine_data[t45_col] = engine_data[t45_col] - engine_data[t45_col].mean()   
         
         # Pulizia dati: rimuoviamo eventuali NaN per la calibrazione
         calib_data = engine_data.dropna(subset=[t3_col, t45_col, to_next_hpc_col])
@@ -726,7 +733,7 @@ def fit_hpt_mapping(df, to_next_hpt_col):
     """
     engine_params_hpt = {}
     
-    for esn in df['esn'].unique():
+    for esn in ESN:
         engine_data = df[df['esn'] == esn].dropna(subset=['HI_HPT', to_next_hpt_col])
         
         if not engine_data.empty:
@@ -746,3 +753,139 @@ def fit_hpt_mapping(df, to_next_hpt_col):
             df.loc[df['esn'] == esn, 'hpt_linear_pred'] = model.predict(X)
             
     return df, engine_params_hpt
+
+
+
+
+def fit_hpt_mapping_svr(df, hi_col, target_col, C=10, epsilon=0.2, gamma='scale'):
+    """
+    Sostituisce il fit lineare con un Support Vector Regressor.
+    C: Regolarizzazione (più alto = segue meglio i dati, ma rischio overfitting)
+    epsilon: Larghezza del tubo dove l'errore non viene penalizzato
+    """
+    engine_models = {}
+    df[f'{hi_col}_pred_svr'] = np.nan
+
+    for esn in df['esn'].unique():
+        # Isoliamo i dati del motore e puliamo i NaN
+        mask = (df['esn'] == esn) & df[hi_col].notna() & df[target_col].notna()
+        engine_data = df[mask]
+        
+        if len(engine_data) > 10:
+            X = engine_data[[hi_col]].values
+            y = engine_data[target_col].values
+            
+            # SVR beneficia enormemente dallo scaling (fondamentale!)
+            scaler_x = StandardScaler()
+            X_scaled = scaler_x.fit_transform(X)
+            
+            # Definizione e fit del modello SVR
+            model = SVR(kernel='rbf', C=C, epsilon=epsilon, gamma=gamma)
+            model.fit(X_scaled, y)
+            
+            # Salvataggio del modello e dello scaler per l'inferenza futura
+            engine_models[esn] = {'model': model, 'scaler': scaler_x}
+            
+            # Predizione sui dati attuali
+            df.loc[mask, f'{hi_col}_pred_svr'] = model.predict(X_scaled)
+            
+    return df, engine_models
+
+
+
+def fit_piecewise_auto(df, hi_col, target_col):
+    x = df[hi_col].values
+    y = df[target_col].values
+    
+    # Inizializza il modello
+    my_pwlf = pwlf.PiecewiseLinFit(x, y)
+    
+    # Trova i breakpoint ottimali (es. cerchiamo 2 segmenti, quindi 1 breakpoint)
+    breakpoints = my_pwlf.fit(2)
+    
+    # Predici i valori
+    df['hpt_pred'] = my_pwlf.predict(x)
+    return df, breakpoints
+
+
+
+def evaluate_svr_params(df, hi_col, target_col, params):
+    """Calcola il TWE medio per una specifica combinazione di parametri SVR"""
+    # Usiamo la tua funzione esistente per fittare i modelli
+    df_temp, _ = fit_hpt_mapping_svr(
+        df.copy(), hi_col, target_col, 
+        C=params['C'], 
+        epsilon=params['epsilon'], 
+        gamma=params['gamma']
+    )
+    
+    # Rimuoviamo i NaN nati da motori con troppi pochi dati
+    mask = df_temp[f'{hi_col}_pred_svr'].notna()
+    y_true = df_temp.loc[mask, target_col]
+    y_pred = df_temp.loc[mask, f'{hi_col}_pred_svr']
+    
+    # Calcolo della metrica del paper (TWE)
+    # Assicurati di aver definito calculate_twe_score come visto prima
+    return calculate_twe_score(y_true, y_pred, alpha=0.001)
+
+
+def standardize_residuals(df, cols=['T3_res', 'T45_res']):
+    df_std = df.copy()
+    for col in cols:
+        # Standardizzazione: (valore - media) / deviazione_standard
+        mean = df_std[col].mean()
+        std = df_std[col].std()
+        df_std[col] = (df_std[col] - mean) / std
+    return df_std
+
+
+def calculate_twe_score(y_true, y_pred, alpha=0.001, beta=1.0):
+    """
+    Implementazione del Time-Weighted Error (TWE)
+    y_true: Cicli reali rimanenti (to_next_target_cycle)
+    y_pred: Cicli predetti dal tuo modello lineare
+    alpha: parametro di decadimento (es. 0.001)
+    beta: fattore di normalizzazione specifico per il target
+    """
+    error = y_pred - y_true
+    
+    # Calcolo del peso w(yi, y_hat_i) - Equazione (2)
+    # Penalizza di più le over-predictions (ritardi nella manutenzione)
+    weights = np.where(
+        error >= 0, 
+        2 / (1 + alpha * y_true), # Predizione in ritardo (più grave)
+        1 / (1 + alpha * y_true)  # Predizione in anticipo (meno grave)
+    )
+    
+    # TWE - Equazione (1)
+    twe = weights * (error**2) * beta
+    
+    # Score finale (Media) - Equazione (3)
+    return np.mean(twe)
+
+
+def perform_grid_search(df, hi_col, target_col):
+    param_grid = {
+        'C': [0.1, 1, 10, 100],
+        'epsilon': [0.01, 0.1, 0.2, 0.5],
+        'gamma': ['scale', 'auto', 0.1, 0.01]
+    }
+    
+    best_score = float('inf')
+    best_params = None
+    
+    print("Inizio Grid Search (ottimizzazione basata su TWE)...")
+    
+    for params in ParameterGrid(param_grid):
+        current_score = evaluate_svr_params(df, hi_col, target_col, params)
+        print(f"Params: {params} -> TWE Score: {current_score:.4f}")
+        
+        if current_score < best_score:
+            best_score = current_score
+            best_params = params
+            
+    print("-" * 30)
+    print(f"MIGLIORI PARAMETRI: {best_params}")
+    print(f"MIGLIOR TWE SCORE: {best_score:.4f}")
+    
+    return best_params
