@@ -388,6 +388,145 @@
             background: rgba(255, 255, 255, 0.4);
         }
 
+        /* BROWSER & LATEST PLOT STYLES */
+        .browser-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+        
+        .nav-btn {
+            padding: 6px 12px;
+            font-size: 0.85em;
+            background: #e0e0e0;
+            color: #333;
+            box-shadow: none;
+        }
+        .nav-btn:hover {
+            background: #d0d0d0;
+            transform: translateY(-1px);
+            box-shadow: none;
+        }
+
+        .current-path {
+            font-family: 'Monaco', monospace;
+            font-weight: 600;
+            color: #667eea;
+            font-size: 0.9em;
+        }
+
+        .browser-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 15px;
+        }
+
+        .folder-item {
+            background: #e3f2fd;
+            color: #1565c0;
+            padding: 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-weight: 600;
+            transition: all 0.2s;
+            text-align: center;
+            aspect-ratio: 1;
+        }
+
+        .folder-item:hover {
+            background: #bbdefb;
+            transform: translateY(-3px);
+            box-shadow: 0 4px 10px rgba(21, 101, 192, 0.2);
+        }
+
+        .folder-icon {
+            font-size: 2.5em;
+        }
+
+        .file-item {
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            cursor: zoom-in;
+            aspect-ratio: 1;
+            position: relative;
+            background: #eee;
+        }
+        
+        .file-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s;
+        }
+        
+        .file-item:hover img {
+            transform: scale(1.05);
+        }
+        
+        .file-name {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            font-size: 0.75em;
+            padding: 4px 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: center;
+        }
+
+        .latest-plot-wrapper {
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            cursor: zoom-in;
+            background: #000;
+        }
+        
+        .latest-plot-wrapper img {
+            width: 100%;
+            display: block;
+        }
+        
+        .latest-badge {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: #ff4081;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        
+        .latest-info {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px;
+            font-size: 0.9em;
+        }
+
         /* UTILS */
         .loading-spinner {
             display: inline-block;
@@ -653,12 +792,25 @@
                     {% endif %}
                     {% endfor %}
 
+                    <div class="plot-container" id="latest-container" style="display: none;">
+                        <h2>🆕 Latest Generated Plot</h2>
+                        <div class="latest-plot-wrapper" onclick="openModal(document.getElementById('latest-img').src)">
+                            <div class="latest-badge">NEW</div>
+                            <img id="latest-img" src="" alt="Latest Plot">
+                            <div class="latest-info" id="latest-name"></div>
+                        </div>
+                    </div>
+
                     <div class="plot-container">
-                        <h2>📈 Output Plots</h2>
-                        <div id="plots" class="plot-grid">
+                        <h2>📂 Output Browser</h2>
+                        <div class="browser-controls">
+                            <button class="nav-btn" onclick="navigateUp()" id="btn-up">⬆ Up</button>
+                            <span class="current-path" id="current-path">/</span>
+                        </div>
+                        <div id="browser-content" class="browser-grid">
                             <div class="empty-state">
-                                <div class="empty-state-icon">🖼</div>
-                                <p>No plots generated yet.</p>
+                                <div class="empty-state-icon">📂</div>
+                                <p>Loading...</p>
                             </div>
                         </div>
                     </div>
@@ -959,33 +1111,92 @@
             }
         }
 
-        async function refreshPlots() {
-            const plotsDiv = document.getElementById('plots');
-            plotsDiv.innerHTML = '<div style="text-align: center; width: 100%;"><span class="loading-spinner"></span> Loading plots...</div>';
+        // ============== BROWSER & PLOTS LOGIC ==============
+        let currentPath = "";
 
+        async function loadLatestPlot() {
             try {
-                const response = await fetch('/list_plots');
+                const response = await fetch('/latest_plot');
+                const data = await response.json();
+                
+                const container = document.getElementById('latest-container');
+                if (data.url) {
+                    document.getElementById('latest-img').src = data.url;
+                    document.getElementById('latest-name').textContent = data.filename + ' (' + new Date(data.timestamp * 1000).toLocaleString() + ')';
+                    container.style.display = 'block';
+                } else {
+                    container.style.display = 'none';
+                }
+            } catch (e) {
+                console.error("Error loading latest plot", e);
+            }
+        }
+
+        async function browsePath(path) {
+            const contentDiv = document.getElementById('browser-content');
+            contentDiv.innerHTML = '<div style="grid-column: 1/-1; text-align: center;"><span class="loading-spinner"></span> Loading...</div>';
+            
+            try {
+                // Encode path components to be safe
+                const encodedPath = path.split('/').map(c => encodeURIComponent(c)).join('/');
+                const response = await fetch(`/browse_plots?path=${encodedPath}`);
                 const data = await response.json();
 
-                if (data.plots && data.plots.length > 0) {
-                    plotsDiv.innerHTML = '';
-                    data.plots.forEach(plotUrl => {
-                        const plotItem = document.createElement('div');
-                        plotItem.className = 'plot-item';
-                        plotItem.onclick = () => openModal(plotUrl); // ADDED CLICK HANDLER
-                        
-                        const img = document.createElement('img');
-                        img.src = plotUrl;
-                        img.alt = 'Generated Plot';
-                        plotItem.appendChild(img);
-                        plotsDiv.appendChild(plotItem);
-                    });
-                } else {
-                    plotsDiv.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🖼</div><p>No plots generated yet.</p></div>';
+                if (data.error) {
+                    contentDiv.innerHTML = `<div class="empty-state" style="grid-column: 1/-1; color: #f44336;">Error: ${data.error}</div>`;
+                    return;
                 }
+
+                currentPath = data.current_path;
+                document.getElementById('current-path').textContent = currentPath || '/';
+                document.getElementById('btn-up').disabled = !currentPath;
+
+                contentDiv.innerHTML = '';
+
+                if (data.dirs.length === 0 && data.files.length === 0) {
+                    contentDiv.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;"><p>Empty directory</p></div>';
+                    return;
+                }
+
+                // Render Directories
+                data.dirs.forEach(dir => {
+                    const el = document.createElement('div');
+                    el.className = 'folder-item';
+                    el.onclick = () => browsePath(currentPath ? `${currentPath}/${dir}` : dir);
+                    el.innerHTML = `<div class="folder-icon">📁</div><div>${dir}</div>`;
+                    contentDiv.appendChild(el);
+                });
+
+                // Render Files
+                data.files.forEach(file => {
+                    const el = document.createElement('div');
+                    el.className = 'file-item';
+                    // Construct URL: remove leading slash from currentPath if present to avoid double slash issues
+                    const safeDir = currentPath ? currentPath + '/' : '';
+                    const fullUrl = `/static/${safeDir}${file}`;
+                    el.onclick = () => openModal(fullUrl);
+                    el.innerHTML = `
+                        <img src="${fullUrl}" loading="lazy" alt="${file}">
+                        <div class="file-name">${file}</div>
+                    `;
+                    contentDiv.appendChild(el);
+                });
+
             } catch (error) {
-                plotsDiv.innerHTML = `<div class="empty-state"><p style="color: #f44336;">Error loading plots: ${error.message}</p></div>`;
+                contentDiv.innerHTML = `<div class="empty-state" style="grid-column: 1/-1; color: #f44336;">Network Error: ${error.message}</div>`;
             }
+        }
+
+        function navigateUp() {
+            if (!currentPath) return;
+            const parts = currentPath.split('/');
+            parts.pop();
+            browsePath(parts.join('/'));
+        }
+
+        async function refreshPlots() {
+            // Reload latest plot and refresh current directory view
+            await Promise.all([loadLatestPlot(), browsePath(currentPath)]);
         }
 
         // ============== INITIALIZATION ==============

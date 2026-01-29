@@ -9,7 +9,7 @@ app = FastAPI()
 templates = Jinja2Templates(directory="web_gui/templates")
 
 TASKS_DIR = "tasks"
-OUTPUT_PLOTS_DIR = "output_plots" # Cartella dove vengono salvati i grafici
+OUTPUT_PLOTS_DIR = "img" # Cartella dove vengono salvati i grafici
 
 # Dictionary to track running processes: task_name -> process instance
 running_tasks = {}
@@ -21,6 +21,67 @@ async def read_root(request: Request):
         if filename.endswith(".py"):
             tasks.append({"name": filename, "path": os.path.join(TASKS_DIR, filename)})
     return templates.TemplateResponse("index.html", {"request": request, "tasks": tasks})
+
+@app.get("/latest_plot", response_class=JSONResponse)
+async def get_latest_plot():
+    latest_file = None
+    latest_time = 0
+    
+    if os.path.exists(OUTPUT_PLOTS_DIR):
+        for root, _, files in os.walk(OUTPUT_PLOTS_DIR):
+            for file in files:
+                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg')):
+                    full_path = os.path.join(root, file)
+                    try:
+                        mtime = os.path.getmtime(full_path)
+                        if mtime > latest_time:
+                            latest_time = mtime
+                            latest_file = full_path
+                    except OSError:
+                        pass
+                        
+    if latest_file:
+        # relative_path must be relative to the StaticFiles directory (OUTPUT_PLOTS_DIR)
+        relative_path = os.path.relpath(latest_file, OUTPUT_PLOTS_DIR)
+        # Ensure forward slashes for URL
+        relative_path = relative_path.replace(os.path.sep, '/')
+        return {"url": f"/static/{relative_path}", "filename": os.path.basename(latest_file), "timestamp": latest_time}
+    return {"url": None}
+
+@app.get("/browse_plots", response_class=JSONResponse)
+async def browse_plots(path: str = ""):
+    # Handle root path request
+    if path == "/":
+        path = ""
+        
+    # Prevent directory traversal
+    if ".." in path:
+        return {"error": "Invalid path"}
+
+    full_path = os.path.join(OUTPUT_PLOTS_DIR, path)
+    
+    if not os.path.exists(full_path):
+         return {"error": "Path not found"}
+         
+    if not os.path.isdir(full_path):
+        return {"error": "Not a directory"}
+
+    items = {"current_path": path, "dirs": [], "files": []}
+    
+    try:
+        with os.scandir(full_path) as it:
+            for entry in it:
+                if entry.name.startswith('.'): continue
+                if entry.is_dir():
+                    items["dirs"].append(entry.name)
+                elif entry.is_file() and entry.name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg')):
+                    items["files"].append(entry.name)
+    except Exception as e:
+        return {"error": str(e)}
+        
+    items["dirs"].sort()
+    items["files"].sort()
+    return items
 
 @app.post("/run_task/{task_name}")
 async def run_task(task_name: str, request: Request):

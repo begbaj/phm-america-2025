@@ -63,12 +63,13 @@ def main():
     rul_column = rul_col_map.get(target_rul, 'Cycles_to_HPT_SV')
     
     print(f"Using target RUL: {target_rul} (column: {rul_column})")
-    print(f"Using healthy window: {healthy_window} cycles")
+    # print(f"Using healthy window: {healthy_window} cycles")
+
     # Carica i dati grezzi (per avere gli snapshot)
     train = u.load_training()()
-    
-    # Preprocessa mantenendo gli snapshot (non aggregare)
-    df, history, sensors = pp.preprocess_data(train, do_missing_fill=False, do_smoothing=False) 
+    df = pp.remove_outliers(train, method='isolation_forest')
+    df = pp.missingfill(df)
+    df = pp.remove_outliers(df, method='isolation_forest')
     df = df.dropna()
 
     # --- CONFIGURAZIONE CARTELLA OUTPUT ---
