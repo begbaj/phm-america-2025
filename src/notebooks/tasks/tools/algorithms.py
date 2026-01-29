@@ -733,98 +733,64 @@ def train_xgboost(dff: pd.DataFrame, tot: pd.DataFrame, target: str = "HPC",
     return best_model, y_pred_smooth
 
 
-def train_random_forest(dff: pd.DataFrame, tot: pd.DataFrame, target: str = "HPC",
-                        n_estimators: int = 200, max_depth: int = 15, filename: str = None, show_plot: bool = True):
+def fit_baseline_residuals(
+    df: pd.DataFrame, 
+    operating_vars: list[str], 
+    degradation_vars: list[str], 
+    rename_map: dict[str, str],
+    healthy_window: int = 100,
+    engines: list[int] = [101, 102, 103, 104]
+) -> pd.DataFrame:
     """
-    Trains Random Forest using ONLY the features from feature engineering.
-    dff: DataFrame with engineered features
-    tot: DataFrame with feature metadata (which features are the best)
-    target: Target event (HPC, HPT, WW) - if None, auto-detect
+    Fits a linear regression model on a 'healthy' baseline window for each engine
+    and calculates residuals for the entire dataset.
     """
-    # Extract target feature names from the feature evaluation metadata
-    best_features = tot["feature"].tolist() if "feature" in tot.columns else []
+    df_res = df.copy()
+    res_cols = list(rename_map.values())
     
-    if not best_features:
-        raise ValueError("No features found in feature metadata. Ensure feature engineering was run.")
-    
-    # Identify the target column
-    target_col = None
-    target_map = {
-        'HPC': 'Cycles_to_HPC_SV',
-        'HPT': 'Cycles_to_HPT_SV',
-        'WW': 'Cycles_to_WW'
-    }
-    
-    # Se target è specificato, usa quello
-    if target and target in target_map:
-        if target_map[target] in dff.columns:
-            target_col = target_map[target]
-    
-    # Altrimenti, auto-detect
-    if target_col is None:
-        possible_targets = ['Cycles_to_HPC_SV', 'Cycles_to_HPT_SV', 'Cycles_to_WW']
-        for col in possible_targets:
-            if col in dff.columns:
-                target_col = col
-                break
-    
-    if target_col is None:
-        raise ValueError(f"No target column found in data. Expected one of: {target_map.values()}")
-    
-    # Use ONLY the best engineered features that exist in the dataframe
-    features = [f for f in best_features if f in dff.columns]
-    
-    if not features:
-        raise ValueError(f"No engineered features found in DataFrame. Features: {best_features}, Columns: {dff.columns.tolist()}")
-    
-    print(f"Using {len(features)} engineered features for Random Forest training")
-    print(f"Features: {features}")
-    print(f"Target: {target_col}")
-    
-    # --- STEP 1: Definizione Feature e Target (usando le feature ingegnerizzate) ---
+    # Initialize residual columns
+    for col in res_cols:
+        df_res[col] = np.nan
 
-    # --- STEP 2: Split Train e Test ---
-    train_df = dff[dff["ESN"] != 104].dropna(subset=[target_col] + features)
-    test_df = dff[dff["ESN"] == 104].dropna(subset=[target_col] + features)
-    
-    # Fallback per ESN 104 se non presente
-    if len(test_df) == 0:
-        print("Warning: ESN 104 not found in test set, using last 20% of training data")
-        split_idx = int(len(train_df) * 0.8)
-        test_df = train_df.iloc[split_idx:].copy()
-        train_df = train_df.iloc[:split_idx].copy()
+    for esn in engines:
+        engine_mask = df_res['ESN'] == esn
+        esn_data = df_res[engine_mask].sort_values('Cycles_Since_New')
 
-    X_train_raw = train_df[features]
-    y_train = train_df[target_col]
-    X_test_raw = test_df[features]
-    y_test = test_df[target_col]
+        if esn_data.empty:
+            continue
 
-    # --- STEP 3: Standardizzazione ---
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train_raw)
-    X_test = scaler.transform(X_test_raw)
+        # 1. Fit on window or full data
+        if healthy_window > 0:
+            if len(esn_data) < healthy_window:
+                continue
+            train_baseline = esn_data.iloc[:healthy_window]
+        else:
+            # Use entire dataset for baseline fitting
+            train_baseline = esn_data
 
-    # --- STEP 4: Random Forest Regressor ---
-    rf_model = RandomForestRegressor(
-        n_estimators=n_estimators, max_depth=max_depth, random_state=42, n_jobs=-1
-    )
-    rf_model.fit(X_train, y_train)
-
-    # --- STEP 5: Predizione ---
-    y_pred = rf_model.predict(X_test)
-    y_pred = np.maximum(0, y_pred)
-
-    # --- STEP 6: Visualizzazione ---
-    try:
-        up.plot_rul_prediction_rf(y_test, y_pred, target=target, filename=filename, show=show_plot)
-    except Exception as e:
-        print(f"Warning: Could not plot RF predictions: {e}")
-
-    # --- STEP 7: Feature Importance ---
-    importances = pd.Series(
-        rf_model.feature_importances_, index=features
-    ).sort_values(ascending=False)
-    print("\nImportanza delle Feature:")
-    print(importances)
-
-    return rf_model, y_pred, importances
+        X_train = train_baseline[operating_vars].dropna()
+        if len(X_train) < 5:
+            continue
+            
+        y_train = train_baseline.loc[X_train.index, degradation_vars]
+        
+        try:
+            model = LinearRegression()
+            model.fit(X_train, y_train)
+            
+            # 2. Predict on all engine data
+            X_all = esn_data[operating_vars].dropna()
+            y_pred_all = model.predict(X_all)
+            y_actual_all = esn_data.loc[X_all.index, degradation_vars].values
+            
+            residuals_values = y_actual_all - y_pred_all
+            residuals_df = pd.DataFrame(residuals_values, columns=degradation_vars, index=X_all.index)
+            residuals_df = residuals_df.rename(columns=rename_map)
+            
+            df_res.loc[residuals_df.index, res_cols] = residuals_df
+            
+        except Exception as e:
+            print(f"Warning: Error in residual baseline for ESN {esn}: {e}")
+            continue
+            
+    return df_res

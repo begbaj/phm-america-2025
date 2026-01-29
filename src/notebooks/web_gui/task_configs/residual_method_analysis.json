@@ -11,6 +11,12 @@
                     "type": "select",
                     "options": ["HPC", "HPT", "WW"],
                     "default": "HPT"
+                },
+                {
+                    "id": "healthy_window",
+                    "label": "Baseline Window (0=Full)",
+                    "type": "number",
+                    "default": 100
                 }
             ]
         },

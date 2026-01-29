@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 from enum import Enum, auto
@@ -11,6 +12,30 @@ from sklearn.linear_model import LinearRegression
 
 
 custom_functions = {"rms": lambda x: np.sqrt(np.mean(x**2))}
+
+class HealthIndexStrategy(ABC):
+    @abstractmethod
+    def compute_alpha(self, data: pd.DataFrame, t3_col: str, t45_col: str, reference_col: str) -> float:
+        pass
+
+class CorrelationOptimizationStrategy(HealthIndexStrategy):
+    def compute_alpha(self, data: pd.DataFrame, t3_col: str, t45_col: str, reference_col: str) -> float:
+        valid_data = data.dropna(subset=[t3_col, t45_col, reference_col])
+        if valid_data.empty:
+            return 1.0
+        
+        t3 = valid_data[t3_col].values
+        t45 = valid_data[t45_col].values
+        ref_rul = valid_data[reference_col].values
+
+        def objective(a):
+            hi = -a * t3 - t45
+            if np.std(hi) < 1e-9: return 1.0
+            corr, _ = spst.pearsonr(hi, ref_rul)
+            return 1 - abs(corr)
+
+        res = minimize(objective, x0=1.0, method='Nelder-Mead')
+        return res.x[0]
 
 
 class FPerformanceParameter(Enum):
@@ -447,49 +472,21 @@ def calculate_health_index(
     t3_col: str, 
     t45_col: str, 
     target_col: str, 
-    reference_col: str
+    reference_col: str,
+    strategy: HealthIndexStrategy = CorrelationOptimizationStrategy()
 ) -> pd.DataFrame:
     """
     Calcola Health Index: HI = -alpha * T3 - T45
-    Alpha ottimizzato minimizzando la deviazione (massimizzando la correlazione)
-    da reference_col (Ground Truth RUL).
+    Alpha ottimizzato tramite la strategia fornita (default: massimizzazione correlazione).
     """
     hi_col_name = f"HI_{target_col}"
     df[hi_col_name] = np.nan
 
     for esn in df["ESN"].unique():
-        # Filtra i dati per il motore corrente
         engine_mask = df["ESN"] == esn
-        engine_data = df[engine_mask].copy()
-        
-        # Rimuovi NaN per il calcolo
-        valid_data = engine_data.dropna(subset=[t3_col, t45_col, reference_col])
-        
-        if valid_data.empty:
-            continue
-
-        t3 = valid_data[t3_col].values
-        t45 = valid_data[t45_col].values
-        ref_rul = valid_data[reference_col].values
-
-        # Funzione obiettivo: Massimizzare la correlazione (Minimizzare 1 - abs(corr))
-        # Vogliamo che HI sia correlato linearmente con il RUL di riferimento
-        def objective(a):
-            hi = -a * t3 - t45
-            # Gestione caso varianza zero per evitare errori in correlaizone
-            if np.std(hi) < 1e-9:
-                return 1.0 # Penalità alta
-            
-            corr, _ = spst.pearsonr(hi, ref_rul)
-            return 1 - abs(corr)
-
-        # Ottimizzazione
-        # Alpha starting point = 1.0
-        res = minimize(objective, x0=1.0, method='Nelder-Mead')
-        best_alpha = res.x[0]
+        best_alpha = strategy.compute_alpha(df[engine_mask], t3_col, t45_col, reference_col)
         
         # Calcolo HI finale per il motore
-        # Usa i dati originali (con NaN gestiti o propagati)
         df.loc[engine_mask, hi_col_name] = (
             -best_alpha * df.loc[engine_mask, t3_col] - df.loc[engine_mask, t45_col]
         )
