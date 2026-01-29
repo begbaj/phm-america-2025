@@ -702,7 +702,7 @@ def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
 
             sns.lineplot(
                 data=engine_data,
-                x='snap_index',
+                x='Cycles_Since_New',
                 y=res_col,
                 ax=ax,
                 color='black',
@@ -712,7 +712,7 @@ def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
 
             # Cerco lo snap_index dove to_next_col è 0
             event_cycles = engine_data.loc[engine_data[to_next_col]
-                == 0, 'snap_index']
+                == 0, 'Cycles_Since_New']
             if not event_cycles.empty:
                 # Itero sui valori trovati
                 for idx, val_x in enumerate(event_cycles):
@@ -729,7 +729,7 @@ def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
                     )
 
             ax.set_title(f'ESN: {esn}', fontweight='bold')
-            ax.set_xlabel('Cicli')
+            ax.set_xlabel('Cycles Since New')
             ax.set_ylabel('Residuo')
 
             # Linea di riferimento zero (motore sano)
@@ -743,7 +743,7 @@ def plot_engine_level_residuals(df, residual_cols, to_next_col, event):
             fig.delaxes(axes[j])
 
         plt.tight_layout()
-        return plt.figure()
+        return fig
 
 
 def plot_engine_level_hi(df, residual_cols, to_next_col, event):
@@ -765,7 +765,7 @@ def plot_engine_level_hi(df, residual_cols, to_next_col, event):
             # --- ASSE 1: Health Index (HI) ---
             sns.lineplot(
                 data=engine_data,
-                x='snap_index',
+                x='Cycles_Since_New',
                 y=res_col,
                 ax=ax,
                 color='blue',
@@ -779,7 +779,7 @@ def plot_engine_level_hi(df, residual_cols, to_next_col, event):
             ax2 = ax.twinx()
             sns.lineplot(
                 data=engine_data,
-                x='snap_index',
+                x='Cycles_Since_New',
                 y=to_next_col,
                 ax=ax2,
                 color='red',
@@ -792,7 +792,7 @@ def plot_engine_level_hi(df, residual_cols, to_next_col, event):
             ax2.tick_params(axis='y', labelcolor='red')
 
             ax.set_title(f'ESN: {esn}', fontweight='bold')
-            ax.set_xlabel('Cycles')
+            ax.set_xlabel('Cycles Since New')
 
             if i == 0:
                 lines, labels = ax.get_legend_handles_labels()
@@ -806,7 +806,7 @@ def plot_engine_level_hi(df, residual_cols, to_next_col, event):
             fig.delaxes(axes[j])
 
         plt.tight_layout()
-        return plt.figure()
+        return fig
 
 
 # Unified Styling Constants for RUL Plots

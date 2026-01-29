@@ -1,0 +1,35 @@
+<h2 class="text-2xl font-bold text-gray-800 border-b-2 border-pink-500 pb-2 mb-2 flex items-center">
+    <i class="fas fa-chart-line mr-3 text-pink-500"></i> Analysis & Results
+</h2>
+
+<!-- LATEST PLOT -->
+<div id="latest-container" class="hidden bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden group">
+    <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
+        <h3 class="font-bold text-gray-700 flex items-center"><i class="fas fa-clock mr-2 text-indigo-500"></i> Latest Result</h3>
+        <span class="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full shadow-sm animate-pulse">New</span>
+    </div>
+    <div class="p-4 cursor-zoom-in relative overflow-hidden" onclick="openModal(document.getElementById('latest-img').src)">
+        <div class="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors z-10"></div>
+        <img id="latest-img" src="" alt="Latest Plot" class="w-full rounded-lg shadow-sm transition-transform duration-500 group-hover:scale-[1.02]">
+        <div id="latest-name" class="mt-2 text-xs text-center text-gray-500 font-mono bg-gray-50 p-1 rounded border border-gray-100"></div>
+    </div>
+</div>
+
+<!-- FILE BROWSER -->
+<div class="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex-grow flex flex-col h-full min-h-[500px]">
+    <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
+        <h3 class="font-bold text-gray-700 flex items-center"><i class="fas fa-folder-open mr-2 text-indigo-500"></i> Plot Browser</h3>
+        <div class="flex items-center space-x-2">
+            <button id="btn-up" onclick="navigateUp()" class="bg-white hover:bg-gray-100 text-gray-600 border border-gray-300 rounded px-2 py-1 text-sm transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                <i class="fas fa-level-up-alt"></i> Up
+            </button>
+        </div>
+    </div>
+    <div class="bg-gray-100 px-4 py-2 text-xs font-mono text-gray-600 border-b border-gray-200 flex items-center shadow-inner">
+        <i class="fas fa-hdd mr-2 opacity-50"></i>
+        <span id="current-path" class="font-semibold text-gray-700">/</span>
+    </div>
+    <div id="browser-content" class="p-4 grid grid-cols-2 sm:grid-cols-3 gap-4 overflow-y-auto flex-grow bg-gray-50/50">
+        <div class="col-span-full text-center py-8 text-gray-400">Loading...</div>
+    </div>
+</div>

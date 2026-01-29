@@ -81,7 +81,7 @@ def missingfill(
 
     df_out = df.copy()
 
-    print(f"Esecuzione missingfill su {len(valid_cols)} sensori...")
+    # print(f"Esecuzione missingfill su {len(valid_cols)} sensori...")
 
     # 2. Riempimento tramite Media Flotta (Fleet Mean)
     # Verifica che le colonne di allineamento esistano
@@ -119,7 +119,7 @@ def missingfill(
 
 
 def remove_outliers(
-    df: pd.DataFrame, sensor_cols=None, threshold=3, method="zscore"
+    df: pd.DataFrame, sensor_cols=None, threshold: int | float=3, method="zscore"
 ) -> pd.DataFrame:
     """
     Identifica e rimuove gli outliers dai sensori, impostandoli a NaN.
@@ -177,6 +177,74 @@ def remove_outliers(
             df_out.loc[outlier_indices, sensor] = np.nan
 
     return df_out
+
+def rolling_mean(df: pd.DataFrame, targets: list[str], groupby: str | list[str] = "ESN", window: int = 100, min_periods: int = 1) -> pd.DataFrame:
+    for target in targets:
+        df[target] = df.groupby(groupby)[target].transform(lambda x: x.rolling(window=window, min_periods=min_periods).mean()).reset_index(drop=True)
+    return df
+
+def smoothing(dfo: pd.DataFrame, smoothing_method: str = "rolling_mean", target_sensors: list[str] = None, smoothing_window: int = 5, smoothing_step: int = 2):
+    """
+    Applica il smoothing ai sensori target nel DataFrame dfo usando il metodo specificato
+    :param smoothing_method: Metodo di smoothing ('rolling_mean', 'exponential', 'savitzky_golay')
+    :param dfo: DataFrame di input/output
+    :param target_sensors: Lista di sensori da smussare
+    :param smoothing_window: Finestra di smoothing
+    :param smoothing_step: Passo minimo per il rolling mean
+    """
+
+    if smoothing_method == "rolling_mean":
+        # Rolling mean (media mobile semplice)
+        for sensor in target_sensors:
+            dfo[sensor] = (
+                dfo.groupby(["ESN"])[sensor]
+                .transform(
+                    lambda x: x.rolling(
+                        window=smoothing_window, min_periods=smoothing_step
+                    ).mean()
+                )
+                .reset_index(drop=True)
+            )
+
+    elif smoothing_method == "exponential":
+        # Exponential smoothing (EMA)
+        span = smoothing_window
+        for sensor in target_sensors:
+            dfo[sensor] = (
+                dfo.groupby(["ESN"])[sensor]
+                .transform(lambda x: x.ewm(span=span, adjust=False).mean())
+                .reset_index(drop=True)
+            )
+    elif smoothing_method == "savitzky_golay":
+        # Savitzky-Golay filter (richiede scipy.signal)
+        from scipy.signal import savgol_filter
+        window_length = min(smoothing_window, 51)  # SG requires odd window
+        if window_length % 2 == 0:
+            window_length -= 1
+        polyorder = min(3, window_length - 1)  # polynomial order < window length
+        
+        for sensor in target_sensors:
+            def apply_sg(x):
+                if len(x) < window_length:
+                    return x
+                try:
+                    return pd.Series(savgol_filter(x, window_length, polyorder, mode='interp'), index=x.index)
+                except:
+                    return x
+            
+            dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(apply_sg).reset_index(drop=True)
+    else:
+        print(f"Warning: smoothing_method '{smoothing_method}' not recognized. Using rolling_mean as fallback.")
+        for sensor in target_sensors:
+            dfo[sensor] = (
+                dfo.groupby(["ESN"])[sensor]
+                .transform(
+                    lambda x: x.rolling(
+                        window=smoothing_window, min_periods=smoothing_step
+                    ).mean()
+                )
+                .reset_index(drop=True)
+            )
 
 
 def preprocess_pipeline(
@@ -243,58 +311,13 @@ def preprocess_pipeline(
     # 4. Smoothing con metodo scelto
     if do_smoothing:
         print(f"Step 4: Smoothing (method={smoothing_method}, window={smoothing_window})...")
-        
-        if smoothing_method == "rolling_mean":
-            # Rolling mean (media mobile semplice)
-            for sensor in target_sensors:
-                dfo[sensor] = (
-                    dfo.groupby(["ESN"])[sensor]
-                    .transform(
-                        lambda x: x.rolling(
-                            window=smoothing_window, min_periods=smoothing_step
-                        ).mean()
-                    )
-                    .reset_index(drop=True)
-                )
-        elif smoothing_method == "exponential":
-            # Exponential smoothing (EMA)
-            span = smoothing_window
-            for sensor in target_sensors:
-                dfo[sensor] = (
-                    dfo.groupby(["ESN"])[sensor]
-                    .transform(lambda x: x.ewm(span=span, adjust=False).mean())
-                    .reset_index(drop=True)
-                )
-        elif smoothing_method == "savitzky_golay":
-            # Savitzky-Golay filter (richiede scipy.signal)
-            from scipy.signal import savgol_filter
-            window_length = min(smoothing_window, 51)  # SG requires odd window
-            if window_length % 2 == 0:
-                window_length -= 1
-            polyorder = min(3, window_length - 1)  # polynomial order < window length
-            
-            for sensor in target_sensors:
-                def apply_sg(x):
-                    if len(x) < window_length:
-                        return x
-                    try:
-                        return pd.Series(savgol_filter(x, window_length, polyorder, mode='interp'), index=x.index)
-                    except:
-                        return x
-                
-                dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(apply_sg).reset_index(drop=True)
-        else:
-            print(f"Warning: smoothing_method '{smoothing_method}' not recognized. Using rolling_mean as fallback.")
-            for sensor in target_sensors:
-                dfo[sensor] = (
-                    dfo.groupby(["ESN"])[sensor]
-                    .transform(
-                        lambda x: x.rolling(
-                            window=smoothing_window, min_periods=smoothing_step
-                        ).mean()
-                    )
-                    .reset_index(drop=True)
-                )
+        dfo = smoothing(
+            dfo,
+            smoothing_method=smoothing_method,
+            target_sensors=target_sensors,
+            smoothing_window=smoothing_window,
+            smoothing_step=smoothing_step,
+        )
 
         history["Smoothing"] = dfo.copy()
     else:
@@ -336,9 +359,16 @@ def preprocess_data(
     # PREPROCESSING
     # Rimozione Sensed_ dai sensori (clogged view)
     sensor_cols = [c for c in dfp.columns if c.startswith("Sensed_")]
-    sensor_rename_map = {c: c.replace("Sensed_", "") for c in sensor_cols}
-    dfp = dfp.rename(columns=sensor_rename_map)
-    final_sensor_names = list(sensor_rename_map.values())
+    
+    if sensor_cols:
+        sensor_rename_map = {c: c.replace("Sensed_", "") for c in sensor_cols}
+        dfp = dfp.rename(columns=sensor_rename_map)
+        final_sensor_names = list(sensor_rename_map.values())
+    else:
+        # Fallback: check if raw sensors exist (using u.SENSORS)
+        # Assuming u.SENSORS values are the raw names e.g. 'Altitude'
+        raw_sensors = [s.value if hasattr(s, "value") else s for s in u.SENSORS]
+        final_sensor_names = [s for s in raw_sensors if s in dfp.columns]
 
     # Nuovi indici
     dfp["esn_index"] = dfp.groupby("ESN").cumcount()

@@ -1,25 +1,98 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import asyncio
 import os
 import signal
+import json
+from typing import Dict, Any
 
 app = FastAPI()
 templates = Jinja2Templates(directory="web_gui/templates")
 
 TASKS_DIR = "tasks"
-OUTPUT_PLOTS_DIR = "img" # Cartella dove vengono salvati i grafici
+CONFIGS_DIR = os.path.join("web_gui", "task_configs")
+USER_CONFIGS_DIR = os.path.join("web_gui", "user_configs")
+OUTPUT_PLOTS_DIR = "img" 
+
+# Ensure user configs dir exists
+os.makedirs(USER_CONFIGS_DIR, exist_ok=True)
 
 # Dictionary to track running processes: task_name -> process instance
 running_tasks = {}
 
+# Mount static files
+app.mount("/img", StaticFiles(directory=OUTPUT_PLOTS_DIR), name="img")
+app.mount("/static", StaticFiles(directory="web_gui/static"), name="static")
+
+class SaveConfigModel(BaseModel):
+    config_name: str
+    data: Dict[str, Any]
+
+@app.get("/user_configs/{task_name}", response_class=JSONResponse)
+async def list_user_configs(task_name: str):
+    """List all saved configurations for a specific task."""
+    task_config_dir = os.path.join(USER_CONFIGS_DIR, task_name)
+    if not os.path.exists(task_config_dir):
+        return {"configs": []}
+    
+    configs = []
+    for f in sorted(os.listdir(task_config_dir)):
+        if f.endswith(".json"):
+            configs.append(f.replace(".json", ""))
+    return {"configs": configs}
+
+@app.get("/user_configs/{task_name}/{config_name}", response_class=JSONResponse)
+async def load_user_config(task_name: str, config_name: str):
+    """Load a specific configuration."""
+    file_path = os.path.join(USER_CONFIGS_DIR, task_name, f"{config_name}.json")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Config not found")
+    
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/user_configs/{task_name}", response_class=JSONResponse)
+async def save_user_config(task_name: str, config: SaveConfigModel):
+    """Save a configuration."""
+    task_config_dir = os.path.join(USER_CONFIGS_DIR, task_name)
+    os.makedirs(task_config_dir, exist_ok=True)
+    
+    file_path = os.path.join(task_config_dir, f"{config.config_name}.json")
+    try:
+        with open(file_path, 'w') as f:
+            json.dump(config.data, f, indent=4)
+        return {"status": "success", "message": f"Configuration '{config.config_name}' saved."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     tasks = []
-    for filename in sorted(os.listdir(TASKS_DIR)):
-        if filename.endswith(".py"):
-            tasks.append({"name": filename, "path": os.path.join(TASKS_DIR, filename)})
+    if os.path.exists(TASKS_DIR):
+        files = sorted([f for f in os.listdir(TASKS_DIR) if f.endswith(".py") and f != "__init__.py"])
+        
+        for filename in files:
+            task_info = {"name": filename, "path": os.path.join(TASKS_DIR, filename), "config": None}
+            
+            json_name = filename.replace(".py", ".json")
+            config_path = os.path.join(CONFIGS_DIR, json_name)
+            
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r') as f:
+                        task_info["config"] = json.load(f)
+                except Exception as e:
+                    print(f"Error loading config for {filename}: {e}")
+            
+            tasks.append(task_info)
+            
     return templates.TemplateResponse("index.html", {"request": request, "tasks": tasks})
 
 @app.get("/latest_plot", response_class=JSONResponse)
@@ -41,20 +114,15 @@ async def get_latest_plot():
                         pass
                         
     if latest_file:
-        # relative_path must be relative to the StaticFiles directory (OUTPUT_PLOTS_DIR)
         relative_path = os.path.relpath(latest_file, OUTPUT_PLOTS_DIR)
-        # Ensure forward slashes for URL
         relative_path = relative_path.replace(os.path.sep, '/')
-        return {"url": f"/static/{relative_path}", "filename": os.path.basename(latest_file), "timestamp": latest_time}
+        return {"url": f"/img/{relative_path}", "filename": os.path.basename(latest_file), "timestamp": latest_time}
     return {"url": None}
 
 @app.get("/browse_plots", response_class=JSONResponse)
 async def browse_plots(path: str = ""):
-    # Handle root path request
     if path == "/":
         path = ""
-        
-    # Prevent directory traversal
     if ".." in path:
         return {"error": "Invalid path"}
 
@@ -86,105 +154,93 @@ async def browse_plots(path: str = ""):
 @app.post("/run_task/{task_name}")
 async def run_task(task_name: str, request: Request):
     if task_name in running_tasks:
-        return {"status": "error", "message": f"Task {task_name} is already running."}
+        return JSONResponse({"status": "error", "message": f"Task {task_name} is already running."}, status_code=409)
 
     task_path = os.path.join(TASKS_DIR, task_name)
     if not os.path.exists(task_path):
-        return {"status": "error", "message": f"Task {task_name} not found."}
+        return JSONResponse({"status": "error", "message": f"Task {task_name} not found."}, status_code=404)
     
-    # Leggi eventuale JSON body con parametri (es. {"target": "HPC"})
     try:
         body = await request.json()
     except Exception:
         body = {}
 
-    # Costruisci il comando da eseguire (passa --target se fornito)
-    cmd = ["python", task_path]
-    if isinstance(body, dict):
-        if "target" in body and body["target"]:
-            cmd += ["--target", str(body["target"]) ]
-        # Se sono stati selezionati modelli (es. ["linear","rf"]) li passiamo come --models linear,rf
-        if "models" in body and isinstance(body["models"], list) and body["models"]:
-            cmd += ["--models", ",".join(body["models"]) ]
-        # PREPROCESSING specific options
-        if "steps" in body and isinstance(body["steps"], list) and body["steps"]:
-            cmd += ["--steps", ",".join(body["steps"]) ]
-        # FEATURE ENGINEERING specific options
-        if "statistical_features" in body and body["statistical_features"]:
-            cmd += ["--statistical-features", str(body["statistical_features"]) ]
-        if "pipeline_window" in body and body["pipeline_window"]:
-            cmd += ["--pipeline-window", str(body["pipeline_window"]) ]
-        if "pipeline_step" in body and body["pipeline_step"]:
-            cmd += ["--pipeline-step", str(body["pipeline_step"]) ]
-        # Preprocessing method options
-        if "outlier_method" in body and body["outlier_method"]:
-            cmd += ["--outlier-method", str(body["outlier_method"]) ]
-        if "outlier_threshold" in body and body["outlier_threshold"]:
-            cmd += ["--outlier-threshold", str(body["outlier_threshold"]) ]
-        if "smoothing_window" in body and body["smoothing_window"]:
-            cmd += ["--smoothing-window", str(body["smoothing_window"]) ]
-        if "smoothing_step" in body and body["smoothing_step"]:
-            cmd += ["--smoothing-step", str(body["smoothing_step"]) ]
-        if "smoothing_method" in body and body["smoothing_method"]:
-            cmd += ["--smoothing-method", str(body["smoothing_method"]) ]
-        # RESIDUAL ANALYSIS specific options
-        if "target_rul" in body and body["target_rul"]:
-            cmd += ["--target-rul", str(body["target_rul"]) ]
-        if "healthy_window" in body and body["healthy_window"]:
-            cmd += ["--healthy-window", str(body["healthy_window"]) ]
-        # MODEL TRAINING specific options
-        if "target_training" in body and body["target_training"]:
-            cmd += ["--target-training", str(body["target_training"]) ]
-        if "healthy_window" in body and body["healthy_window"]:
-            cmd += ["--healthy-window", str(body["healthy_window"]) ]
-        
-        # Random Forest params
-        if "rf_n_estimators" in body and body["rf_n_estimators"]:
-            cmd += ["--rf-n-estimators", str(body["rf_n_estimators"]) ]
-        if "rf_max_depth" in body and body["rf_max_depth"]:
-            cmd += ["--rf-max-depth", str(body["rf_max_depth"]) ]
-            
-        # XGBoost params
-        if "xgb_n_estimators" in body and body["xgb_n_estimators"]:
-            cmd += ["--xgb-n-estimators", str(body["xgb_n_estimators"]) ]
-        if "xgb_learning_rate" in body and body["xgb_learning_rate"]:
-            cmd += ["--xgb-learning-rate", str(body["xgb_learning_rate"]) ]
-        if "xgb_max_depth" in body and body["xgb_max_depth"]:
-            cmd += ["--xgb-max-depth", str(body["xgb_max_depth"]) ]
-            
-        # Transformer params
-        if "trans_epochs" in body and body["trans_epochs"]:
-            cmd += ["--trans-epochs", str(body["trans_epochs"]) ]
-        if "trans_batch_size" in body and body["trans_batch_size"]:
-            cmd += ["--trans-batch-size", str(body["trans_batch_size"]) ]
-        if "trans_learning_rate" in body and body["trans_learning_rate"]:
-            cmd += ["--trans-learning-rate", str(body["trans_learning_rate"]) ]
+    cmd = ["python", "-u", task_path] # -u for unbuffered output is crucial!
+    
+    # Load config to check param types
+    config = {}
+    config_path = os.path.join(CONFIGS_DIR, task_name.replace(".py", ".json"))
+    param_defs = {}
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                if "groups" in config:
+                    for group in config["groups"]:
+                        for param in group.get("params", []):
+                            param_defs[param["id"]] = param
+        except Exception:
+            pass
 
-    # Esegui il task in un sottoprocesso asincrono
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd, 
-            stdout=asyncio.subprocess.PIPE, 
-            stderr=asyncio.subprocess.PIPE
-        )
-        running_tasks[task_name] = process
+    for key, value in body.items():
+        arg_name = f"--{key.replace('_', '-')}"
         
-        stdout, stderr = await process.communicate()
-        
-        # Rimuovi dal dizionario quando completato
-        if task_name in running_tasks:
-            del running_tasks[task_name]
-
-        if process.returncode == 0:
-            return {"status": "success", "message": f"Task {task_name} completed successfully.", "stdout": stdout.decode(), "stderr": stderr.decode()}
+        if isinstance(value, bool):
+            if value:
+                cmd.append(arg_name)
+        elif isinstance(value, list):
+            fmt = "csv"
+            if key in param_defs and "format" in param_defs[key]:
+                fmt = param_defs[key]["format"]
+            
+            if fmt == "list":
+                cmd.append(arg_name)
+                cmd.extend([str(v) for v in value])
+            else:
+                cmd.append(arg_name)
+                cmd.append(",".join(str(v) for v in value))
         else:
-            return {"status": "error", "message": f"Task {task_name} failed.", "stdout": stdout.decode(), "stderr": stderr.decode()}
-    except asyncio.CancelledError:
-        return {"status": "error", "message": f"Task {task_name} was cancelled."}
-    except Exception as e:
-        if task_name in running_tasks:
-            del running_tasks[task_name]
-        return {"status": "error", "message": f"An error occurred: {str(e)}"}
+            cmd.append(arg_name)
+            cmd.append(str(value))
+
+    async def event_generator():
+        try:
+            # Merge stdout and stderr for simpler streaming
+            process = await asyncio.create_subprocess_exec(
+                *cmd, 
+                stdout=asyncio.subprocess.PIPE, 
+                stderr=asyncio.subprocess.STDOUT
+            )
+            running_tasks[task_name] = process
+            
+            # Notify start
+            yield json.dumps({"type": "status", "status": "running", "message": "Task started..."}) + "\n"
+
+            # Stream output
+            async for line in process.stdout:
+                if line:
+                    decoded = line.decode()
+                    yield json.dumps({"type": "log", "data": decoded}) + "\n"
+            
+            await process.wait()
+            
+            if task_name in running_tasks:
+                del running_tasks[task_name]
+
+            if process.returncode == 0:
+                yield json.dumps({"type": "status", "status": "success", "message": "Task completed successfully."}) + "\n"
+            else:
+                yield json.dumps({"type": "status", "status": "error", "message": f"Task failed with exit code {process.returncode}."}) + "\n"
+                
+        except asyncio.CancelledError:
+            yield json.dumps({"type": "status", "status": "error", "message": "Task cancelled."}) + "\n"
+        except Exception as e:
+            if task_name in running_tasks:
+                del running_tasks[task_name]
+            yield json.dumps({"type": "status", "status": "error", "message": f"Execution error: {str(e)}"}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 @app.post("/stop_task/{task_name}")
 async def stop_task(task_name: str):
@@ -192,11 +248,10 @@ async def stop_task(task_name: str):
         process = running_tasks[task_name]
         try:
             process.terminate()
-            # Attendi brevemente che il processo termini
             try:
                 await asyncio.wait_for(process.wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                process.kill() # Forza la chiusura se non risponde
+                process.kill()
             
             if task_name in running_tasks:
                 del running_tasks[task_name]
@@ -206,20 +261,3 @@ async def stop_task(task_name: str):
             return {"status": "error", "message": f"Failed to stop task: {str(e)}"}
     else:
         return {"status": "error", "message": f"Task {task_name} is not running."}
-
-@app.get("/list_plots", response_class=JSONResponse)
-async def list_plots():
-    image_files = []
-    if os.path.exists(OUTPUT_PLOTS_DIR):
-        for root, _, files in os.walk(OUTPUT_PLOTS_DIR):
-            for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg')):
-                    # Create a URL path relative to the /static mount
-                    relative_path = os.path.relpath(os.path.join(root, file), OUTPUT_PLOTS_DIR)
-                    image_files.append(f"/static/{relative_path}")
-    return {"plots": image_files}
-
-
-# Per servire i file statici (es. i grafici)
-from fastapi.staticfiles import StaticFiles
-app.mount("/static", StaticFiles(directory=OUTPUT_PLOTS_DIR), name="static")

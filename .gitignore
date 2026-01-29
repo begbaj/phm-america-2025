@@ -1,3 +1,4 @@
+*.png
 # Yarn ignores
 !.yarn/patches
 !.yarn/plugins

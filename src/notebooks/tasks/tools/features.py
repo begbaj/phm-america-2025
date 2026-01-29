@@ -442,109 +442,95 @@ def pipeline_ww(
     return (dff, val)
 
 
-def calculate_hpt_health_index(
-    df: pd.DataFrame, t3_col: str, t45_col: str, to_next_hpc_col: str
+def calculate_health_index(
+    df: pd.DataFrame, 
+    t3_col: str, 
+    t45_col: str, 
+    target_col: str, 
+    reference_col: str
 ) -> pd.DataFrame:
-    df["HI_HPT"] = np.nan
+    """
+    Calcola Health Index: HI = -alpha * T3 - T45
+    Alpha ottimizzato minimizzando la deviazione (massimizzando la correlazione)
+    da reference_col (Ground Truth RUL).
+    """
+    hi_col_name = f"HI_{target_col}"
+    df[hi_col_name] = np.nan
 
     for esn in df["ESN"].unique():
-        engine_data = df[df["ESN"] == esn].sort_values("snap_index")
+        # Filtra i dati per il motore corrente
+        engine_mask = df["ESN"] == esn
+        engine_data = df[engine_mask].copy()
+        
+        # Rimuovi NaN per il calcolo
+        valid_data = engine_data.dropna(subset=[t3_col, t45_col, reference_col])
+        
+        if valid_data.empty:
+            continue
 
-        # Individuo l'evento HPC
-        zero_indices = engine_data.index[engine_data[to_next_hpc_col] == 0].tolist(
-        )
+        t3 = valid_data[t3_col].values
+        t45 = valid_data[t45_col].values
+        ref_rul = valid_data[reference_col].values
 
-        if zero_indices:
-            idx_zero = zero_indices[-2]
-            pos_zero = engine_data.index.get_indexer([idx_zero])[0]
+        # Funzione obiettivo: Massimizzare la correlazione (Minimizzare 1 - abs(corr))
+        # Vogliamo che HI sia correlato linearmente con il RUL di riferimento
+        def objective(a):
+            hi = -a * t3 - t45
+            # Gestione caso varianza zero per evitare errori in correlaizone
+            if np.std(hi) < 1e-9:
+                return 1.0 # Penalità alta
+            
+            corr, _ = spst.pearsonr(hi, ref_rul)
+            return 1 - abs(corr)
 
-            # Prendo una finestra a cavallo dell'evento di manutenzione dell'hpc
-            start = max(0, pos_zero - 10)
-            end = min(len(engine_data), pos_zero + 11)
-            calib_window = engine_data.iloc[start:end]
-
-            # Funzione obiettivo: minimizzare la deviazione standard dell'HI
-            # mentre l'altro componente (HPC) viene sostituito
-            def objective(a):
-                hi = -a * calib_window[t3_col] - calib_window[t45_col]
-                return np.std(hi)
-
-            res = minimize(objective, x0=1.0)
-            best_alpha = res.x[0]
-
-        else:
-            # Fallback se non c'è l'evento: uso tutto il motore
-            best_alpha = 1.0  # o una media globale
-
-        # Applico l'alpha trovato a tutto il motore
-        df.loc[df["ESN"] == esn, "HI_HPT"] = (
-            -best_alpha * engine_data[t3_col] - engine_data[t45_col]
+        # Ottimizzazione
+        # Alpha starting point = 1.0
+        res = minimize(objective, x0=1.0, method='Nelder-Mead')
+        best_alpha = res.x[0]
+        
+        # Calcolo HI finale per il motore
+        # Usa i dati originali (con NaN gestiti o propagati)
+        df.loc[engine_mask, hi_col_name] = (
+            -best_alpha * df.loc[engine_mask, t3_col] - df.loc[engine_mask, t45_col]
         )
 
     return df
 
 
-def calculate_hpt_health_index_all(
-    df: pd.DataFrame, t3_col: str, t45_col: str, to_next_hpc_col: str
-) -> pd.DataFrame:
-    df["HI_HPT"] = np.nan
+def fit_mapping(
+    df: pd.DataFrame, 
+    feature_col: str, 
+    target_col: str
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Esegue una regressione lineare per mappare la feature (HI) sul target (RUL).
+    Restituisce il DF con la colonna predizione e i parametri del modello.
+    """
+    engine_params = {}
+    pred_col = f"{target_col}_linear_pred"
+    df[pred_col] = np.nan
 
     for esn in df["ESN"].unique():
         engine_mask = df["ESN"] == esn
-        engine_data = df[engine_mask].sort_values("snap_index")
-
-        # Pulizia dati: rimuoviamo eventuali NaN per la calibrazione
-        calib_data = engine_data.dropna(
-            subset=[t3_col, t45_col, to_next_hpc_col])
-
-        if not calib_data.empty:
-            # FUNZIONE OBIETTIVO:
-            # Vogliamo che HI_HPT non "segua" il trend dell'HPC.
-            # Minimizziamo la deviazione standard dell'HI su tutta la vita.
-            def objective(a):
-                hi = -a * calib_data[t3_col] - calib_data[t45_col]
-                return np.std(hi)
-
-            res = minimize(objective, x0=1.0)
-            best_alpha = res.x[0]
-        else:
-            best_alpha = 1.0
-
-        # Applichiamo a tutto il motore
-        df.loc[engine_mask, "HI_HPT"] = (
-            -best_alpha * engine_data[t3_col] - engine_data[t45_col]
-        )
-
-    return df
-
-
-def fit_hpt_mapping(
-    df: pd.DataFrame, to_next_hpt_col: str
-) -> tuple[pd.DataFrame, dict]:
-    """
-    Usa l'evento HPT per definire la retta di predizione
-    assumendo cicli = 0 all'evento HPT.
-    """
-    engine_params_hpt = {}
-
-    for esn in df["ESN"].unique():
-        engine_data = df[df["ESN"] == esn].dropna(
-            subset=["HI_HPT", to_next_hpt_col])
+        engine_data = df[engine_mask].dropna(subset=[feature_col, target_col])
 
         if not engine_data.empty:
-            # Regressione lineare: HI_HPT -> Cycles_to_HPT_SV
-            X = engine_data[["HI_HPT"]].values
-            y = engine_data[to_next_hpt_col].values
+            X = engine_data[[feature_col]].values
+            y = engine_data[target_col].values
 
             model = LinearRegression().fit(X, y)
 
-            # Salviamo i parametri specifici per questo motore
-            engine_params_hpt[esn] = {
+            engine_params[esn] = {
                 "slope": model.coef_[0],
                 "intercept": model.intercept_,
             }
 
-            # Creiamo la colonna della predizione lineare
-            df.loc[df["ESN"] == esn, "hpt_linear_pred"] = model.predict(X)
+            # Predizione su tutti i dati del motore (anche quelli con NaN se X valido)
+            # Attenzione: predict richiede X non NaN.
+            # Applichiamo predict solo alle righe dove la feature esiste
+            valid_X_idx = df.loc[engine_mask, feature_col].dropna().index
+            if not valid_X_idx.empty:
+                X_full = df.loc[valid_X_idx, [feature_col]].values
+                df.loc[valid_X_idx, pred_col] = model.predict(X_full)
 
-    return df, engine_params_hpt
+    return df, engine_params

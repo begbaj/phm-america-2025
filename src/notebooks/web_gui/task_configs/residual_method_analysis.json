@@ -1,0 +1,91 @@
+{
+    "title": "Residual Analysis",
+    "description": "Analyze residuals and calculate Health Index.",
+    "groups": [
+        {
+            "title": "📊 Configuration",
+            "params": [
+                {
+                    "id": "target_rul",
+                    "label": "Target RUL",
+                    "type": "select",
+                    "options": ["HPC", "HPT", "WW"],
+                    "default": "HPT"
+                }
+            ]
+        },
+        {
+            "title": "🧹 Pre-Processing",
+            "params": [
+                {
+                    "id": "pre_rolling_mean_window",
+                    "label": "Pre-Smooth Window",
+                    "type": "number",
+                    "default": 100
+                },
+                {
+                    "id": "pre_rolling_mean_min_periods",
+                    "label": "Pre-Smooth Min Periods",
+                    "type": "number",
+                    "default": 10
+                },
+                {
+                    "id": "outlier_method",
+                    "label": "Outlier Method",
+                    "type": "select",
+                    "options": ["isoforest", "zscore", "iqr"],
+                    "default": "isoforest"
+                },
+                {
+                    "id": "outlier_threshold",
+                    "label": "Outlier Threshold",
+                    "type": "number",
+                    "step": 0.01,
+                    "default": 0.1
+                }
+            ]
+        },
+        {
+            "title": "📉 Post-Processing",
+            "params": [
+                {
+                    "id": "post_window_size",
+                    "label": "Post-Smooth Window",
+                    "type": "number",
+                    "default": 50
+                },
+                {
+                    "id": "post_min_periods",
+                    "label": "Post-Smooth Min Periods",
+                    "type": "number",
+                    "default": 5
+                }
+            ]
+        },
+        {
+            "title": "🖼️ Plotting Options",
+            "params": [
+                {
+                    "id": "plots",
+                    "label": "Plots to Generate",
+                    "type": "multiselect",
+                    "options": ["residuals_grid", "health_index"],
+                    "default": ["residuals_grid", "health_index"],
+                    "format": "list"
+                },
+                {
+                    "id": "figsize_w",
+                    "label": "Figure Width",
+                    "type": "number",
+                    "default": 20
+                },
+                {
+                    "id": "figsize_h",
+                    "label": "Figure Height",
+                    "type": "number",
+                    "default": 10
+                }
+            ]
+        }
+    ]
+}

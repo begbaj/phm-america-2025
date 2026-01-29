@@ -1,0 +1,11 @@
+<!-- MODAL -->
+<div id="image-modal" class="fixed inset-0 bg-black/95 z-50 hidden items-center justify-center p-4 backdrop-blur-sm transition-opacity duration-300" onclick="closeModal(event)">
+    <button class="absolute top-4 right-4 text-white text-4xl hover:text-gray-300 transition z-50 focus:outline-none" onclick="closeModal(event)">&times;</button>
+    <div class="relative w-full h-full flex items-center justify-center overflow-hidden" onclick="event.stopPropagation()">
+        <img id="modal-img" src="" alt="Full View" class="max-w-full max-h-full object-contain shadow-2xl transition-transform duration-200 ease-out cursor-grab">
+    </div>
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex space-x-4 bg-white/10 px-6 py-2 rounded-full backdrop-blur-md border border-white/20" onclick="event.stopPropagation()">
+        <button onclick="zoomOut()" class="text-white hover:text-indigo-400 text-2xl transition transform hover:scale-110"><i class="fas fa-search-minus"></i></button>
+        <button onclick="zoomIn()" class="text-white hover:text-indigo-400 text-2xl transition transform hover:scale-110"><i class="fas fa-search-plus"></i></button>
+    </div>
+</div>
