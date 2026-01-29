@@ -1,14 +1,18 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-import subprocess
+import asyncio
 import os
+import signal
 
 app = FastAPI()
 templates = Jinja2Templates(directory="web_gui/templates")
 
 TASKS_DIR = "tasks"
 OUTPUT_PLOTS_DIR = "output_plots" # Cartella dove vengono salvati i grafici
+
+# Dictionary to track running processes: task_name -> process instance
+running_tasks = {}
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -20,6 +24,9 @@ async def read_root(request: Request):
 
 @app.post("/run_task/{task_name}")
 async def run_task(task_name: str, request: Request):
+    if task_name in running_tasks:
+        return {"status": "error", "message": f"Task {task_name} is already running."}
+
     task_path = os.path.join(TASKS_DIR, task_name)
     if not os.path.exists(task_path):
         return {"status": "error", "message": f"Task {task_name} not found."}
@@ -92,14 +99,52 @@ async def run_task(task_name: str, request: Request):
         if "trans_learning_rate" in body and body["trans_learning_rate"]:
             cmd += ["--trans-learning-rate", str(body["trans_learning_rate"]) ]
 
-    # Esegui il task in un sottoprocesso
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-    
-    if process.returncode == 0:
-        return {"status": "success", "message": f"Task {task_name} completed successfully.", "stdout": stdout.decode(), "stderr": stderr.decode()}
+    # Esegui il task in un sottoprocesso asincrono
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE
+        )
+        running_tasks[task_name] = process
+        
+        stdout, stderr = await process.communicate()
+        
+        # Rimuovi dal dizionario quando completato
+        if task_name in running_tasks:
+            del running_tasks[task_name]
+
+        if process.returncode == 0:
+            return {"status": "success", "message": f"Task {task_name} completed successfully.", "stdout": stdout.decode(), "stderr": stderr.decode()}
+        else:
+            return {"status": "error", "message": f"Task {task_name} failed.", "stdout": stdout.decode(), "stderr": stderr.decode()}
+    except asyncio.CancelledError:
+        return {"status": "error", "message": f"Task {task_name} was cancelled."}
+    except Exception as e:
+        if task_name in running_tasks:
+            del running_tasks[task_name]
+        return {"status": "error", "message": f"An error occurred: {str(e)}"}
+
+@app.post("/stop_task/{task_name}")
+async def stop_task(task_name: str):
+    if task_name in running_tasks:
+        process = running_tasks[task_name]
+        try:
+            process.terminate()
+            # Attendi brevemente che il processo termini
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill() # Forza la chiusura se non risponde
+            
+            if task_name in running_tasks:
+                del running_tasks[task_name]
+                
+            return {"status": "success", "message": f"Task {task_name} stopped successfully."}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to stop task: {str(e)}"}
     else:
-        return {"status": "error", "message": f"Task {task_name} failed.", "stdout": stdout.decode(), "stderr": stderr.decode()} 
+        return {"status": "error", "message": f"Task {task_name} is not running."}
 
 @app.get("/list_plots", response_class=JSONResponse)
 async def list_plots():

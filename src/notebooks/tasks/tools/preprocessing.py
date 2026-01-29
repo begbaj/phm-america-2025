@@ -187,6 +187,9 @@ def preprocess_pipeline(
     smoothing_window: int = 5,
     smoothing_step: int = 2,
     smoothing_method: str = "rolling_mean",
+    do_missing_fill: bool = True,
+    do_outlier_removal: bool = True,
+    do_smoothing: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """
     Esegue la pipeline di preprocessing con opzioni selezionabili per smoothing.
@@ -197,94 +200,121 @@ def preprocess_pipeline(
 
     history = {}
     history["Original"] = df.copy()
+    dfo = df.copy()
 
     # 1. Missing Fill
-    print("Step 1: Filling Missing Values...")
-    dfo = missingfill(df, sensor_cols=sensor_cols)
-    history["Missing Filled First"] = dfo.copy()
+    if do_missing_fill:
+        print("Step 1: Filling Missing Values...")
+        dfo = missingfill(dfo, sensor_cols=sensor_cols)
+        history["Missing Filled First"] = dfo.copy()
+    else:
+        print("Step 1: Skipping Missing Values Fill.")
 
     # 2. Outlier Removal
-    print(f"Step 2: Removing Outliers ({outlier_method})...")
-    dfo = remove_outliers(
-        dfo, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold
-    )
-    history["Outliers Removed"] = dfo.copy()
+    if do_outlier_removal:
+        print(f"Step 2: Removing Outliers ({outlier_method})...")
+        dfo = remove_outliers(
+            dfo, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold
+        )
+        history["Outliers Removed"] = dfo.copy()
 
-    # 3. Missing Fill per gli outlier rimossi impostati a NaN
-    print("Step 3: Filling Missing Values...")
-    dfo = missingfill(dfo, sensor_cols=sensor_cols)
-    history["Missing Filled Second"] = dfo.copy()
+        # 3. Missing Fill per gli outlier rimossi impostati a NaN
+        if do_missing_fill:
+            print("Step 3: Filling Missing Values (Post-Outlier)...")
+            dfo = missingfill(dfo, sensor_cols=sensor_cols)
+            history["Missing Filled Second"] = dfo.copy()
+    else:
+        print("Step 2: Skipping Outlier Removal.")
 
     # Identifica sensori
-    target_sensors = (
+    potential_sensors = (
         sensor_cols
         if sensor_cols
         else [s.value if hasattr(s, "value") else s for s in u.SENSORS]
     )
-    target_sensors = [s for s in target_sensors if s in dfo.columns]
+    
+    target_sensors = []
+    for s in potential_sensors:
+        if s in dfo.columns:
+            target_sensors.append(s)
+        elif f"Sensed_{s}" in dfo.columns:
+            target_sensors.append(f"Sensed_{s}")
 
     # 4. Smoothing con metodo scelto
-    print(f"Step 4: Smoothing (method={smoothing_method}, window={smoothing_window})...")
-    
-    if smoothing_method == "rolling_mean":
-        # Rolling mean (media mobile semplice)
-        for sensor in target_sensors:
-            dfo[sensor] = (
-                dfo.groupby(["ESN"])[sensor]
-                .transform(
-                    lambda x: x.rolling(
-                        window=smoothing_window, min_periods=smoothing_step
-                    ).mean()
-                )
-                .reset_index(drop=True)
-            )
-    elif smoothing_method == "exponential":
-        # Exponential smoothing (EMA)
-        span = smoothing_window
-        for sensor in target_sensors:
-            dfo[sensor] = (
-                dfo.groupby(["ESN"])[sensor]
-                .transform(lambda x: x.ewm(span=span, adjust=False).mean())
-                .reset_index(drop=True)
-            )
-    elif smoothing_method == "savitzky_golay":
-        # Savitzky-Golay filter (richiede scipy.signal)
-        from scipy.signal import savgol_filter
-        window_length = min(smoothing_window, 51)  # SG requires odd window
-        if window_length % 2 == 0:
-            window_length -= 1
-        polyorder = min(3, window_length - 1)  # polynomial order < window length
+    if do_smoothing:
+        print(f"Step 4: Smoothing (method={smoothing_method}, window={smoothing_window})...")
         
-        for sensor in target_sensors:
-            def apply_sg(x):
-                if len(x) < window_length:
-                    return x
-                try:
-                    return pd.Series(savgol_filter(x, window_length, polyorder, mode='interp'), index=x.index)
-                except:
-                    return x
-            
-            dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(apply_sg).reset_index(drop=True)
-    else:
-        print(f"Warning: smoothing_method '{smoothing_method}' not recognized. Using rolling_mean as fallback.")
-        for sensor in target_sensors:
-            dfo[sensor] = (
-                dfo.groupby(["ESN"])[sensor]
-                .transform(
-                    lambda x: x.rolling(
-                        window=smoothing_window, min_periods=smoothing_step
-                    ).mean()
+        if smoothing_method == "rolling_mean":
+            # Rolling mean (media mobile semplice)
+            for sensor in target_sensors:
+                dfo[sensor] = (
+                    dfo.groupby(["ESN"])[sensor]
+                    .transform(
+                        lambda x: x.rolling(
+                            window=smoothing_window, min_periods=smoothing_step
+                        ).mean()
+                    )
+                    .reset_index(drop=True)
                 )
-                .reset_index(drop=True)
-            )
+        elif smoothing_method == "exponential":
+            # Exponential smoothing (EMA)
+            span = smoothing_window
+            for sensor in target_sensors:
+                dfo[sensor] = (
+                    dfo.groupby(["ESN"])[sensor]
+                    .transform(lambda x: x.ewm(span=span, adjust=False).mean())
+                    .reset_index(drop=True)
+                )
+        elif smoothing_method == "savitzky_golay":
+            # Savitzky-Golay filter (richiede scipy.signal)
+            from scipy.signal import savgol_filter
+            window_length = min(smoothing_window, 51)  # SG requires odd window
+            if window_length % 2 == 0:
+                window_length -= 1
+            polyorder = min(3, window_length - 1)  # polynomial order < window length
+            
+            for sensor in target_sensors:
+                def apply_sg(x):
+                    if len(x) < window_length:
+                        return x
+                    try:
+                        return pd.Series(savgol_filter(x, window_length, polyorder, mode='interp'), index=x.index)
+                    except:
+                        return x
+                
+                dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(apply_sg).reset_index(drop=True)
+        else:
+            print(f"Warning: smoothing_method '{smoothing_method}' not recognized. Using rolling_mean as fallback.")
+            for sensor in target_sensors:
+                dfo[sensor] = (
+                    dfo.groupby(["ESN"])[sensor]
+                    .transform(
+                        lambda x: x.rolling(
+                            window=smoothing_window, min_periods=smoothing_step
+                        ).mean()
+                    )
+                    .reset_index(drop=True)
+                )
 
-    history["Smoothing"] = dfo.copy()
+        history["Smoothing"] = dfo.copy()
+    else:
+        print("Step 4: Skipping Smoothing.")
 
     print("Pipeline completata.")
     return dfo, history
 
 
-def preprocess_data(train: pd.DataFrame, outlier_method: str = "isoforest", outlier_threshold: float = 0.08, smoothing_window: int = 100, smoothing_step: int = 25, smoothing_method: str = "rolling_mean"):
+def preprocess_data(
+    train: pd.DataFrame, 
+    outlier_method: str = "isoforest", 
+    outlier_threshold: float = 0.08, 
+    smoothing_window: int = 100, 
+    smoothing_step: int = 25, 
+    smoothing_method: str = "rolling_mean",
+    do_missing_fill: bool = True,
+    do_outlier_removal: bool = True,
+    do_smoothing: bool = True
+):
     # 1. PREPARAZIONE INDICI
     # Reset dell'indice per preservare l'indice originale come 'global_index'
     dfp = train.reset_index().rename(columns={"index": "global_index"})
@@ -297,6 +327,9 @@ def preprocess_data(train: pd.DataFrame, outlier_method: str = "isoforest", outl
         smoothing_window=smoothing_window,
         smoothing_step=smoothing_step,
         smoothing_method=smoothing_method,
+        do_missing_fill=do_missing_fill,
+        do_outlier_removal=do_outlier_removal,
+        do_smoothing=do_smoothing,
     )
 
 
@@ -370,7 +403,7 @@ def preprocess_data(train: pd.DataFrame, outlier_method: str = "isoforest", outl
     return dfp, history, final_sensor_names
 
 
-def aggregate_snapshots(df: pd.DataFrame, sensors: list[str]) -> pd.DataFrame:
+def aggregate_snapshots(df: pd.DataFrame, sensors: list[str], method='mean') -> pd.DataFrame:
     """
     Aggrega i dati degli snapshot calcolando la media dei sensori.
     """
@@ -396,7 +429,7 @@ def aggregate_snapshots(df: pd.DataFrame, sensors: list[str]) -> pd.DataFrame:
     # SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
     for col in sensors:
         if col in df.columns:
-            agg_logic[col] = "mean"
+            agg_logic[col] = method
 
     # SULLE COLONNE META: prendiamo il PRIMO valore (perché è uguale in tutti gli snapshot di quel momento)
     for col in meta_cols:

@@ -527,8 +527,8 @@ def fit_hpt_mapping(
     """
     engine_params_hpt = {}
 
-    for esn in df["esn"].unique():
-        engine_data = df[df["esn"] == esn].dropna(
+    for esn in df["ESN"].unique():
+        engine_data = df[df["ESN"] == esn].dropna(
             subset=["HI_HPT", to_next_hpt_col])
 
         if not engine_data.empty:
@@ -545,6 +545,6 @@ def fit_hpt_mapping(
             }
 
             # Creiamo la colonna della predizione lineare
-            df.loc[df["esn"] == esn, "hpt_linear_pred"] = model.predict(X)
+            df.loc[df["ESN"] == esn, "hpt_linear_pred"] = model.predict(X)
 
     return df, engine_params_hpt
