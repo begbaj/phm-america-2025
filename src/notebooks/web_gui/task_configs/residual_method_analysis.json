@@ -16,7 +16,7 @@
                     "id": "healthy_window",
                     "label": "Baseline Window (0=Full)",
                     "type": "number",
-                    "default": 100
+                    "default": 0
                 }
             ]
         },
@@ -24,16 +24,23 @@
             "title": "🧹 Pre-Processing",
             "params": [
                 {
+                    "id": "preprocessing_steps",
+                    "label": "Preprocessing Steps",
+                    "type": "multiselect",
+                    "options": ["remove_outliers", "fill_missing"],
+                    "default": ["remove_outliers", "fill_missing"]
+                },
+                {
                     "id": "pre_rolling_mean_window",
                     "label": "Pre-Smooth Window",
                     "type": "number",
-                    "default": 100
+                    "default": 0
                 },
                 {
                     "id": "pre_rolling_mean_min_periods",
                     "label": "Pre-Smooth Min Periods",
                     "type": "number",
-                    "default": 10
+                    "default": 0
                 },
                 {
                     "id": "outlier_method",
@@ -47,7 +54,7 @@
                     "label": "Outlier Threshold",
                     "type": "number",
                     "step": 0.01,
-                    "default": 0.1
+                    "default": 0.08
                 }
             ]
         },

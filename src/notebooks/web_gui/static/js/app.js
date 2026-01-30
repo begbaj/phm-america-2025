@@ -523,16 +523,16 @@ async function browsePath(path) {
         // Render Directories
         data.dirs.forEach(dir => {
             const el = document.createElement('div');
-            el.className = 'bg-blue-50 hover:bg-blue-100 text-blue-700 p-4 rounded-xl cursor-pointer flex flex-col items-center justify-center transition-all duration-200 border border-blue-100 hover:shadow-md aspect-square';
+            el.className = 'bg-blue-50 hover:bg-blue-100 text-blue-700 p-3 rounded-xl cursor-pointer flex flex-col items-center justify-center transition-all duration-200 border border-blue-100 hover:shadow-md h-24';
             el.onclick = () => browsePath(currentPath ? `${currentPath}/${dir}` : dir);
-            el.innerHTML = `<div class="text-4xl mb-2">📁</div><div class="font-semibold text-sm text-center truncate w-full">${dir}</div>`;
+            el.innerHTML = `<div class="text-3xl mb-1">📁</div><div class="font-semibold text-xs text-center truncate w-full px-1">${dir}</div>`;
             contentDiv.appendChild(el);
         });
 
         // Render Files
         data.files.forEach(file => {
             const el = document.createElement('div');
-            el.className = 'group relative bg-gray-100 rounded-xl overflow-hidden shadow-sm hover:shadow-lg transition-all duration-200 aspect-square cursor-zoom-in';
+            el.className = 'group relative bg-gray-100 rounded-xl overflow-hidden shadow-sm hover:shadow-lg transition-all duration-200 aspect-video cursor-zoom-in border border-gray-200';
             const safeDir = currentPath ? currentPath + '/' : '';
             const fullUrl = `/img/${safeDir}${file}`;
             const timestamp = new Date().getTime(); // Cache busting

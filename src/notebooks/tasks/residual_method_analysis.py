@@ -46,19 +46,18 @@ class ResidualAnalysisPipeline:
         
         # Initial outlier removal and missing fill
         sensor_cols = [c for c in train.columns if c.startswith("Sensed_")]
-        df = pp.remove_outliers(train, sensor_cols=sensor_cols, method=self.args.outlier_method, threshold=self.args.outlier_threshold)
-        df = pp.missingfill(df)
-        
-        # Smoothing
-        df = pp.rolling_mean(df, sensor_cols, window=self.args.pre_rolling_mean_window, min_periods=self.args.pre_rolling_mean_min_periods)
+        if self.args.remove_outliers:
+            df = pp.remove_outliers(train, sensor_cols=sensor_cols, method=self.args.outlier_method, threshold=self.args.outlier_threshold)
+        if self.args.fill_missing:
+            df = pp.missingfill(df)
+        if self.args.pre_rolling_mean_window > 1:
+            df = pp.rolling_mean(df, sensor_cols, window=self.args.pre_rolling_mean_window, min_periods=self.args.pre_rolling_mean_min_periods)
         self.df = df.dropna()
         
         # Check for prefixed variables
         if self.operating_vars[0] not in self.df.columns and f"Sensed_{self.operating_vars[0]}" in self.df.columns:
             self.operating_vars = [f"Sensed_{v}" for v in self.operating_vars]
-            # Update rename map keys
             self.rename_vars_map = {f"Sensed_{k}": v for k, v in self.rename_vars_map.items()}
-            print("Using prefixed variables for residuals.")
 
     def compute_residuals(self):
         """Step 2: Fit baseline models and calculate residuals."""
@@ -210,6 +209,8 @@ def main():
     parser.add_argument('--plots', nargs='+', default=['residuals_grid', 'health_index'], choices=['residuals_grid', 'health_index'])
     parser.add_argument('--figsize-w', type=int, default=20)
     parser.add_argument('--figsize-h', type=int, default=10)
+    parser.add_argument('--fill-missing', type=bool, default=True)
+    parser.add_argument('--remove-outliers', type=bool, default=True)
     
     args = parser.parse_args()
 

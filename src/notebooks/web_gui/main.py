@@ -184,6 +184,16 @@ async def run_task(task_name: str, request: Request):
             pass
 
     for key, value in body.items():
+        # Special handling for grouped preprocessing steps to map them back to individual flags
+        if key == "preprocessing_steps" and isinstance(value, list):
+            all_options = ["remove_outliers", "fill_missing"]
+            for opt in all_options:
+                flag_name = f"--{opt.replace('_', '-')}"
+                flag_value = "True" if opt in value else "False"
+                cmd.append(flag_name)
+                cmd.append(flag_value)
+            continue
+
         arg_name = f"--{key.replace('_', '-')}"
         
         if isinstance(value, bool):
