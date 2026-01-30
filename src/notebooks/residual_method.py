@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025 (3.10.19)
 #     language: python
 #     name: python3
 # ---
@@ -19,11 +19,12 @@
 # %%
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from scipy.optimize import minimize
 # %load_ext autoreload
 # %autoreload 2
-from tools import utils as u, config as cfg, plotting as up
+from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 
 # %% [markdown]
 # # Preprocessing
@@ -187,7 +188,79 @@ dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].transform(
 )
 dfr_mean[res_cols] = dfr_mean.groupby(['esn', 'snap'])[res_cols].bfill()
 dfr_mean[to_next_col] = dfr[to_next_col]
-#up.plot_residuals_dashboard(dfr_mean, res_cols)
+up.plot_residuals_dashboard(dfr_mean, res_cols)
+
+# %%
+
+df = u.load_training()()
+operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+
+def train_models(df) -> dict[int, dict[str,LinearRegression]]:
+    X_train = df[operating_vars]
+    Y_train = df[degradation_vars]
+    models = {}
+    for i in range(0,8):
+        X_temp = pd.DataFrame(np.roll(X_train, i, axis=1))
+        models[i] = {}
+        models[i]["model"] = train_model(X_temp, Y_train)
+    return models
+
+def train_model(X_train, Y_train):
+    model = LinearRegression()
+    model.fit(X_train, Y_train)
+    return model
+
+def s_pred(s_o, model):
+    return model.predict(s_o)
+
+def residual(s_d, s_o, model):
+    return s_d - s_pred(s_o, model)
+
+def w(y, y_pred, a):
+    diff = y_pred - y
+    num = np.where(diff >= 0, 2.0, 1.0)
+    if isinstance(y, pd.DataFrame) or isinstance(y, pd.Series):
+        y = y.values
+    return num / (1 + a * y)
+
+def TWE(y, y_pred, a, b):
+    if isinstance(y, pd.DataFrame): y = y.values
+    weight = w(y, y_pred, a)
+    squared_error = (y_pred - y) ** 2
+    return weight * squared_error * b
+
+df = pp.remove_outliers(df, u.SENSORS)
+df = pp.missingfill(df).dropna()
+test_data = df[df["ESN"] == 104]
+X_test = test_data[operating_vars]
+Y_test = test_data[degradation_vars]
+models = train_models(df[df["ESN"].isin([101, 102, 103])])
+model_i = 2
+model = models[model_i]['model']
+Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
+twes = TWE(Y_test, Y_pred, 10, 3)
+res = Y_test - Y_pred
+
+plt.figure()
+plt.plot(res[0,:])
+plt.show()
+# y_pred e y_true sono invertiti!!!!!!
+# col = 1
+# plt.figure()
+# plt.plot(test_data["Cycles_Since_New"],Y_pred[:,col])
+# plt.plot(test_data["Cycles_Since_New"],Y_test.iloc[:,col])
+# plt.show()
+
+# a = 0.01
+# t3_res = np.array(df["T3_res"])
+# t45_res = np.array(df["T45_res"])
+# hi_target = -a * t3_res - t45_res
+# print(df)
+# plt.figure()
+# plt.plot(df["Cycles_since_new"], hi_target)
+# plt.show()
+
 
 # %%
 to_next_cols = []
