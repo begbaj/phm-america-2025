@@ -18,6 +18,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import pulp
 from sklearn.linear_model import LinearRegression
 from scipy.optimize import minimize
 # %load_ext autoreload
@@ -46,7 +47,7 @@ def s_pred(s_o, model):
 def residual(s_d, s_o, model):
     return s_d - s_pred(s_o, model)
 
-def w(y_p, y, a):
+def wind(y_p, y, a):
     diff = y - y_p
     num = np.where(diff >= 0, 2.0, 1.0)
     if isinstance(y_p, pd.DataFrame) or isinstance(y_p, pd.Series):
@@ -55,7 +56,7 @@ def w(y_p, y, a):
 
 def TWE(y_p, y, a, b):
     if isinstance(y_p, pd.DataFrame): y_p = y_p.values
-    weight = w(y_p, y, a)
+    weight = wind(y_p, y, a)
     squared_error = (y - y_p) ** 2
     return weight * squared_error * b
 
@@ -63,6 +64,7 @@ def TWE(y_p, y, a, b):
 
 # %%
 from pyparsing import line
+from sympy import O
 
 
 df = u.load_training()()
@@ -71,11 +73,12 @@ degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
 
 df = pp.remove_outliers(df, u.SENSORS)
 df = pp.missingfill(df).dropna()
-test_data = df[df["ESN"] == 104].reset_index()
 
+testing_esn = 102
+test_data = df[df["ESN"] == testing_esn].reset_index()
 X_test = test_data[operating_vars]
 Y_test = test_data[degradation_vars]
-models = train_models(df[df["ESN"].isin([101, 102, 103])])
+models = train_models(df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])])
 
 model_i = 0
 model = models[model_i]['model']
@@ -86,26 +89,158 @@ twes = TWE(Y_pred, Y_test, 10, 3)
 res = Y_test - Y_pred
 res = pp.remove_outliers(res, u.SENSORS, threshold=3)
 res = res.dropna()
-window = 370
-step = window//5
-res = res.rolling(window, step).median()
 
-for i in range(0,7):
-    m = res.iloc[:,i].median()
-    res.iloc[:,i] -= m
 
-fig, axs = plt.subplots(2,3, figsize=(15,8))
-for i, ax in enumerate(axs.flat):
-    if isinstance(ax, plt.Axes):
-        ax.plot(res.iloc[:,i], linewidth=1)
-        ax.set_title(degradation_vars[i])
-        ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{res.iloc[:,i].index.name}_res")
-        ax.grid()
 
-fig.subplots_adjust(hspace=0.4, wspace=0.4)
+
+## QUESTO è il plot quello che tipo deve sembrare quello dei koreani
+# fig, axs = plt.subplots(2,3, figsize=(15,8))
+# for i, ax in enumerate(axs.flat):
+#     if isinstance(ax, plt.Axes):
+#         ax.plot(res.iloc[:,i], linewidth=1)
+#         ax.set_title(degradation_vars[i])
+#         ax.set_ylabel("Residuals")
+#         ax.set_xlabel(f"{res.iloc[:,i].index.name}_res")
+#         ax.grid()
+# fig.subplots_adjust(hspace=0.4, wspace=0.4)
+# fig.show()
+## finisce qua
+
+def HI(T3_res, T45_res, alpha):
+    return -alpha * T3_res - T45_res
+
+def minmax(df, column):
+    col_min = df[column].min()
+    col_max = df[column].max()
+    return (df[column] - col_min) / (col_max - col_min)
+
+def median_norm(df):
+    for i in range(0,7):
+        m = df.iloc[:,i].median()
+        df.iloc[:,i] -= m
+    return df
+
+def objective(alpha, T3, T45, RUL):
+    hi = -alpha*T3 - T45
+    return np.sqrt(np.mean((hi - RUL)**2)) + 1
+
+def objective_full_hpt(params, res, df):
+    alpha, wind = params
+    wind = int(wind)
+    s = int(wind//5)
+    res = median_norm(res.rolling(wind, s).median())
+    scaled=df.copy()
+    scaled["Cycles_to_HPT_SV"] = minmax(df, "Cycles_to_HPT_SV")
+    ST3_res = minmax(res, "Sensed_T3")
+    ST45_res = minmax(res, "Sensed_T45")
+    rul = scaled.loc[scaled["ESN"] == testing_esn, "Cycles_to_HPT_SV"].reset_index(drop=True)
+    hi = -alpha*ST3_res - ST45_res
+    return np.sqrt(np.mean((hi - rul)**2)) + 1
+
+def objective_full_hpc(params, res, df):
+    alpha, wind = params
+    wind = int(wind)
+    s = int(wind//5)
+    res = median_norm(res.rolling(wind, s).median())
+    scaled=df.copy()
+    scaled["Cycles_to_HPC_SV"] = minmax(df, "Cycles_to_HPC_SV")
+    ST3_res = minmax(res, "Sensed_T3")
+    ST45_res = minmax(res, "Sensed_T45")
+    rul = scaled.loc[scaled["ESN"] == testing_esn, "Cycles_to_HPC_SV"].reset_index(drop=True)
+    hi = -alpha*ST3_res - ST45_res
+    return np.sqrt(np.mean((hi - rul)**2)) + 1
+
+
+# window = 370
+# step = window//5
+# res = res.rolling(window, step).median()
+# res = median_norm(res)
+
+# scaled = df[["Cycles_to_HPT_SV", "Cycles_to_HPC_SV"]].copy()
+# scaled_res = res.copy()
+
+# scaled["Cycles_to_HPT_SV"] = minmax(scaled, "Cycles_to_HPT_SV")
+# scaled["Cycles_to_HPC_SV"] = minmax(scaled, "Cycles_to_HPC_SV")
+# ST3_res = minmax(res, "Sensed_T3")
+# ST45_res = minmax(res, "Sensed_T45")
+
+# hpt_rul = scaled.loc[df["ESN"] == testing_esn, "Cycles_to_HPT_SV"].reset_index(drop=True)
+# hpc_rul = scaled.loc[df["ESN"] == testing_esn, "Cycles_to_HPC_SV"].reset_index(drop=True)
+# T3_res = res["Sensed_T3"]
+# T45_res = res["Sensed_T45"]
+
+
+a_hpt = -2.75
+a_hpc = 9
+
+w_hpt = 3900
+w_hpc = 370
+
+bounds = [
+    (None, None),
+    (0, None)
+]
+
+result_hpt = minimize(
+    objective_full_hpt,
+    x0=(a_hpt,w_hpt),
+    args=(res, df),
+    method="L-BFGS-B",
+    bounds=bounds
+)
+
+result_hpc = minimize(
+    objective_full_hpc,
+    x0=(a_hpt,w_hpc),
+    args=(res, df),
+    method="L-BFGS-B",
+    bounds=bounds
+)
+
+# result_hpt = minimize(
+#     objective, 
+#     x0=a_hpt, 
+#     args=(ST3_res, ST45_res, hpt_rul),
+#     method='Nelder-Mead'
+# )
+
+# result_hpc = minimize(
+#     objective, 
+#     x0=a_hpc, 
+#     args=(ST3_res, ST45_res, hpc_rul),
+#     method='Nelder-Mead'
+# )
+
+a_hpt = result_hpt.x[0]
+a_hpc = result_hpc.x[0]
+
+w_hpt = result_hpt.x[1]
+w_hpc = result_hpc.x[1]
+
+print(f"alpha_hpt:{a_hpt}")
+print(f"alpha_hpt:{a_hpt}")
+print("")
+print(f"alpha_hpc:{a_hpc}")
+print(f"alpha_hpc:{a_hpc}")
+
+hi_hpt = HI(T3_res, T45_res, a_hpt)
+hi_hpc = HI(T3_res, T45_res, a_hpc)
+error_hpt = np.sum(hi_hpt - hpt_rul)
+error_hpc = np.sum(hi_hpc - hpc_rul)
+
+
+fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
+ax0_rul = axs[0].twinx()
+ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
+ax1_rul = axs[1].twinx()
+ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+fig.tight_layout()
 fig.show()
 
+
+# %%
 # col = 1
 # plt.figure()
 # plt.plot(test_data["Cycles_Since_New"],Y_pred[:,col], linewidth=0.5, label="Predicted")
