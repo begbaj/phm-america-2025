@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025 (3.10.19)
 #     language: python
 #     name: python3
 # ---
@@ -21,12 +21,16 @@ import matplotlib.pyplot as plt
 import pulp
 from sklearn.linear_model import LinearRegression
 from scipy.optimize import minimize
+import scipy.optimize as optimize
+import scipy.stats as stats
+from pyparsing import line
+from sympy import O, deg
 # %load_ext autoreload
 # %autoreload 2
 from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 
 # %%
-def train_models(df) -> dict[int, dict[str,LinearRegression]]:
+def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
     X_train = df[operating_vars]
     Y_train = df[degradation_vars]
     models = {}
@@ -60,66 +64,7 @@ def TWE(y_p, y, a, b):
     squared_error = (y - y_p) ** 2
     return weight * squared_error * b
 
-
-
-# %%
-from pyparsing import line
-from sympy import O
-
-
-df = u.load_training()()
-cycles = ['Cycles_Since_New']
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-testing_esn = 103
-test_data = df[df["ESN"] == testing_esn].reset_index()
-X_test = test_data[operating_vars]
-Y_test = test_data[degradation_vars]
-models = train_models(df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])])
-
-model_i = 0
-model = models[model_i]['model']
-Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
-
-twes = TWE(Y_pred, Y_test, 10, 3)
-
-res = Y_test - Y_pred
-res[cycles] = test_data[cycles]
-agg_logic = {col: 'median' for col in degradation_vars}
-# agg_logic.update({col: 'first' for col in cycles})
-# Creo i residui "Engine-Level Residuals" facendo la mediana tra gli snapshot
-res = res.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
-res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-res = res.dropna()
-
-
-
-
-## QUESTO è il plot quello che tipo deve sembrare quello dei koreani
-# fig, axs = plt.subplots(2,3, figsize=(15,8))
-# for i, ax in enumerate(axs.flat):
-#     if isinstance(ax, plt.Axes):
-#         ax.plot(res.iloc[:,i], linewidth=1)
-#         ax.set_title(degradation_vars[i])
-#         ax.set_ylabel("Residuals")
-#         ax.set_xlabel(f"{res.iloc[:,i].index.name}_res")
-#         ax.grid()
-# fig.subplots_adjust(hspace=0.4, wspace=0.4)
-# fig.show()
-## finisce qua
-
-# Abbiamo calcolato alpha per ati normalizzati, bisogna normalizzare anche qui!
-def HI(res, alpha, wind):
-    wind = int(np.round(wind))
-    step = max(1, int(wind // 5))
-    res_smooth = res.rolling(window=wind, step=step, min_periods=1).median().dropna()
-    res_smooth = res_smooth - res_smooth.median()
-    T3_res = minmax(res, "Sensed_T3")
-    T45_res = minmax(res, "Sensed_T45")
+def HI(T3_res, T45_res, alpha):
     return -alpha * T3_res - T45_res
 
 def minmax(df, column):
@@ -135,124 +80,243 @@ def median_norm(df):
 
 def objective(alpha, T3, T45, RUL):
     hi = -alpha*T3 - T45
-    return np.sqrt(np.mean((hi - RUL)**2)) + 1
+    RUL = RUL.dropna()
+    hi = hi.dropna()
+    corr = stats.pearsonr(RUL,hi)
+    # return np.sqrt(np.mean((hi - RUL)**2)) + 1
+    return - corr[0]
 
-def objective_full_hpt(params, res, df):
-    alpha, wind = params
-    wind = int(wind)
-    s = int(wind//5)
-    res = median_norm(res.rolling(wind, s).median())
-    scaled=df.copy()
-    scaled["Cycles_to_HPT_SV"] = minmax(df, "Cycles_to_HPT_SV")
-    ST3_res = minmax(res, "Sensed_T3")
-    ST45_res = minmax(res, "Sensed_T45")
-    rul = scaled.loc[scaled["ESN"] == testing_esn, "Cycles_to_HPT_SV"].reset_index(drop=True)
-    hi = -alpha*ST3_res - ST45_res
-    return np.sqrt(np.mean((hi - rul)**2)) + 1
-
-def objective_full_hpc(params, res, df):
-    alpha, wind = params
-    wind = int(wind)
-    s = int(wind//5)
-    res = median_norm(res.rolling(wind, s).median())
-    scaled=df.copy()
-    scaled["Cycles_to_HPC_SV"] = minmax(df, "Cycles_to_HPC_SV")
-    ST3_res = minmax(res, "Sensed_T3")
-    ST45_res = minmax(res, "Sensed_T45")
-    rul = scaled.loc[scaled["ESN"] == testing_esn, "Cycles_to_HPC_SV"].reset_index(drop=True)
-    hi = -alpha*ST3_res - ST45_res
-    return np.sqrt(np.mean((hi - rul)**2)) + 1
+def objective_beta(params, T3, T45, RUL):
+    alpha, beta = params
+    hi = -alpha*T3 - beta*T45
+    RUL = RUL.dropna()
+    hi = hi.dropna()
+    corr = stats.pearsonr(RUL,hi)
+    # return np.sqrt(np.mean((hi - RUL)**2)) + 1
+    return - corr[0]
 
 
-# window = 370
-# step = window//5
-# res = res.rolling(window, step).median()
-# res = median_norm(res)
 
-# scaled = df[["Cycles_to_HPT_SV", "Cycles_to_HPC_SV"]].copy()
-# scaled_res = res.copy()
-
-# scaled["Cycles_to_HPT_SV"] = minmax(scaled, "Cycles_to_HPT_SV")
-# scaled["Cycles_to_HPC_SV"] = minmax(scaled, "Cycles_to_HPC_SV")
-# ST3_res = minmax(res, "Sensed_T3")
-# ST45_res = minmax(res, "Sensed_T45")
-
-agg_logic = {col: 'median' for col in degradation_vars}
-# agg_logic.update({col: 'first' for col in cycles})
-# Creo i residui "Engine-Level Residuals" facendo la mediana tra gli snapshot
-
-hpt_rul_df = df.loc[df["ESN"] == testing_esn, ["Cycles_Since_New", "Cycles_to_HPT_SV"]]
-hpc_rul_df = df.loc[df["ESN"] == testing_esn, ["Cycles_Since_New", "Cycles_to_HPC_SV"]]
-
-hpt_rul = hpt_rul_df.groupby('Cycles_Since_New', as_index=False).agg('first').reset_index(drop=True)
-hpt_rul = hpt_rul.drop(columns=['Cycles_Since_New'])
-hpc_rul = hpc_rul_df.groupby('Cycles_Since_New', as_index=False).agg('first').reset_index(drop=True)
-hpc_rul = hpc_rul.drop(columns=['Cycles_Since_New'])
+# %%
+from numpy import sign
 
 
-a_hpt = -2.75
-a_hpc = 9
+model_i = 0
+testing_esn = 102
+operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
 
-# Cambiando questo valore, non cambia nulla
-# inoltre, la funzione minimize non ne ottimizza il valore, cambia solo alpha
-w_hpt = 10
-w_hpc = 100
+# caricamento e preprocessamento iniziale
+df = u.load_training()()
+df = pp.remove_outliers(df, u.SENSORS)
+df = pp.missingfill(df).dropna()
 
+# preparazione train-test split
+test_data = df[df["ESN"] == testing_esn].reset_index()
+X_test = test_data[operating_vars]
+Y_test = test_data[degradation_vars]
+
+# training modelli con shift
+models = train_models(df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])], operating_vars, degradation_vars)
+
+# selezione modello
+model = models[model_i]['model']
+
+# predict dei valori
+Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
+
+# residui
+res = Y_test - Y_pred
+
+# integrazione residui sul dataset originale
+res = pp.remove_outliers(res, u.SENSORS, threshold=3)
+test_data[degradation_vars] = res
+res = test_data.dropna()
+
+## QUESTO è il plot quello che tipo deve sembrare quello dei koreani
+# fig, axs = plt.subplots(2,3, figsize=(15,8))
+# for i, ax in enumerate(axs.flat):
+#     if isinstance(ax, plt.Axes):
+#         ax.plot(res.iloc[:,i], linewidth=1)
+#         ax.set_title(degradation_vars[i])
+#         ax.set_ylabel("Residuals")
+#         ax.set_xlabel(f"{res.iloc[:,i].index.name}_res")
+#         ax.grid()
+# fig.subplots_adjust(hspace=0.4, wspace=0.4)
+# fig.show()
+## finisce qua
+
+# finestra smoothing dei residui
+window = 370
+step = window//5
+
+res = res.rolling(window, step).median()
+res = median_norm(res)
+res = res.dropna()
+
+hpt_rul = res["Cycles_to_HPT_SV"].reset_index(drop=True)
+hpc_rul = res["Cycles_to_HPC_SV"].reset_index(drop=True)
+T3_res = res["Sensed_T3"]
+T45_res = res["Sensed_T45"]
+
+
+# %%
+# Ricerca operativa con minimize locale
+## Valori iniziali
+a_hpt = 1000
+a_hpc = -1000
+
+## Vincoli sulle variabili
 bounds = [
     (None, None),
-    (0, 400)
+    (0, None)
 ]
 
 result_hpt = minimize(
-    objective_full_hpt,
-    x0=(a_hpt,w_hpt),
-    args=(res, df),
-    method="L-BFGS-B",
-    bounds=bounds
+    objective, 
+    x0=a_hpt, 
+    args=(T3_res, T45_res, hpt_rul),
+    method='Nelder-Mead'
 )
 
 result_hpc = minimize(
-    objective_full_hpc,
-    x0=(a_hpt,w_hpc),
-    args=(res, df),
-    method="L-BFGS-B",
-    bounds=bounds
+    objective, 
+    x0=a_hpc, 
+    args=(T3_res, T45_res, hpc_rul),
+    method='Nelder-Mead'
 )
 
-# result_hpt = minimize(
-#     objective, 
-#     x0=a_hpt, 
-#     args=(ST3_res, ST45_res, hpt_rul),
-#     method='Nelder-Mead'
-# )
-
-# result_hpc = minimize(
-#     objective, 
-#     x0=a_hpc, 
-#     args=(ST3_res, ST45_res, hpc_rul),
-#     method='Nelder-Mead'
-# )
-
-a_hpt, w_hpt = result_hpt.x
-a_hpc, w_hpc = result_hpc.x
-
+a_hpt = result_hpt.x[0]
+a_hpc = result_hpc.x[0]
 
 print(f"alpha_hpt:{a_hpt}")
-print(f"alpha_hpc:{a_hpc}")
-print("")
-print(f"window_hpt:{w_hpt}")
-print(f"window_hpc:{w_hpc}")
+print(f"alpha_hpt:{a_hpc}")
 
-hi_hpt = HI(res, a_hpt, w_hpt)
-hi_hpc = HI(res, a_hpc, w_hpc)
-# Media dell'health index con window diversa
-window = 50
-step = 1
-hi_hpt = hi_hpt.rolling(window, step).mean()
-hi_hpc = hi_hpc.rolling(window, step).mean()
-error_hpt = np.sum(hi_hpt - hpt_rul)
-error_hpc = np.sum(hi_hpc - hpc_rul)
+# %%
+from scipy.optimize import differential_evolution
 
+bounds = [
+    (-1000, 1000),  # Alpha
+    (-1000, 1000),  # Beta
+]
+
+result_hpt = differential_evolution(
+    objective_beta,      
+    bounds=bounds,           
+    args=(T3_res, T45_res, hpt_rul), 
+    strategy='best1bin',     
+    maxiter=200,                # generazioni
+    popsize=500,                
+    workers=-1,
+    tol=0,                      # Tolleranza 
+)
+
+result_hpc = differential_evolution(
+    objective_beta,      
+    bounds=bounds,           
+    args=(T3_res, T45_res, hpc_rul), 
+    strategy='best1bin',     
+    maxiter=200,                # generazioni 
+    popsize=500,              
+    workers=-1,
+    tol=0,                      # Tolleranza
+)
+
+a_hpt, b_hpt = result_hpt.x
+print(f"MIGLIOR RISULTATO TROVATO:")
+print(f"Alpha: {a_hpt}")
+print(f"Beta: {b_hpt}")
+
+a_hpc, b_hpc = result_hpc.x
+print(f"MIGLIOR RISULTATO TROVATO:")
+print(f"Alpha: {a_hpc}")
+print(f"Beta: {b_hpc}")
+
+# %%
+from scipy.optimize import differential_evolution
+
+bounds = [
+    (-1000, 1000),  # a
+    (-1000, 1000),  # b
+    (-1000, 1000),  # c
+    (-1000, 1000),  # d
+    (-1000, 1000),  # e
+    (-1000, 1000),  # f
+    (-1000, 1000),  # g
+    (-1000, 1000),  # h
+]
+
+def HIE(params, vars):
+    #return np.sum([-params[i]*vars.iloc[:,i] for i in range(0, 8)])
+    return vars.dot(-np.array(params))
+
+    
+def objective_experimental(params, vars, RUL):
+    hi = HIE(params, vars)
+    RUL = RUL.dropna()
+    corr = stats.pearsonr(RUL,hi)
+    return -corr[0]
+
+
+result_hpt = differential_evolution(
+    objective_experimental,      
+    bounds=bounds,           
+    args=(res[degradation_vars], hpt_rul), 
+    strategy='best1bin',     
+    maxiter=200,                # generazioni
+    popsize=500,                
+    workers=-1,
+    tol=0,                      # Tolleranza 
+)
+
+result_hpc = differential_evolution(
+    objective_experimental,      
+    bounds=bounds,           
+    args=(res[degradation_vars], hpc_rul), 
+    strategy='best1bin',     
+    maxiter=200,                # generazioni 
+    popsize=500,              
+    workers=-1,
+    tol=0,                      # Tolleranza
+)
+
+coefs_hpt = result_hpt.x
+print(f"MIGLIOR RISULTATO TROVATO:")
+for c in coefs_hpt:
+    print(f"{c}")
+
+coefs_hpc = result_hpc.x
+print(f"MIGLIOR RISULTATO TROVATO:")
+for c in coefs_hpc:
+    print(f"{c}")
+
+
+
+# %%
+
+hi_hpt = HIE(coefs_hpt, res[degradation_vars])
+hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+
+fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
+ax0_rul = axs[0].twinx()
+ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
+ax1_rul = axs[1].twinx()
+ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+fig.tight_layout()
+fig.show()
+
+
+# %%
+#hi_hpt = HI(T3_res, T45_res, a_hpt)
+#hi_hpt = -a_hpt*T3_res - b_hpt*T45_res
+hi_hpt = HIE(coefs_hpt, hpt_rul)
+#hi_hpc = HI(T3_res, T45_res, a_hpc)
+#hi_hpc = -a_hpc*T3_res - b_hpc*T45_res
+hi_hpc = HIE(coefs_hpc, hpc_rul)
+# error_hpt = np.sum(hi_hpt - hpt_rul)
+# error_hpc = np.sum(hi_hpc - hpc_rul)
 
 fig, axs = plt.subplots(1, 2, figsize=(16, 6))
 axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
