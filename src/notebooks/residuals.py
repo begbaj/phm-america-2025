@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.10.19)
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -68,13 +68,14 @@ from sympy import O
 
 
 df = u.load_training()()
+cycles = ['Cycles_Since_New']
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
 degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
 
 df = pp.remove_outliers(df, u.SENSORS)
 df = pp.missingfill(df).dropna()
 
-testing_esn = 102
+testing_esn = 103
 test_data = df[df["ESN"] == testing_esn].reset_index()
 X_test = test_data[operating_vars]
 Y_test = test_data[degradation_vars]
@@ -87,6 +88,11 @@ Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
 twes = TWE(Y_pred, Y_test, 10, 3)
 
 res = Y_test - Y_pred
+res[cycles] = test_data[cycles]
+agg_logic = {col: 'median' for col in degradation_vars}
+# agg_logic.update({col: 'first' for col in cycles})
+# Creo i residui "Engine-Level Residuals" facendo la mediana tra gli snapshot
+res = res.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
 res = pp.remove_outliers(res, u.SENSORS, threshold=3)
 res = res.dropna()
 
@@ -106,7 +112,14 @@ res = res.dropna()
 # fig.show()
 ## finisce qua
 
-def HI(T3_res, T45_res, alpha):
+# Abbiamo calcolato alpha per ati normalizzati, bisogna normalizzare anche qui!
+def HI(res, alpha, wind):
+    wind = int(np.round(wind))
+    step = max(1, int(wind // 5))
+    res_smooth = res.rolling(window=wind, step=step, min_periods=1).median().dropna()
+    res_smooth = res_smooth - res_smooth.median()
+    T3_res = minmax(res, "Sensed_T3")
+    T45_res = minmax(res, "Sensed_T45")
     return -alpha * T3_res - T45_res
 
 def minmax(df, column):
@@ -164,21 +177,30 @@ def objective_full_hpc(params, res, df):
 # ST3_res = minmax(res, "Sensed_T3")
 # ST45_res = minmax(res, "Sensed_T45")
 
-# hpt_rul = scaled.loc[df["ESN"] == testing_esn, "Cycles_to_HPT_SV"].reset_index(drop=True)
-# hpc_rul = scaled.loc[df["ESN"] == testing_esn, "Cycles_to_HPC_SV"].reset_index(drop=True)
-# T3_res = res["Sensed_T3"]
-# T45_res = res["Sensed_T45"]
+agg_logic = {col: 'median' for col in degradation_vars}
+# agg_logic.update({col: 'first' for col in cycles})
+# Creo i residui "Engine-Level Residuals" facendo la mediana tra gli snapshot
+
+hpt_rul_df = df.loc[df["ESN"] == testing_esn, ["Cycles_Since_New", "Cycles_to_HPT_SV"]]
+hpc_rul_df = df.loc[df["ESN"] == testing_esn, ["Cycles_Since_New", "Cycles_to_HPC_SV"]]
+
+hpt_rul = hpt_rul_df.groupby('Cycles_Since_New', as_index=False).agg('first').reset_index(drop=True)
+hpt_rul = hpt_rul.drop(columns=['Cycles_Since_New'])
+hpc_rul = hpc_rul_df.groupby('Cycles_Since_New', as_index=False).agg('first').reset_index(drop=True)
+hpc_rul = hpc_rul.drop(columns=['Cycles_Since_New'])
 
 
 a_hpt = -2.75
 a_hpc = 9
 
-w_hpt = 3900
-w_hpc = 370
+# Cambiando questo valore, non cambia nulla
+# inoltre, la funzione minimize non ne ottimizza il valore, cambia solo alpha
+w_hpt = 10
+w_hpc = 100
 
 bounds = [
     (None, None),
-    (0, None)
+    (0, 400)
 ]
 
 result_hpt = minimize(
@@ -211,20 +233,23 @@ result_hpc = minimize(
 #     method='Nelder-Mead'
 # )
 
-a_hpt = result_hpt.x[0]
-a_hpc = result_hpc.x[0]
+a_hpt, w_hpt = result_hpt.x
+a_hpc, w_hpc = result_hpc.x
 
-w_hpt = result_hpt.x[1]
-w_hpc = result_hpc.x[1]
 
 print(f"alpha_hpt:{a_hpt}")
-print(f"alpha_hpt:{a_hpt}")
+print(f"alpha_hpc:{a_hpc}")
 print("")
-print(f"alpha_hpc:{a_hpc}")
-print(f"alpha_hpc:{a_hpc}")
+print(f"window_hpt:{w_hpt}")
+print(f"window_hpc:{w_hpc}")
 
-hi_hpt = HI(T3_res, T45_res, a_hpt)
-hi_hpc = HI(T3_res, T45_res, a_hpc)
+hi_hpt = HI(res, a_hpt, w_hpt)
+hi_hpc = HI(res, a_hpc, w_hpc)
+# Media dell'health index con window diversa
+window = 50
+step = 1
+hi_hpt = hi_hpt.rolling(window, step).mean()
+hi_hpc = hi_hpc.rolling(window, step).mean()
 error_hpt = np.sum(hi_hpt - hpt_rul)
 error_hpc = np.sum(hi_hpc - hpc_rul)
 
