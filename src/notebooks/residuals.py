@@ -15,19 +15,24 @@
 # ---
 
 # %%
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import pulp
-from sklearn.linear_model import LinearRegression
+from numpy import sign
+from pyparsing import line
 from scipy.optimize import minimize
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression
+from sympy import O, deg
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pulp
 import scipy.optimize as optimize
 import scipy.stats as stats
-from pyparsing import line
-from sympy import O, deg
+
 # %load_ext autoreload
 # %autoreload 2
 from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
+
 
 # %%
 def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
@@ -98,14 +103,13 @@ def objective_beta(params, T3, T45, RUL):
 
 
 # %%
-from numpy import sign
-
-
 model_i = 0
 testing_esn = 102
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
 degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
 
+
+# %%
 # caricamento e preprocessamento iniziale
 df = u.load_training()()
 df = pp.remove_outliers(df, u.SENSORS)
@@ -156,13 +160,14 @@ res = res.dropna()
 
 hpt_rul = res["Cycles_to_HPT_SV"].reset_index(drop=True)
 hpc_rul = res["Cycles_to_HPC_SV"].reset_index(drop=True)
+ww_rul = res["Cycles_to_WW"].reset_index(drop=True)
 T3_res = res["Sensed_T3"]
 T45_res = res["Sensed_T45"]
 
+# %% [markdown]
+# # Ricerca di a_hpt e a_hpc LOCALI
 
 # %%
-# Ricerca operativa con minimize locale
-## Valori iniziali
 a_hpt = 1000
 a_hpc = -1000
 
@@ -191,6 +196,9 @@ a_hpc = result_hpc.x[0]
 
 print(f"alpha_hpt:{a_hpt}")
 print(f"alpha_hpt:{a_hpc}")
+
+# %% [markdown]
+# # Ricerca di a_hpt/b_hpt e a_hpc/b_hpc GLOBALI
 
 # %%
 from scipy.optimize import differential_evolution
@@ -231,6 +239,9 @@ a_hpc, b_hpc = result_hpc.x
 print(f"MIGLIOR RISULTATO TROVATO:")
 print(f"Alpha: {a_hpc}")
 print(f"Beta: {b_hpc}")
+
+# %% [markdown]
+# # Ricerca di a,b,c,d,e,f,g globali combinazione lineare di tutti i sensori
 
 # %%
 from scipy.optimize import differential_evolution
@@ -280,6 +291,17 @@ result_hpc = differential_evolution(
     tol=0,                      # Tolleranza
 )
 
+result_ww = differential_evolution(
+    objective_experimental,      
+    bounds=bounds,           
+    args=(res[degradation_vars], ww_rul), 
+    strategy='best1bin',     
+    maxiter=200,                # generazioni 
+    popsize=500,              
+    workers=-1,
+    tol=0,                      # Tolleranza
+)
+
 coefs_hpt = result_hpt.x
 print(f"MIGLIOR RISULTATO TROVATO:")
 for c in coefs_hpt:
@@ -290,23 +312,34 @@ print(f"MIGLIOR RISULTATO TROVATO:")
 for c in coefs_hpc:
     print(f"{c}")
 
+coefs_ww = result_ww.x
+print(f"MIGLIOR RISULTATO TROVATO:")
+for c in coefs_ww:
+    print(f"{c}")
 
 
 # %%
-
+# PLOTTING RISULTATO
 hi_hpt = HIE(coefs_hpt, res[degradation_vars])
 hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+hi_ww  = HIE(coefs_ww, res[degradation_vars])
 
-fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+fig, axs = plt.subplots(1, 3, figsize=(30, 6))
 axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
 ax0_rul = axs[0].twinx()
 ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
 axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
 ax1_rul = axs[1].twinx()
 ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
+ax2_rul = axs[2].twinx()
+ax2_rul.plot(ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
 fig.tight_layout()
 fig.show()
 
+
+# %% [markdown]
+# # Plotting dei primi due metodi
 
 # %%
 #hi_hpt = HI(T3_res, T45_res, a_hpt)
@@ -314,7 +347,7 @@ fig.show()
 hi_hpt = HIE(coefs_hpt, hpt_rul)
 #hi_hpc = HI(T3_res, T45_res, a_hpc)
 #hi_hpc = -a_hpc*T3_res - b_hpc*T45_res
-hi_hpc = HIE(coefs_hpc, hpc_rul)
+hi_hpt = HIE(coefs_hpt, hpc_rul)
 # error_hpt = np.sum(hi_hpt - hpt_rul)
 # error_hpc = np.sum(hi_hpc - hpc_rul)
 
@@ -322,7 +355,7 @@ fig, axs = plt.subplots(1, 2, figsize=(16, 6))
 axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
 ax0_rul = axs[0].twinx()
 ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
+axs[1].plot(hi_hpt, color='tab:green', label='Health Index (HPC)')
 ax1_rul = axs[1].twinx()
 ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
 fig.tight_layout()
@@ -343,4 +376,317 @@ fig.show()
 # print(df)
 # plt.figure()
 # plt.plot(df["Cycles_since_new"], hi_target)
-# plt.show()
+# plt.show() 
+
+# %% [markdown]
+# ### Classificazione dell'errore con LightGBM per HPC, HPT e WW
+
+# %%
+hi_hpc = HIE(coefs_hpc, res[degradation_vars]) 
+regr = LinearRegression()
+X_base = hi_hpc.values.reshape(-1,1)
+regr.fit(X_base, hpc_rul)
+pred_rul = regr.predict(X_base)
+gap_true = hpc_rul - pred_rul
+
+window_size = 800
+
+def get_rolling_slope_intercept(series, window):
+    slopes = []
+    intercepts = []
+    for i in range(len(series)):
+        if i < window:
+            slopes.append(0)
+            intercepts.append(0)
+        else:
+            y = series.iloc[i-window:i].values
+            x = np.arange(window)
+            # Fit polinomiale di grado 1 (retta) -> ritorna [slope, intercept]
+            poly = np.polyfit(x, y, 1)
+            slopes.append(poly[0])
+            intercepts.append(poly[1])
+    return np.array(slopes), np.array(intercepts)
+
+feat_slope, feat_intercept = get_rolling_slope_intercept(hi_hpc, window_size)
+
+X_lgbm = pd.DataFrame({
+    'HI': hi_hpc.values,         # Valore attuale HI
+    'Slope': feat_slope,         # Pendenza locale
+    'Intercept': feat_intercept  # Intercetta locale
+})
+
+mask = X_lgbm['Slope'] != 0
+X_lgbm = X_lgbm[mask]
+gap_true_masked = gap_true[mask]
+base_pred_masked = pred_rul[mask]
+rul_target_masked = hpc_rul[mask]
+
+lgbm = lgb.LGBMRegressor(n_estimators=20000, learning_rate=0.001)
+lgbm.fit(X_lgbm, gap_true_masked)
+pred_gap = lgbm.predict(X_lgbm)
+pred_rul = base_pred_masked + pred_gap
+
+plt.figure(figsize=(10, 6))
+plt.scatter(gap_true_masked, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
+min_val = min(gap_true_masked.min(), pred_gap.min())
+max_val = max(gap_true_masked.max(), pred_gap.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
+
+plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
+plt.xlabel('True Gap Difference')
+plt.ylabel('Predicted Gap Difference')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+plt.figure(figsize=(15, 6))
+
+plt.plot(rul_target_masked.index, rul_target_masked, 'k--', linewidth=2, label='True RUL')
+plt.plot(rul_target_masked.index, base_pred_masked, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
+plt.plot(rul_target_masked.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
+
+plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
+plt.xlabel('Cycles')
+plt.ylabel('RUL')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# %%
+hit = HIE(coefs_hpt, res[degradation_vars]) 
+regr = LinearRegression()
+X_base = hit.values.reshape(-1,1)
+regr.fit(X_base, hpt_rul)
+pred_rul = regr.predict(X_base)
+gap_true = hpt_rul - pred_rul
+
+window_size = 800
+
+def get_rolling_slope_intercept(series, window):
+    slopes = []
+    intercepts = []
+    for i in range(len(series)):
+        if i < window:
+            slopes.append(0)
+            intercepts.append(0)
+        else:
+            y = series.iloc[i-window:i].values
+            x = np.arange(window)
+            # Fit polinomiale di grado 1 (retta) -> ritorna [slope, intercept]
+            poly = np.polyfit(x, y, 1)
+            slopes.append(poly[0])
+            intercepts.append(poly[1])
+    return np.array(slopes), np.array(intercepts)
+
+feat_slope, feat_intercept = get_rolling_slope_intercept(hi_hpt, window_size)
+
+X_lgbm = pd.DataFrame({
+    'HI': hi_hpt.values,         # Valore attuale HI
+    'Slope': feat_slope,         # Pendenza locale
+    'Intercept': feat_intercept  # Intercetta locale
+})
+
+
+mask = X_lgbm['Slope'] != 0
+X_lgbm = X_lgbm[mask]
+gap_true_masked = gap_true[mask]
+base_pred_masked = pred_rul[mask]
+rul_target_masked = hpt_rul[mask]
+
+lgbm = lgb.LGBMRegressor(n_estimators=20000, learning_rate=0.001)
+lgbm.fit(X_lgbm, gap_true_masked)
+pred_gap = lgbm.predict(X_lgbm)
+pred_rul = base_pred_masked + pred_gap
+
+plt.figure(figsize=(10, 6))
+plt.scatter(gap_true_masked, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
+min_val = min(gap_true_masked.min(), pred_gap.min())
+max_val = max(gap_true_masked.max(), pred_gap.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
+
+plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
+plt.xlabel('True Gap Difference')
+plt.ylabel('Predicted Gap Difference')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+plt.figure(figsize=(15, 6))
+
+plt.plot(rul_target_masked.index, rul_target_masked, 'k--', linewidth=2, label='True RUL')
+plt.plot(rul_target_masked.index, base_pred_masked, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
+plt.plot(rul_target_masked.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
+
+plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
+plt.xlabel('Cycles')
+plt.ylabel('RUL')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+# %%
+hit = HIE(coefs_ww, res[degradation_vars]) 
+regr = LinearRegression()
+X_base = hit.values.reshape(-1,1)
+regr.fit(X_base, ww_rul)
+pred_rul = regr.predict(X_base)
+gap_true = ww_rul - pred_rul
+
+window_size = 1000
+
+def get_rolling_slope_intercept(series, window):
+    slopes = []
+    intercepts = []
+    for i in range(len(series)):
+        if i < window:
+            slopes.append(0)
+            intercepts.append(0)
+        else:
+            y = series.iloc[i-window:i].values
+            x = np.arange(window)
+            # Fit polinomiale di grado 1 (retta) -> ritorna [slope, intercept]
+            poly = np.polyfit(x, y, 1)
+            slopes.append(poly[0])
+            intercepts.append(poly[1])
+    return np.array(slopes), np.array(intercepts)
+
+feat_slope, feat_intercept = get_rolling_slope_intercept(hi_ww, window_size)
+
+X_lgbm = pd.DataFrame({
+    'HI': hi_ww.values,         # Valore attuale HI
+    'Slope': feat_slope,         # Pendenza locale
+    'Intercept': feat_intercept  # Intercetta locale
+})
+
+
+mask = X_lgbm['Slope'] != 0
+X_lgbm = X_lgbm[mask]
+gap_true_masked = gap_true[mask]
+base_pred_masked = pred_rul[mask]
+rul_target_masked = ww_rul[mask]
+
+lgbm = lgb.LGBMRegressor(n_estimators=20000, learning_rate=0.001)
+lgbm.fit(X_lgbm, gap_true_masked)
+pred_gap = lgbm.predict(X_lgbm)
+pred_rul = base_pred_masked + pred_gap
+
+plt.figure(figsize=(10, 6))
+plt.scatter(gap_true_masked, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
+min_val = min(gap_true_masked.min(), pred_gap.min())
+max_val = max(gap_true_masked.max(), pred_gap.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
+
+plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
+plt.xlabel('True Gap Difference')
+plt.ylabel('Predicted Gap Difference')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+plt.figure(figsize=(30, 6))
+
+plt.plot(rul_target_masked.index, rul_target_masked, 'k--', linewidth=2, label='True RUL')
+plt.plot(rul_target_masked.index, base_pred_masked, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
+plt.plot(rul_target_masked.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
+
+plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
+plt.xlabel('Cycles')
+plt.ylabel('RUL')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+# %% [markdown]
+# # Testing
+
+# %%
+def time_weighted_error(y_true, y_pred, alpha=0.02, beta=1):
+  """Returns the weighted squared error for an array of predictions."""
+
+  error = y_pred-y_true
+
+  weight = np.where(
+  error >= 0,
+  2 / (1 + alpha * y_true),
+  1 / (1 + alpha * y_true)
+  )
+  return weight * (error ** 2)*beta
+
+def score_submitted_result(df_true, df_pred):
+  '''Calculate the score for a single team's submission'''
+
+  # Extract the targets
+  true_WW = df_true.Cycles_to_WW.values
+  true_HPC = df_true.Cycles_to_HPC_SV.values
+  true_HPT = df_true.Cycles_to_HPT_SV.values
+
+  pred_WW = df_pred.Cycles_to_WW.values
+  pred_HPC = df_pred.Cycles_to_HPC_SV.values
+  pred_HPT = df_pred.Cycles_to_HPT_SV.values
+
+  # WW score
+  alpha = 0.01
+  beta = 1/float(max(true_WW))
+  score_WW = time_weighted_error(true_WW, pred_WW, alpha, beta)
+  # Take the mean of the array
+  score_WW = np.mean(score_WW)
+
+  # HPC score
+  alpha = 0.01
+  beta = 2/float(max(true_HPC))
+  score_HPC = time_weighted_error(true_HPC, pred_HPC, alpha, beta)
+  # Take the mean of the array
+  score_HPC = np.mean(score_HPC)
+
+  # HTC score
+  alpha = 0.01
+  beta = 2/float(max(true_HPT))
+  score_HPT = time_weighted_error(true_HPT, pred_HPT, alpha, beta)
+  # Take the mean of the array
+  score_HPT = np.mean(score_HPT)
+
+  # Average score
+  score = np.mean([score_WW, score_HPC, score_HPT])
+
+  return score
+
+# %%
+# coefs_hpt
+# coefs_hpc
+# coefs_ww
+
+
+
+model_i = 0
+
+operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+
+df = u.load_testing()()
+# df = pp.remove_outliers(df, u.SENSORS)
+# df = pp.missingfill(df).dropna()
+model = models[model_i]['model']
+
+engines = {}
+for eng in df["ESN"].unique:
+    engines[eng] = {}
+    test_data = df[df["ESN"] == eng].reset_index()
+
+    X_test = test_data[operating_vars]
+    Y_test = test_data[degradation_vars]
+    Y_pred = model.predict(X_test)
+
+    res = Y_test - Y_pred
+    test_data[degradation_vars] = res
+    res = test_data.dropna()
+
+    engines[eng]["X_test"] = X_test.copy()
+    engines[eng]["Y_test"] = Y_test.copy()
+    engines[eng]["Y_pred"] = Y_pred.copy()
+    engines[eng]["res"] = res.copy()
+
+hi_hpt = HIE(coefs_hpt, res[degradation_vars])
+hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+hi_ww  = HIE(coefs_ww, res[degradation_vars])
