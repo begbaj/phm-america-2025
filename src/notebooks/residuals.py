@@ -122,6 +122,7 @@ Y_test = test_data[degradation_vars]
 
 # training modelli con shift
 models = train_models(df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])], operating_vars, degradation_vars)
+# %store models
 
 # selezione modello
 model = models[model_i]['model']
@@ -302,10 +303,15 @@ result_ww = differential_evolution(
     tol=0,                      # Tolleranza
 )
 
+# %store result_hpt
+# %store result_hpc
+# %store result_ww
+
 coefs_hpt = result_hpt.x
 print(f"MIGLIOR RISULTATO TROVATO:")
 for c in coefs_hpt:
     print(f"{c}")
+
 
 coefs_hpc = result_hpc.x
 print(f"MIGLIOR RISULTATO TROVATO:")
@@ -317,6 +323,40 @@ print(f"MIGLIOR RISULTATO TROVATO:")
 for c in coefs_ww:
     print(f"{c}")
 
+# %store coefs_hpt
+# %store coefs_hpc
+# %store coefs_ww
+
+
+# %%
+# oppure avviare semplicemente questo blocco
+
+coefs_hpt = (102.54752751902083,
+            -12.215920703632944,
+            -13.937522163047133,
+            -4.187395005088061,
+            50.41175875590375,
+            47.642362206135715,
+            -925.3978926377761,
+            -13.188043715234654)
+
+coefs_hpc = (363.09492555179804,
+            2.0186697716587463,
+            13.743038965485157,
+            11.855221907006188,
+            69.72211072964963,
+            0.42476560122623985,
+            -989.8022299435106,
+            28.63715373059266)
+
+coefs_hpt = ( 850.7167357577274,
+            -15.072134101084401,
+            -24.57278901752793,
+            102.1439502693563,
+            -119.99243468799672,
+            11.396869998772502,
+            -917.4479008347435,
+            -24.27692144851878)
 
 # %%
 # PLOTTING RISULTATO
@@ -670,7 +710,7 @@ df = u.load_testing()()
 model = models[model_i]['model']
 
 engines = {}
-for eng in df["ESN"].unique:
+for eng in df["ESN"].unique():
     engines[eng] = {}
     test_data = df[df["ESN"] == eng].reset_index()
 
@@ -687,6 +727,11 @@ for eng in df["ESN"].unique:
     engines[eng]["Y_pred"] = Y_pred.copy()
     engines[eng]["res"] = res.copy()
 
-hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-hi_ww  = HIE(coefs_ww, res[degradation_vars])
+    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
+    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+    hi_ww  = HIE(coefs_ww, res[degradation_vars])
+
+    engines[eng]["hi_hpt"] = hi_hpt
+    engines[eng]["hi_hpc"] = hi_hpc
+    engines[eng]["hi_ww"] = hi_ww
+
