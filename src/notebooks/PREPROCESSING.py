@@ -8,7 +8,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.14.2)
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -169,7 +169,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 
 # --- CONFIGURAZIONE FINESTRA ---
-WINDOW_SIZE = 5000 # Finestra più piccola per maggiore reattività
+WINDOW_SIZE = 250 # Finestra più piccola per maggiore reattività
 
 # --- STEP 1: Feature Engineering con Finestra Piccola ---
 # Calcoliamo medie mobili su una finestra ridotta per i sensori grezzi
@@ -181,14 +181,14 @@ for col in sensor_cols:
     )
 
 # Reset e Ciclo Relativo
-dff['is_reset'] = dff.groupby('esn')['RUL'].diff() > 0
+dff['is_reset'] = dff.groupby('esn')['to_next_hpc_cycle'].diff() > 0
 dff['life_id'] = dff.groupby('esn')['is_reset'].cumsum()
 dff['relative_cycle'] = dff.groupby(['esn', 'life_id']).cumcount()
 
 # --- STEP 2: Preparazione Dati ---
 # Usiamo le nuove feature a finestra corta
 features = [f"{col}_smooth_short" for col in sensor_cols] + ["relative_cycle"]
-target = "RUL"
+target = "to_next_hpc_cycle"
 
 train_df = dff[dff["esn"] != 104].dropna()
 test_df = dff[dff["esn"] == 104].dropna()
@@ -230,7 +230,7 @@ from sklearn.preprocessing import StandardScaler
 # --- STEP 1: Definizione Feature e Target ---
 # Usiamo esattamente quello che hai chiesto
 features = ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2", "relative_cycle"]
-target = "to_next_hpc_cycle"
+target = "to_next_hpt_cycle"
 
 # Creiamo l'identificativo dei chunk per non fare confusione tra le vite
 # Un chunk finisce e ne inizia un altro quando la RUL aumenta (reset)
@@ -257,7 +257,7 @@ X_test = scaler.transform(X_test_raw)
 
 # --- STEP 4: Random Forest Regressor ---
 # Usiamo un numero generoso di alberi per catturare bene i chunk
-rf_model = RandomForestRegressor(n_estimators=200, max_depth=15, random_state=42, n_jobs=-1)
+rf_model = RandomForestRegressor(n_estimators=2000, max_depth=15, random_state=42, n_jobs=-1)
 rf_model.fit(X_train, y_train)
 
 # --- STEP 5: Predizione ---
@@ -278,9 +278,9 @@ resets = test_df[test_df['is_reset']].index
 for i, r in enumerate(resets):
     plt.axvline(x=r, color='green', linestyle=':', label='Reset / Nuovo Chunk' if i == 0 else "")
 
-plt.title('Predizione RUL per Chunk (Motore 104) - Random Forest')
+plt.title('Predizione RUL - Motore 104 - Random Forest')
 plt.xlabel('Indice Temporale')
-plt.ylabel('Cicli al prossimo HPC')
+plt.ylabel('Cicli al prossimo HPT')
 plt.legend()
 plt.grid(True, alpha=0.2)
 plt.show()
@@ -301,7 +301,7 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import mean_absolute_error
 
 # --- 1. OTTIMIZZAZIONE MEMORIA E SELEZIONE ---
-target = "to_next_hpc_cycle"
+target = "to_next_hpt_cycle"
 features_list = list(tot['feature']) # Solo le feature indicate da te
 cols_to_use = list(set(['esn', target] + features_list))
 
@@ -384,10 +384,10 @@ y_pred_smooth = np.maximum(0, y_pred_smooth)
 # --- 7. VISUALIZZAZIONE ---
 plt.figure(figsize=(15, 6))
 plt.plot(y_test_real, label='RUL Reale', color='royalblue', alpha=0.5, linewidth=2)
-plt.plot(y_pred_smooth, label='RUL Predetta (XGB + PCA)', color='crimson', linestyle='--')
+plt.plot(y_pred_smooth, label='RUL Predetta', color='crimson', linestyle='--')
 
-plt.title('RUL Ottimizzata (Motore 104) - Solo Feature Selezionate + PCA')
-plt.ylabel('Cicli al prossimo HPC')
+plt.title('RUL Ottimizzata - Motore 104 - PCA + XGB')
+plt.ylabel('Cicli al prossimo HPT')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.show()
