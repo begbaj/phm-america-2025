@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025 (3.10.19)
 #     language: python
 #     name: python3
 # ---
@@ -133,29 +133,31 @@ Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
 # residui
 res = Y_test - Y_pred
 
-# finestra smoothing dei residui
-window = 100
-step = 1
 # integrazione residui sul dataset originale
 res = pp.remove_outliers(res, u.SENSORS, threshold=3)
 test_data[degradation_vars] = res
-res = res.dropna()
+res = test_data.dropna()
+
+## QUESTO è il plot quello che tipo deve sembrare quello dei koreani
+# fig, axs = plt.subplots(2,3, figsize=(15,8))
+# for i, ax in enumerate(axs.flat):
+#     if isinstance(ax, plt.Axes):
+#         ax.plot(res.iloc[:,i], linewidth=1)
+#         ax.set_title(degradation_vars[i])
+#         ax.set_ylabel("Residuals")
+#         ax.set_xlabel(f"{res.iloc[:,i].index.name}_res")
+#         ax.grid()
+# fig.subplots_adjust(hspace=0.4, wspace=0.4)
+# fig.show()
+## finisce qua
+
+# finestra smoothing dei residui
+window = 370
+step = window//5
+
 res = res.rolling(window, step).median()
 res = median_norm(res)
 res = res.dropna()
-
-## QUESTO è il plot quello che tipo deve sembrare quello dei koreani
-fig, axs = plt.subplots(2,4, figsize=(15,8))
-for i, ax in enumerate(axs.flat):
-    if isinstance(ax, plt.Axes):
-        ax.plot(res.iloc[:,i], linewidth=1)
-        ax.set_title(degradation_vars[i])
-        ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
-        ax.grid()
-fig.subplots_adjust(hspace=0.4, wspace=0.4)
-fig.show()
-# finisce qua
 
 hpt_rul = res["Cycles_to_HPT_SV"].reset_index(drop=True)
 hpc_rul = res["Cycles_to_HPC_SV"].reset_index(drop=True)
@@ -194,7 +196,7 @@ a_hpt = result_hpt.x[0]
 a_hpc = result_hpc.x[0]
 
 print(f"alpha_hpt:{a_hpt}")
-print(f"alpha_hpc:{a_hpc}")
+print(f"alpha_hpt:{a_hpc}")
 
 # %% [markdown]
 # # Ricerca di a_hpt/b_hpt e a_hpc/b_hpc GLOBALI
@@ -347,7 +349,7 @@ coefs_hpc = (363.09492555179804,
             -989.8022299435106,
             28.63715373059266)
 
-coefs_hpt = ( 850.7167357577274,
+coefs_ww = ( 850.7167357577274,
             -15.072134101084401,
             -24.57278901752793,
             102.1439502693563,
