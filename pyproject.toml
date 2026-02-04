@@ -89,6 +89,7 @@ dependencies = [
   "pandocfilters==1.5.1",
   "parso==0.8.5",
   "pexpect==4.9.0",
+  "pickleshare>=0.7.5",
   "pillow==12.0.0",
   "platformdirs==4.5.1",
   "plotly==6.5.0",
