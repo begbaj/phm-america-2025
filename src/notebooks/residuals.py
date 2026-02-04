@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.10.19)
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -153,7 +153,9 @@ from xgboost import train
 
 df = u.load_training()()
 df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
+# df = pp.missingfill(df).dropna()
+df = df.ffill()
+df = df.bfill()
 print(df.columns)
 
 # Per fare il training direttamente con gli snapshot di un ciclo collassati
@@ -185,7 +187,7 @@ print(X_test.shape, Y_test.shape)
 # training modelli con shift
 # models = train_models(df, operating_vars, degradation_vars)
 model = train_model(X_train, Y_train)
-# %store models
+# # %store models
 
 # selezione modello
 # model = models[model_i]['model']
@@ -718,7 +720,9 @@ degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Se
 df = u.load_testing(50)
 print(df.shape)
 df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
+# df = pp.missingfill(df).dropna()
+df = df.ffill()
+df = df.bfill()
 # model = models[model_i]['model']
 
 engines = {}
@@ -808,67 +812,6 @@ for eng in df["ESN"].unique():
 
 # %store engines
 
-
-# %%
-# "DEBUGGING"
-# Previsioni solo con regressione lineare
-model_i = 0
-model = models[model_i]['model']
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-
-
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-
-# Per lavorare con i dati a livello di ciclo
-managed_cols = set(degradation_vars) | set(operating_vars)
-other_cols = [col for col in df.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
-agg_logic.update({col: 'median' for col in operating_vars})
-agg_logic.update({col: 'first' for col in other_cols})
-
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index().copy()
-    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
-    rolling_size = 300
-    step = 1
-    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_pred = model.predict(X_test)
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-    window = 370
-    step = 1
-    res = res.rolling(window, step).mean()
-    res = median_norm(res)
-    res = res.dropna()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww = HIE(coefs_ww, res[degradation_vars])
-
-
-    fig, axs = plt.subplots(1, 3, figsize=(16, 6))
-    axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-    ax0_rul = axs[0].twinx()
-    ax0_rul.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-    ax1_rul = axs[1].twinx()
-    ax1_rul.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    axs[2].plot(hi_ww, color='tab:green', label='Health Index (WW)')
-    ax2_rul = axs[2].twinx()
-    ax2_rul.plot(test_data["Cycles_to_WW"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    fig.tight_layout()
-    fig.show()
 
 # %%
 # Prova di Agni
