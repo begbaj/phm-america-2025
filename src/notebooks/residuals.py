@@ -715,7 +715,8 @@ model_i = 0
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
 degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
 
-df = u.load_testing(50)
+# df = u.load_testing(50)
+df = u.load_training()()
 print(df.shape)
 df = pp.remove_outliers(df, u.SENSORS)
 df = pp.missingfill(df).dropna()
