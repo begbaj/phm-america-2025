@@ -34,6 +34,8 @@ from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 
 
 # %%
+
+# %%
 def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
     X_train = df[operating_vars]
     Y_train = df[degradation_vars]
@@ -145,7 +147,7 @@ test_data = df[df["ESN"] == testing_esn].reset_index()
 X_test = test_data[operating_vars]
 Y_test = test_data[degradation_vars]
 df = df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])]
-df = df.groupby(["ESN", "Snapshot"]).median().reset_index()
+df = df.groupby(["ESN", "Cycles_Since_New"]).median().reset_index()
 
 # training modelli con shift
 models = train_models(df, operating_vars, degradation_vars)
