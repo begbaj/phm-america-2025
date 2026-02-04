@@ -13,7 +13,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from tools import plotting
-from tools.config import DATA_PATH, PLOT_PATH
+from tools.config import DATA_TRAINING_DATA, PLOT_PATH, DATA_TESTING_PATH
 from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 from types import FunctionType
 from xgboost import XGBRegressor
@@ -152,7 +152,7 @@ def load_training() -> FunctionType:
     """
     Carica il dataset di training
     """
-    with open(c.DATA_PATH, "r") as f:
+    with open(c.DATA_TRAINING_DATA, "r") as f:
         return WrapData(pd.read_csv(f))
     
 def load_ffill_training() -> FunctionType:
@@ -186,19 +186,19 @@ def load_smooth_training(orig: FunctionType, span: int) -> DataFrame:
     return WrapData(data)
 
 
-def load_testing() -> FunctionType:
+def load_testing(i=0) -> pd.DataFrame:
     """
     Carica il dataset di training
     """
-    with open(DATA_PATH, "r") as f:
-        return WrapData(pd.read_csv(f))
+    with open(DATA_TESTING_PATH + f"test_{i}.csv", "r") as f:
+        return pd.read_csv(f)
 
 
 def load_validation() -> FunctionType:
     """
     Carica il dataset di training
     """
-    with open(DATA_PATH, "r") as f:
+    with open(DATA_TRAINING_DATA, "r") as f:
         return WrapData(pd.read_csv(f))
 
 

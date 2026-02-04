@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025 (3.10.19)
 #     language: python
 #     name: python3
 # ---
@@ -32,10 +32,10 @@ import scipy.stats as stats
 # %autoreload 2
 from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 
-
 # %%
+from hmac import new
 
-# %%
+
 def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
     X_train = df[operating_vars]
     Y_train = df[degradation_vars]
@@ -77,6 +77,14 @@ def minmax(df, column):
     col_min = df[column].min()
     col_max = df[column].max()
     return (df[column] - col_min) / (col_max - col_min)
+    
+def minmax_all(df):
+    newdf = pd.DataFrame()
+    for column in df.columns:
+        col_min = df[column].min()
+        col_max = df[column].max()
+        newdf[column] = (df[column] - col_min) / (col_max - col_min)
+    return newdf
 
 def median_norm(df):
     for i in range(0,7):
@@ -133,14 +141,20 @@ def get_rolling_slope_intercept(series, window):
 model_i = 0
 testing_esn = 102
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+# degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
+
 
 
 # %%
 # caricamento e preprocessamento iniziale
+from xgboost import train
+
+
 df = u.load_training()()
 df = pp.remove_outliers(df, u.SENSORS)
 df = pp.missingfill(df).dropna()
+print(df.columns)
 
 # Per fare il training direttamente con gli snapshot di un ciclo collassati
 # managed_cols = set(degradation_vars) | set(operating_vars)
@@ -149,23 +163,36 @@ df = pp.missingfill(df).dropna()
 # agg_logic.update({col: 'median' for col in operating_vars})
 # agg_logic.update({col: 'first' for col in other_cols})
 
+
 # preparazione train-test split
+df = df.groupby(["ESN", "Cycles_Since_New"]).median().reset_index().dropna()
+# for var in operating_vars + degradation_vars:
+#     df[var] = minmax(df, var)
+# df = df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])]
+
 test_data = df[df["ESN"] == testing_esn].reset_index()
 X_test = test_data[operating_vars]
 Y_test = test_data[degradation_vars]
-df = df[df["ESN"].isin([x for x in [101,102,103,104] if x != testing_esn])]
-df = df.groupby(["ESN", "Cycles_Since_New"]).median().reset_index()
+
+train_data = df[df["ESN"] != testing_esn].reset_index()
+X_train = train_data[operating_vars]
+Y_train = train_data[degradation_vars]
+
+
+print(X_train.shape, Y_train.shape)
+print(X_test.shape, Y_test.shape)
 
 # training modelli con shift
-models = train_models(df, operating_vars, degradation_vars)
+# models = train_models(df, operating_vars, degradation_vars)
+model = train_model(X_train, Y_train)
 # %store models
 
 # selezione modello
-model = models[model_i]['model']
+# model = models[model_i]['model']
 
 # predict dei valori
-Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
-
+# Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
+Y_pred = model.predict(X_test)
 # residui
 res = Y_test - Y_pred
 
@@ -190,10 +217,13 @@ res = test_data.dropna()
 
 # finestra smoothing dei residui
 window = 370
-step = window//5
+step = 1
 
-res = res.rolling(window, step).median()
-res = median_norm(res)
+# res = res.rolling(window, step).median()
+# res = median_norm(res)
+#for var in degradation_vars:
+    #res[var] = minmax(res, var)
+
 res = res.dropna()
 # %store res
 
@@ -202,6 +232,7 @@ hpc_rul = res["Cycles_to_HPC_SV"].reset_index(drop=True)
 ww_rul = res["Cycles_to_WW"].reset_index(drop=True)
 T3_res = res["Sensed_T3"]
 T45_res = res["Sensed_T45"]
+len(degradation_vars)
 
 # %% [markdown]
 # # Ricerca di a_hpt e a_hpc LOCALI
@@ -292,8 +323,6 @@ bounds = [
     (-1000, 1000),  # d
     (-1000, 1000),  # e
     (-1000, 1000),  # f
-    (-1000, 1000),  # g
-    (-1000, 1000),  # h
 ]
 
 
@@ -303,8 +332,8 @@ result_hpt = differential_evolution(
     bounds=bounds,           
     args=(res[degradation_vars], hpt_rul), 
     strategy='best1bin',     
-    maxiter=200,                # generazioni
-    popsize=500,                
+    maxiter=100,                # generazioni
+    popsize=100,                
     workers=-1,
     tol=0,                      # Tolleranza 
 )
@@ -314,8 +343,8 @@ result_hpc = differential_evolution(
     bounds=bounds,           
     args=(res[degradation_vars], hpc_rul), 
     strategy='best1bin',     
-    maxiter=200,                # generazioni 
-    popsize=500,              
+    maxiter=100,                # generazioni 
+    popsize=100,              
     workers=-1,
     tol=0,                      # Tolleranza
 )
@@ -325,8 +354,8 @@ result_ww = differential_evolution(
     bounds=bounds,           
     args=(res[degradation_vars], ww_rul), 
     strategy='best1bin',     
-    maxiter=200,                # generazioni 
-    popsize=500,              
+    maxiter=100,                # generazioni 
+    popsize=100,              
     workers=-1,
     tol=0,                      # Tolleranza
 )
@@ -474,7 +503,7 @@ gap_true_hpc = hpc_rul - pred_rul_hpc
 gap_true_hpt = hpt_rul - pred_rul_hpt
 gap_true_ww = ww_rul - pred_rul_ww
 
-window_size = 800
+window_size = 30
 
 feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
 feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
@@ -518,15 +547,15 @@ base_pred_ww = pred_rul_ww[mask]
 rul_target_ww = ww_rul[mask]
 
 
-lgbm_hpc = lgb.LGBMRegressor(n_estimators=20000, learning_rate=0.001)
+lgbm_hpc = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
 lgbm_hpc.fit(X_lgbm_hpc, gap_true_hpc)
 # %store lgbm_hpc
 
-lgbm_hpt = lgb.LGBMRegressor(n_estimators=20000, learning_rate=0.001)
+lgbm_hpt = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
 lgbm_hpt.fit(X_lgbm_hpt, gap_true_hpt)
 # %store lgbm_hpt
 
-lgbm_ww = lgb.LGBMRegressor(n_estimators=20000, learning_rate=0.001)
+lgbm_ww = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
 lgbm_ww.fit(X_lgbm_ww, gap_true_ww)
 # %store lgbm_ww
 
@@ -675,6 +704,109 @@ def score_submitted_result(df_true, df_pred):
   score = np.mean([score_WW, score_HPC, score_HPT])
 
   return score
+
+
+# %%
+# coefs_hpt
+# coefs_hpc
+# coefs_ww
+
+model_i = 0
+operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
+
+df = u.load_testing(50)
+print(df.shape)
+df = pp.remove_outliers(df, u.SENSORS)
+df = pp.missingfill(df).dropna()
+# model = models[model_i]['model']
+
+engines = {}
+for eng in df["ESN"].unique():
+    engines[eng] = {}
+    test_data = df[df["ESN"] == eng].reset_index()
+    test_data = test_data.groupby(["Cycles"]).median().reset_index()
+
+    # for var in operating_vars + degradation_vars:
+    #     test_data[var] = minmax(test_data, var)
+
+    rolling_size = 1
+    step = 1
+    X_test = test_data[operating_vars]#.rolling(rolling_size, step=step).median().dropna()
+    Y_test = test_data[degradation_vars]#.rolling(rolling_size, step=step).median().dropna()
+    Y_pred = model.predict(X_test)
+
+    res = Y_test - Y_pred
+    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
+    test_data[degradation_vars] = res
+    res = test_data.dropna()
+
+    engines[eng]["X_test"] = X_test.copy()
+    engines[eng]["Y_test"] = Y_test.copy()
+    engines[eng]["Y_pred"] = Y_pred.copy()
+    engines[eng]["res"] = res.copy()
+
+    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
+    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+    hi_ww  = HIE(coefs_ww, res[degradation_vars])
+
+    engines[eng]["hi_hpt"] = hi_hpt
+    engines[eng]["hi_hpc"] = hi_hpc
+    engines[eng]["hi_ww"] = hi_ww
+
+    window_size = 3
+    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
+    X_lgbm_hpc = pd.DataFrame({
+        'HI': hi_hpc.values,                # Valore attuale HI
+        'Slope': feat_slope_hpc,            # Pendenza locale
+        'Intercept': feat_intercept_hpc     # Intercetta locale
+    })
+    print(X_lgbm_hpc)
+    # gap_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
+    gap_hpc = lgbm_hpc.predict(X_lgbm_hpc)
+    print(gap_hpc)
+    pred_hpc = regr_hpc.predict(hi_hpc.values.reshape(-1,1))
+    rul_hpc = gap_hpc + pred_hpc.flatten()
+
+    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
+    X_lgbm_hpt = pd.DataFrame({
+        'HI': hi_hpt.values,                # Valore attuale HI
+        'Slope': feat_slope_hpt,            # Pendenza locale
+        'Intercept': feat_intercept_hpt     # Intercetta locale
+    })
+    # gap_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
+    gap_hpt = lgbm_hpt.predict(X_lgbm_hpt)
+    pred_hpt = regr_hpt.predict(hi_hpt.values.reshape(-1,1))
+    rul_hpt = gap_hpt + pred_hpt.flatten()
+
+    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
+    X_lgbm_ww = pd.DataFrame({
+        'HI': hi_ww.values,                 # Valore attuale HI
+        'Slope': feat_slope_ww,             # Pendenza locale
+        'Intercept': feat_intercept_ww      # Intercetta locale
+    })
+    # gap_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
+    gap_ww = lgbm_ww.predict(X_lgbm_ww)
+    pred_ww = regr_ww.predict(hi_ww.values.reshape(-1,1))
+    rul_ww = gap_ww + pred_ww.flatten()
+
+    window_size = 1
+    rul_hpc = np.lib.stride_tricks.sliding_window_view(rul_hpc, window_shape=window_size).mean(axis=1)
+    rul_hpt = np.lib.stride_tricks.sliding_window_view(rul_hpt, window_shape=window_size).mean(axis=1)
+    rul_ww = np.lib.stride_tricks.sliding_window_view(rul_ww, window_shape=20).mean(axis=1)
+
+    plt.subplots(1,3, figsize=(25,8))
+    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
+    plt.subplot(1,3,1)
+    plt.plot(rul_hpc, label='LGBM Corrected Pred HPC', color='orange')
+    plt.legend()
+    plt.subplot(1,3,2)
+    plt.plot(rul_hpt, label='LGBM Corrected Pred HPT', color='orange')
+    plt.subplot(1,3,3)
+    plt.plot(rul_ww, label='LGBM Corrected Pred WW', color='orange')
+    plt.show()
+
+# %store engines
 
 
 # %%
