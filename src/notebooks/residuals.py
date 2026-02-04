@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.10.19)
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -142,6 +142,13 @@ df = u.load_training()()
 df = pp.remove_outliers(df, u.SENSORS)
 df = pp.missingfill(df).dropna()
 
+# Per fare il training direttamente con gli snapshot di un ciclo collassati
+# managed_cols = set(degradation_vars) | set(operating_vars)
+# other_cols = [col for col in df.columns if col not in managed_cols]
+# agg_logic = {col: 'median' for col in degradation_vars}
+# agg_logic.update({col: 'median' for col in operating_vars})
+# agg_logic.update({col: 'first' for col in other_cols})
+
 # preparazione train-test split
 test_data = df[df["ESN"] == testing_esn].reset_index()
 X_test = test_data[operating_vars]
@@ -161,6 +168,7 @@ Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
 
 # residui
 res = Y_test - Y_pred
+
 
 # integrazione residui sul dataset originale
 res = pp.remove_outliers(res, u.SENSORS, threshold=3)
@@ -404,10 +412,10 @@ fig.show()
 # %%
 #hi_hpt = HI(T3_res, T45_res, a_hpt)
 #hi_hpt = -a_hpt*T3_res - b_hpt*T45_res
-hi_hpt = HIE(coefs_hpt, hpt_rul)
+hi_hpt = HIE(coefs_hpt, res[degradation_vars])
 #hi_hpc = HI(T3_res, T45_res, a_hpc)
 #hi_hpc = -a_hpc*T3_res - b_hpc*T45_res
-hi_hpt = HIE(coefs_hpt, hpc_rul)
+hi_hpc = HIE(coefs_hpc, res[degradation_vars])
 # error_hpt = np.sum(hi_hpt - hpt_rul)
 # error_hpc = np.sum(hi_hpc - hpc_rul)
 
@@ -415,7 +423,7 @@ fig, axs = plt.subplots(1, 2, figsize=(16, 6))
 axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
 ax0_rul = axs[0].twinx()
 ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-axs[1].plot(hi_hpt, color='tab:green', label='Health Index (HPC)')
+axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
 ax1_rul = axs[1].twinx()
 ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
 fig.tight_layout()
@@ -670,34 +678,109 @@ def score_submitted_result(df_true, df_pred):
 
 
 # %%
-# coefs_hpt
-# coefs_hpc
-# coefs_ww
-
+# "DEBUGGING"
+# Previsioni solo con regressione lineare
 model_i = 0
+model = models[model_i]['model']
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
 degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
 
+
 df = u.load_testing()()
+# Da rivedere come rimuovere gli outlier
 df = pp.remove_outliers(df, u.SENSORS)
 df = pp.missingfill(df).dropna()
-model = models[model_i]['model']
+
+
+# Per lavorare con i dati a livello di ciclo
+managed_cols = set(degradation_vars) | set(operating_vars)
+other_cols = [col for col in df.columns if col not in managed_cols]
+agg_logic = {col: 'median' for col in degradation_vars}
+agg_logic.update({col: 'median' for col in operating_vars})
+agg_logic.update({col: 'first' for col in other_cols})
+
 
 engines = {}
 for eng in df["ESN"].unique():
     engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index()
-    test_data = test_data.groupby(["Cycles_Since_New"]).mean().reset_index()
-
-    rolling_size = 25
+    test_data = df[df["ESN"] == eng].reset_index().copy()
+    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
+    rolling_size = 300
     step = 1
-    X_test = test_data[operating_vars].rolling(rolling_size, step=step).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step).median().dropna()
+    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
+    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
     Y_pred = model.predict(X_test)
-
     res = Y_test - Y_pred
+    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
     test_data[degradation_vars] = res
     res = test_data.dropna()
+    window = 370
+    step = 1
+    res = res.rolling(window, step).mean()
+    res = median_norm(res)
+    res = res.dropna()
+
+    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
+    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+    hi_ww = HIE(coefs_ww, res[degradation_vars])
+
+
+    fig, axs = plt.subplots(1, 3, figsize=(16, 6))
+    axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
+    ax0_rul = axs[0].twinx()
+    ax0_rul.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+    axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
+    ax1_rul = axs[1].twinx()
+    ax1_rul.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+    axs[2].plot(hi_ww, color='tab:green', label='Health Index (WW)')
+    ax2_rul = axs[2].twinx()
+    ax2_rul.plot(test_data["Cycles_to_WW"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+    fig.tight_layout()
+    fig.show()
+
+# %%
+# Prova di Agni
+
+model_i = 0
+model = models[model_i]['model']
+operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+
+
+df = u.load_testing()()
+# Da rivedere come rimuovere gli outlier
+df = pp.remove_outliers(df, u.SENSORS)
+df = pp.missingfill(df).dropna()
+
+
+# Per lavorare con i dati a livello di ciclo
+managed_cols = set(degradation_vars) | set(operating_vars)
+other_cols = [col for col in df.columns if col not in managed_cols]
+agg_logic = {col: 'median' for col in degradation_vars}
+agg_logic.update({col: 'median' for col in operating_vars})
+agg_logic.update({col: 'first' for col in other_cols})
+
+
+engines = {}
+for eng in df["ESN"].unique():
+    engines[eng] = {}
+    test_data = df[df["ESN"] == eng].reset_index().copy()
+    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
+    # test_data = test_data.groupby(["ESN", "Snapshot"]).median().reset_index()
+    rolling_size = 370
+    step = 1
+    X_test = test_data[operating_vars] .rolling(rolling_size, step=step, min_periods=1).median().dropna()
+    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
+    Y_pred = model.predict(X_test)
+    res = Y_test - Y_pred
+    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
+    test_data[degradation_vars] = res
+    res = test_data.dropna()
+    window = 250
+    step = 1
+    res = res.rolling(window, step).mean()
+    res = median_norm(res)
+    res = res.dropna()
 
     engines[eng]["X_test"] = X_test.copy()
     engines[eng]["Y_test"] = Y_test.copy()
@@ -712,14 +795,163 @@ for eng in df["ESN"].unique():
     engines[eng]["hi_hpc"] = hi_hpc
     engines[eng]["hi_ww"] = hi_ww
 
+    X_base_hpc = hi_hpc.values.reshape(-1,1)
+    X_base_hpt = hi_hpt.values.reshape(-1,1)
+    X_base_ww = hi_ww.values.reshape(-1,1)
+
+    # gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
+
+    # HPC 
+    base_pred_hpc = regr_hpc.predict(X_base_hpc)
+    window_size = 800
     feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
     X_lgbm_hpc = pd.DataFrame({
         'HI': hi_hpc.values,                # Valore attuale HI
         'Slope': feat_slope_hpc,            # Pendenza locale
         'Intercept': feat_intercept_hpc     # Intercetta locale
     })
-    gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
+    # mask = X_lgbm_hpc['Slope'] != 0
+    # X_lgbm_hpc = X_lgbm_hpc[mask]
+    # base_pred_hpc = base_pred_hpc[mask]
+    gap_pred_hpc = lgbm_hpc.predict(X_lgbm_hpc)
+    pred_rul_hpc = base_pred_hpc + gap_pred_hpc
+    pred_rul_hpc = pd.Series(pred_rul_hpc).rolling(window=window, min_periods=1).mean()
+    
+    # HPT 
+    base_pred_hpt = regr_hpt.predict(X_base_hpt)
+    window_size = 800
+    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
+    X_lgbm_hpt = pd.DataFrame({
+        'HI': hi_hpt.values,                # Valore attuale HI
+        'Slope': feat_slope_hpt,            # Pendenza locale
+        'Intercept': feat_intercept_hpt     # Intercetta locale
+    })
+    # mask = X_lgbm_hpt['Slope'] != 0
+    # X_lgbm_hpt = X_lgbm_hpt[mask]
+    # base_pred_hpt = base_pred_hpt[mask]
+    gap_pred_hpt = lgbm_hpt.predict(X_lgbm_hpt)
+    pred_rul_hpt = base_pred_hpt + gap_pred_hpt
+    pred_rul_hpt = pd.Series(pred_rul_hpt).rolling(window=window, min_periods=1).mean()
+
+
+    # WW 
+    base_pred_ww = regr_ww.predict(X_base_ww)
+    window_size = 800
+    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
+    X_lgbm_ww = pd.DataFrame({
+        'HI': hi_ww.values,                # Valore attuale HI
+        'Slope': feat_slope_ww,            # Pendenza locale
+        'Intercept': feat_intercept_ww     # Intercetta locale
+    })
+    # mask = X_lgbm_ww['Slope'] != 0
+    # X_lgbm_ww = X_lgbm_ww[mask]
+    # base_pred_ww = base_pred_ww[mask]
+    gap_pred_ww = lgbm_ww.predict(X_lgbm_ww)
+    pred_rul_ww = base_pred_ww + gap_pred_ww
+    pred_rul_ww = pd.Series(pred_rul_ww).rolling(window=window, min_periods=1).mean()
+
+
+    plt.subplots(1,3, figsize=(18,6))
+    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
+    plt.subplot(1,3,1)
+    plt.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), label='True RUL HPC')
+    plt.plot(pred_rul_hpc, label='LGBM Corrected Pred HPC')
+    plt.legend()
+    plt.subplot(1,3,2)
+    plt.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), label='True RUL HPT')
+    plt.plot(pred_rul_hpt, label='LGBM Corrected Pred HPT')
+    plt.legend()
+    plt.subplot(1,3,3)
+    plt.plot(test_data["Cycles_to_WW"].reset_index(drop=True), label='True RUL WW')
+    plt.plot(pred_rul_ww, label='LGBM Corrected Pred WW')
+    plt.legend()
+    plt.show()
+
+    engines[eng]["X_lgbm_hpc"] = X_lgbm_hpc
+    #engines[eng]["gap_true_hpc"] = gap_true_hpc
+    engines[eng]["base_pred_hpc"] = base_pred_hpc
+    engines[eng]["X_lgbm_hpt"] = X_lgbm_hpt
+    #engines[eng]["gap_true_hpt"] = gap_true_hpt
+    engines[eng]["base_pred_hpt"] = base_pred_hpt
+    engines[eng]["X_lgbm_ww"] = X_lgbm_ww
+    #engines[eng]["gap_true_ww"] = gap_true_ww
+    engines[eng]["base_pred_ww"] = base_pred_ww
+# %store engines
+
+# %%
+# coefs_hpt
+# coefs_hpc
+# coefs_ww
+
+model_i = 0
+operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+
+
+df = u.load_testing()()
+# Da rivedere come rimuovere gli outlier
+df = pp.remove_outliers(df, u.SENSORS)
+df = pp.missingfill(df).dropna()
+
+# Per lavorare con i dati a livello di ciclo
+# managed_cols = set(degradation_vars) | set(operating_vars)
+# other_cols = [col for col in df.columns if col not in managed_cols]
+# agg_logic = {col: 'median' for col in degradation_vars}
+# agg_logic.update({col: 'median' for col in operating_vars})
+# agg_logic.update({col: 'first' for col in other_cols})
+
+model = models[model_i]['model']
+
+engines = {}
+for eng in df["ESN"].unique():
+    engines[eng] = {}
+    test_data = df[df["ESN"] == eng].reset_index()
+    #test_data = test_data.groupby(["Cycles_Since_New"]).mean().reset_index()
+
+    rolling_size = 25
+    step = 1
+    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
+    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
+    #df = df.groupby(["Snapshot"]).median().reset_index()
+    Y_pred = model.predict(X_test)
+
+    res = Y_test - Y_pred
+    res = pp.remove_outliers(res, u.SENSORS)
+    test_data[degradation_vars] = res
+    res = test_data.dropna()
+
+    window = 370
+    step = window//5
+    res = res.rolling(window, step).median()
+    res = median_norm(res)
+    res = res.dropna()
+
+    engines[eng]["X_test"] = X_test.copy()
+    engines[eng]["Y_test"] = Y_test.copy()
+    engines[eng]["Y_pred"] = Y_pred.copy()
+    engines[eng]["res"] = res.copy()
+
+    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
+    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
+    hi_ww  = HIE(coefs_ww, res[degradation_vars])
+
+    engines[eng]["hi_hpt"] = hi_hpt
+    engines[eng]["hi_hpc"] = hi_hpc
+    engines[eng]["hi_ww"] = hi_ww
+
+    # gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
+    
+    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
+    X_lgbm_hpc = pd.DataFrame({
+        'HI': hi_hpc.values,                # Valore attuale HI
+        'Slope': feat_slope_hpc,            # Pendenza locale
+        'Intercept': feat_intercept_hpc     # Intercetta locale
+    })
+
     base_pred_hpc = regr_hpc.predict(hi_hpc.values.reshape(-1,1))
+    gap_pred_hpc = lgbm_hpc.predict(X_lgbm_hpc)
+
+    final_rul_hpc = base_pred_hpc.flatten() + gap_pred_hpc
 
     feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
     X_lgbm_hpt = pd.DataFrame({
@@ -727,8 +959,10 @@ for eng in df["ESN"].unique():
         'Slope': feat_slope_hpt,            # Pendenza locale
         'Intercept': feat_intercept_hpt     # Intercetta locale
     })
-    gap_true_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
+    #gap_true_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
     base_pred_hpt = regr_hpt.predict(hi_hpt.values.reshape(-1,1))
+    gap_pred_hpt = lgbm_hpt.predict(X_lgbm_hpt)
+    final_rul_hpt = base_pred_hpt.flatten() + gap_pred_hpt
 
     feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
     X_lgbm_ww = pd.DataFrame({
@@ -736,33 +970,35 @@ for eng in df["ESN"].unique():
         'Slope': feat_slope_ww,             # Pendenza locale
         'Intercept': feat_intercept_ww      # Intercetta locale
     })
-    gap_true_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
+    #gap_true_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
     base_pred_ww = regr_ww.predict(hi_ww.values.reshape(-1,1))
+    gap_pred_ww = lgbm_ww.predict(X_lgbm_ww)
+    final_rul_ww = base_pred_ww.flatten() + gap_pred_ww
 
     plt.subplots(1,3, figsize=(18,6))
     plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
     plt.subplot(1,3,1)
     plt.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), label='True RUL HPC')
-    plt.plot(hi_hpc + base_pred_hpc, label='LGBM Corrected Pred HPC')
+    plt.plot(final_rul_hpc, label='LGBM Corrected Pred HPC')
     plt.legend()
     plt.subplot(1,3,2)
     plt.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), label='True RUL HPT')
-    plt.plot(hi_hpt + base_pred_hpt, label='LGBM Corrected Pred HPT')
+    plt.plot(final_rul_hpt, label='LGBM Corrected Pred HPT')
     plt.legend()
     plt.subplot(1,3,3)
     plt.plot(test_data["Cycles_to_WW"].reset_index(drop=True), label='True RUL WW')
-    plt.plot(hi_ww + base_pred_ww, label='LGBM Corrected Pred WW')
+    plt.plot(final_rul_ww, label='LGBM Corrected Pred WW')
     plt.legend()
     plt.show()
 
     engines[eng]["X_lgbm_hpc"] = X_lgbm_hpc
-    engines[eng]["gap_true_hpc"] = gap_true_hpc
+    #engines[eng]["gap_true_hpc"] = gap_true_hpc
     engines[eng]["base_pred_hpc"] = base_pred_hpc
     engines[eng]["X_lgbm_hpt"] = X_lgbm_hpt
-    engines[eng]["gap_true_hpt"] = gap_true_hpt
+    #engines[eng]["gap_true_hpt"] = gap_true_hpt
     engines[eng]["base_pred_hpt"] = base_pred_hpt
     engines[eng]["X_lgbm_ww"] = X_lgbm_ww
-    engines[eng]["gap_true_ww"] = gap_true_ww
+    #engines[eng]["gap_true_ww"] = gap_true_ww
     engines[eng]["base_pred_ww"] = base_pred_ww
 # %store engines
 
