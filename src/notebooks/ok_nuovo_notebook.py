@@ -277,9 +277,9 @@ print(rows)
 
 # %%
 # DOWNSAMPLING VALIDATION PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
-dfv = load_validation()
-dfv = remove_outliers(dfv, SENSORS)
-dfv = missingfill(dfv).dropna()
+dfv = u.load_validation(range(0,48))
+dfv = pp.remove_outliers(dfv, SENSORS)
+dfv = pp.missingfill(dfv, align_cols=["Snapshot", "Cycles"]).dropna()
 # dfv = dfv.ffill()
 # dfv = dfv.bfill()
 
@@ -295,9 +295,9 @@ print(resoconto_righe)
 
 # %%
 # DOWNSAMPLING TESTING PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
-dft = load_test()
-dft = remove_outliers(dft, SENSORS)
-dft = missingfill(dft).dropna()
+dft = u.load_testing(range(0,52))
+dft = pp.remove_outliers(dft, SENSORS)
+dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
 # dft = dft.ffill()
 # dft = dft.bfill()
 
@@ -890,6 +890,106 @@ for esn in dft["ESN"].unique():
 # ### Classificazione dell'errore con LightGBM per HPC, HPT e WW
 
 # %%
+hpc_rul_train[hpc_rul_train["Cycles_to_HPC_SV"] == 0]
+
+# %%
+import pandas as pd
+import numpy as np
+
+# ---------------------------------------------------------
+# 1. Recupero gli Eventi (Indici)
+# ---------------------------------------------------------
+# Assumiamo che i dataframe hpc_rul_train, hpt_rul_train, ww_rul_train e res_train siano già caricati
+target_esns = [101, 102, 103, 104]
+
+def get_events(df_rul, col_name):
+    events = {}
+    for esn in target_esns:
+        # Troviamo gli indici dove il countdown è 0
+        mask = (df_rul["ESN"] == esn) & (df_rul[col_name] == 0)
+        events[esn] = sorted(df_rul[mask].index.tolist())
+    return events
+
+hpc_events = get_events(hpc_rul_train, "Cycles_to_HPC_SV")
+hpt_events = get_events(hpt_rul_train, "Cycles_to_HPT_SV")
+ww_events  = get_events(ww_rul_train,  "Cycles_to_WW")
+
+# ---------------------------------------------------------
+# 2. Logica di Reset dei Contatori
+# ---------------------------------------------------------
+
+# Inizializziamo le nuove colonne a 0 (o NaN se preferisci vederlo vuoto)
+res_train["Cycle_count_HPC"] = 0
+res_train["Cycle_count_HPT"] = 0
+res_train["Cycle_count_WW"] = 0
+
+# Dizionario per mappare colonna -> dizionario eventi corrispondente
+config = {
+    "Cycle_count_HPC": hpc_events,
+    "Cycle_count_HPT": hpt_events,
+    "Cycle_count_WW":  ww_events
+}
+
+print("Inizio calcolo contatori con reset...")
+
+for esn in target_esns:
+    # Filtriamo il dataframe principale per il motore corrente
+    # Troviamo l'indice iniziale e finale di questo ESN in res_train
+    mask_esn = res_train["ESN"] == esn
+    if not mask_esn.any():
+        continue
+    
+    esn_indices = res_train[mask_esn].index
+    start_global = esn_indices[0] # Primo indice assoluto dell'ESN
+    end_global = esn_indices[-1]  # Ultimo indice assoluto dell'ESN
+
+    # Per ogni tipo di evento (HPC, HPT, WW)
+    for col_name, event_dict in config.items():
+        breakpoints = event_dict.get(esn, [])
+        
+        current_start = start_global
+        
+        # Iteriamo attraverso gli eventi di rottura
+        for event_idx in breakpoints:
+            # Assicuriamoci che l'evento sia dentro il range attuale dell'ESN
+            if event_idx < current_start or event_idx > end_global:
+                continue
+            
+            # Calcoliamo la lunghezza del segmento
+            # Da current_start fino a event_idx (incluso)
+            length = (event_idx - current_start) + 1
+            
+            # Creiamo la sequenza 0, 1, 2... fino a length-1
+            counter_values = np.arange(length)
+            
+            # Assegniamo alla colonna specifica
+            res_train.loc[current_start:event_idx, col_name] = counter_values
+            
+            # Il prossimo conteggio ripartirà dall'indice successivo all'evento
+            current_start = event_idx + 1
+            
+        # GESTIONE CODA:
+        # Se dopo l'ultimo evento ci sono ancora dati fino alla fine dell'ESN
+        if current_start <= end_global:
+            length = (end_global - current_start) + 1
+            counter_values = np.arange(length)
+            res_train.loc[current_start:end_global, col_name] = counter_values
+
+print("Calcolo completato.")
+
+# ---------------------------------------------------------
+# 3. Controllo
+# ---------------------------------------------------------
+# Stampiamo un esempio per vedere se il contatore si resetta
+# Prendiamo un ESN e una colonna (es. HPC) intorno a un evento
+sample_esn = 101
+if hpc_events[sample_esn]:
+    evt = hpc_events[sample_esn][0] # Primo evento HPC
+    print(f"\nVerifica reset HPC per ESN {sample_esn} all'evento {evt}:")
+    # Mostriamo 5 righe prima e 5 dopo l'evento
+    print(res_train.loc[evt-5 : evt+5, ["ESN", "Cycle_count_HPC"]])
+
+# %%
 # TRAINING REGRESSORE PER ERRORE GAP
 # lightgbm trainato su spezzoni di eventi
 # un modello per hpt e hpc e uno per ww???????????
@@ -907,6 +1007,12 @@ all_train_hpt_rul = []
 all_train_hpc_rul = []
 all_train_ww_rul = []
 
+def normalize_hi(hi):
+  hi_min, hi_max = hi.min(), hi.max()
+  hi = (hi - hi_min) / (hi_max - hi_min)
+  hi = hi.to_frame()
+  return hi
+
 # HI di training
 for esn in res_train["ESN"].unique():
   temp = res_train[res_train["ESN"] == esn].copy()
@@ -916,12 +1022,16 @@ for esn in res_train["ESN"].unique():
   print(f'SHAPE: {hi_hpt.shape}')
 
   # Standardizzazione
-  hi_min_hpt, hi_max_hpt = hi_hpt.min(), hi_hpt.max()
+  hi_min_hpt, hi_max_hpt =hi_hpt.min(), hi_hpt.max()
   hi_hpt = (hi_hpt - hi_min_hpt) / (hi_max_hpt - hi_min_hpt)
   hi_min_hpc, hi_max_hpc = hi_hpc.min(), hi_hpc.max()
   hi_hpc = (hi_hpc - hi_min_hpc) / (hi_max_hpc - hi_min_hpc)
   hi_min_ww, hi_max_ww = hi_ww.min(), hi_ww.max()
   hi_ww = (hi_ww - hi_min_ww) / (hi_max_ww - hi_min_ww)
+  # hi_hpt = normalize_hi(hi_hpt)
+  # hi_hpc  = normalize_hi(hi_hpc)
+  # hi_ww = normalize_hi(hi_ww)
+
   hpt_rul_esn = hpt_rul_train[hpt_rul_train["ESN"] == esn].copy()
   hpc_rul_esn = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
   ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
@@ -956,6 +1066,14 @@ regr_hpc.fit(X_train_hpc, Y_train_hpc)
 regr_ww.fit(X_train_ww, X_train_ww)
 
 
+test_hpt = normalize_hi(HIE(coefs_hpt, res_test[res_test["ESN"] == 106][degradation_vars]))
+test_hpc = normalize_hi(HIE(coefs_hpc, res_test[res_test["ESN"] == 106][degradation_vars]))
+test_ww = normalize_hi(HIE(coefs_ww, res_test[res_test["ESN"] == 106][degradation_vars]))
+
+val_hpt = normalize_hi(HIE(coefs_hpt, res_val[degradation_vars])).dropna()
+val_hpc = normalize_hi(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
+val_ww = normalize_hi(HIE(coefs_ww, res_val[degradation_vars])).dropna()
+
 # %store X_train_hpt
 # %store X_train_hpc
 # %store X_train_ww
@@ -968,6 +1086,7 @@ regr_ww.fit(X_train_ww, X_train_ww)
 # %store all_train_hpt_rul
 # %store all_train_hpc_rul
 # %store all_train_ww_rul
+
 
 
 # %%
