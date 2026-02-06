@@ -13,7 +13,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from tools import plotting
-from tools.config import DATA_TRAINING_DATA, PLOT_PATH, DATA_TESTING_PATH
+from tools.config import DATA_TRAINING_DATA, PLOT_PATH, DATA_TESTING_PATH, DATA_VALIDATION_PATH
 from tools.types.enums import ESENSORS, RepairEventType, Snapshots
 from types import FunctionType
 from xgboost import XGBRegressor
@@ -185,21 +185,51 @@ def load_smooth_training(orig: FunctionType, span: int) -> DataFrame:
         print("Errore nel filtraggio del dataset")
     return WrapData(data)
 
+def _carica(ind: int | list[int] | range, path, col, typef):
+    # Gestione caso lista o range
+    if isinstance(ind, (list, range)):
+        esn_cycle_tracker = {}
+        buffer = 10
+        all_df = []
+        
+        for i in ind:
+            pathf = f"{path}/{typef}_{i}.csv"
+            df = pd.read_csv(pathf)
+            for esn in df['ESN'].unique():
+                mask = df['ESN'] == esn
+                
+                # Se l'ESN è già stato visto, applica l'offset
+                if esn in esn_cycle_tracker:
+                    previous_max = esn_cycle_tracker[esn]
+                    offset = previous_max + buffer
+                    df.loc[mask, 'Cycles'] += offset
+                
+                # Aggiorna il tracker con il nuovo massimo
+                current_max = df.loc[mask, col].max()
+                esn_cycle_tracker[esn] = current_max
+            
+            all_df.append(df)
+            
+        # CORREZIONE: Concatenare la lista, non ritornare l'ultimo df!
+        return pd.concat(all_df, ignore_index=True)
 
-def load_testing(i=0) -> pd.DataFrame:
+    # Gestione caso file singolo
+    else:
+        path = f"{path}/{typef}_{ind}.csv"
+        return pd.read_csv(path)
+
+def load_testing(ind: int | list[int] | range = 0) -> pd.DataFrame:
+    """
+    Carica il dataset di training concatenando i file e aggiustando i cicli.
+    """
+    return _carica(ind, DATA_TESTING_PATH, col="Cycles", typef="test")
+
+
+def load_validation(ind: int | list[int] | range = 0) -> pd.DataFrame:
     """
     Carica il dataset di training
     """
-    with open(DATA_TESTING_PATH + f"test_{i}.csv", "r") as f:
-        return pd.read_csv(f)
-
-
-def load_validation() -> FunctionType:
-    """
-    Carica il dataset di training
-    """
-    with open(DATA_TRAINING_DATA, "r") as f:
-        return WrapData(pd.read_csv(f))
+    return _carica(ind, DATA_VALIDATION_PATH, col="Cycles", typef="val")
 
 
 def load_event_points(
