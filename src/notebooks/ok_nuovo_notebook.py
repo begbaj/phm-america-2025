@@ -15,7 +15,7 @@
 # ---
 
 # %%
-from numpy import sign sdkfjslkfjlaskdjflkajsdfljasdlfkjalsdkfjldskfjlj
+from numpy import sign
 from pyparsing import line
 from scipy.optimize import minimize, differential_evolution
 from sklearn.linear_model import LinearRegression
@@ -260,9 +260,9 @@ managed_cols = set(degradation_vars) | set(operating_vars)
 
 # %%
 # DOWNSAMPLING TRAINING PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
-df = load_training()()
-df = remove_outliers(df, SENSORS)
-df = missingfill(df).dropna()
+df = u.load_training()()
+df = pp.remove_outliers(df, SENSORS)
+df = pp.missingfill(df).dropna()
 
 # Aggregazione dataset di training
 other_cols_df = [col for col in df.columns if col not in managed_cols]

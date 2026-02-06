@@ -193,7 +193,7 @@ def _carica(ind: int | list[int] | range, path, col, typef):
         all_df = []
         
         for i in ind:
-            pathf = f"{path}/{typef}_{i}.csv"
+            pathf = f"{path}{typef}_{i}.csv"
             df = pd.read_csv(pathf)
             for esn in df['ESN'].unique():
                 mask = df['ESN'] == esn
@@ -215,7 +215,7 @@ def _carica(ind: int | list[int] | range, path, col, typef):
 
     # Gestione caso file singolo
     else:
-        path = f"{path}/{typef}_{ind}.csv"
+        path = f"{path}{typef}_{ind}.csv"
         return pd.read_csv(path)
 
 def load_testing(ind: int | list[int] | range = 0) -> pd.DataFrame:
