@@ -251,7 +251,7 @@ def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], a
 
 
 # %%
-model_i = 0
+# model_i = 0
 testing_esn = 102
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
 # degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
@@ -263,56 +263,45 @@ managed_cols = set(degradation_vars) | set(operating_vars)
 df = u.load_training()()
 df = pp.remove_outliers(df, SENSORS)
 df = pp.missingfill(df).dropna()
-
 # Aggregazione dataset di training
 other_cols_df = [col for col in df.columns if col not in managed_cols]
 agg_logic = {col: 'median' for col in degradation_vars}
 agg_logic.update({col: 'median' for col in operating_vars})
 agg_logic.update({col: 'first' for col in other_cols_df})
 df = df.groupby(['ESN', 'Cycles_Since_New']).agg(agg_logic).reset_index(drop=True)
-
-
 rows = df.groupby('ESN').size().reset_index(name='rows').copy()
 print(rows)
 
-# %%
 # DOWNSAMPLING VALIDATION PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
 dfv = u.load_validation(range(0,48))
 dfv = pp.remove_outliers(dfv, SENSORS)
 dfv = pp.missingfill(dfv, align_cols=["Snapshot", "Cycles"]).dropna()
-# dfv = dfv.ffill()
-# dfv = dfv.bfill()
-
 # Aggregazione dataset di validation
 other_cols_dfv = [col for col in dfv.columns if col not in managed_cols]
 agg_logic_v = {col: 'median' for col in degradation_vars}
 agg_logic_v.update({col: 'median' for col in operating_vars})
 agg_logic_v.update({col: 'first' for col in other_cols_dfv})
 dfv = dfv.groupby(['ESN', 'Cycles']).agg(agg_logic_v).reset_index(drop=True)
+rows_val = dfv.groupby('ESN').size().reset_index(name='numero_righe').copy()
+print(rows_val)
 
-resoconto_righe = dfv.groupby('ESN').size().reset_index(name='numero_righe').copy()
-print(resoconto_righe)
-
-# %%
 # DOWNSAMPLING TESTING PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
 dft = u.load_testing(range(0,52))
 dft = pp.remove_outliers(dft, SENSORS)
 dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
-# dft = dft.ffill()
-# dft = dft.bfill()
-
 # Aggregazione dataset di training
 other_cols_dft = [col for col in dft.columns if col not in managed_cols]
 agg_logic_t = {col: 'median' for col in degradation_vars}
 agg_logic_t.update({col: 'median' for col in operating_vars})
 agg_logic_t.update({col: 'first' for col in other_cols_dft})
 dft = dft.groupby(['ESN', 'Cycles']).agg(agg_logic_t).reset_index(drop=True)
-
-resoconto_righe = dft.groupby('ESN').size().reset_index(name='numero_righe').copy()
-print(resoconto_righe)
+rows_test = dft.groupby('ESN').size().reset_index(name='numero_righe').copy()
+print(rows_test)
 
 
 # %%
+# FUNCTIONS
+
 def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
     X_train = df[operating_vars]
     Y_train = df[degradation_vars]
@@ -432,6 +421,14 @@ def normalize(col):
   return col
 
 
+def get_slope(y):
+    """Calcola la pendenza della retta di regressione per una finestra y"""
+    x = np.arange(len(y))
+    # Polyfit di grado 1 restituisce [pendenza, intercetta]
+    slope = np.polyfit(x, y, 1)[0]
+    return slope
+
+
 # %%
 # Regressore lineare per il calcolo dei residui
 
@@ -524,14 +521,15 @@ T45_res_val = res_val["Sensed_T45"]
 # %store T45_res_val
 
 
+
 # %%
 res_test = pd.DataFrame()
 res_list = []
 
-for esn in dft["ESN"].unique():
-  mask = dft["ESN"] == esn
-  X_test = dft.loc[mask, operating_vars]
-  Y_test = dft.loc[mask, degradation_vars]
+for esn in dfv["ESN"].unique():
+  mask = dfv["ESN"] == esn
+  X_test = dfv.loc[mask, operating_vars]
+  Y_test = dfv.loc[mask, degradation_vars]
   # Predict
   Y_pred = model.predict(X_test)
   res_temp = Y_test - Y_pred
@@ -543,7 +541,7 @@ res_test = pd.concat(res_list)
 
 # PULIZIA E ROLLING
 cleaned_chunks = []
-for esn in dft["ESN"].unique():
+for esn in dfv["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
   temp = remove_outliers(temp, SENSORS, threshold=0.8)
   temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).mean()
@@ -559,6 +557,90 @@ T45_res_test = res_test[["ESN", "Sensed_T45"]].copy()
 # %store res_test
 # %store T3_res_test
 # %store T45_res_test
+
+# %%
+import pandas as pd
+import numpy as np
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
+
+# --- 1. FUNZIONE PER IL CALCOLO DELLA PENDENZA (SLOPE) ---
+def get_slope(y):
+    if len(y) < 2 or np.all(np.isnan(y)):
+        return 0.0
+    x = np.arange(len(y))
+    # Polyfit di grado 1: ritorna [pendenza, intercetta]
+    return np.polyfit(x, y, 1)[0]
+
+# --- 2. PREPARAZIONE FEATURE (SLOPE E RESIDUI) ---
+window_slope = 50  # Finestra per la pendenza
+
+print("Calcolo delle pendenze per i residui...")
+for esn in res_train["ESN"].unique():
+    mask = res_train["ESN"] == esn
+    # Calcoliamo lo slope per i sensori principali
+    # Usiamo transform per mantenere l'allineamento degli indici
+    res_train.loc[mask, 'T45_Slope'] = res_train.loc[mask, 'Sensed_T45'].rolling(window=window_slope, min_periods=10).apply(get_slope)
+    res_train.loc[mask, 'T3_Slope'] = res_train.loc[mask, 'Sensed_T3'].rolling(window=window_slope, min_periods=10).apply(get_slope)
+    res_train.loc[mask, 'Ps3_Slope'] = res_train.loc[mask, 'Sensed_Ps3'].rolling(window=window_slope, min_periods=10).apply(get_slope)
+
+# Riempiamo i NaN generati dalla rolling window iniziale
+res_train[['T45_Slope', 'T3_Slope', 'Ps3_Slope']] = res_train[['T45_Slope', 'T3_Slope', 'Ps3_Slope']].fillna(0)
+
+# --- 3. CONTROLLO CORRELAZIONE (Per rispondere alla tua domanda su T3) ---
+print("\nVerifica Correlazione Slope vs RUL WW:")
+target_ww = ww_rul_train['Cycles_to_WW'].values
+for col in ['T45_Slope', 'T3_Slope', 'Ps3_Slope']:
+    corr, _ = pearsonr(res_train[col], target_ww)
+    print(f"Correlazione {col}: {corr:.4f}")
+
+# --- 4. PREPARAZIONE DATASET DI TRAINING ---
+# Scegliamo le feature in base a quelle che hanno mostrato correlazione nel plot/test
+features_ww = ['Sensed_T45', 'T45_Slope', 'Ps3_Slope'] # Esempio: escludiamo T3 se non correla
+
+X_train_ww = res_train[features_ww].copy()
+# Applichiamo il clipping alla RUL (Target): ignoriamo tutto ciò che è sopra 150 cicli
+# Questo serve a far concentrare il modello sulla fase critica pre-lavaggio
+y_train_ww = ww_rul_train['Cycles_to_WW'].clip(upper=150)
+
+# --- 5. ADDESTRAMENTO MODELLO LIGHTGBM ---
+print("\nAddestramento LightGBM per Water Wash...")
+lgbm_ww = lgb.LGBMRegressor(
+    n_estimators=1500,
+    learning_rate=0.02,
+    num_leaves=31,
+    importance_type='gain',
+    reg_alpha=0.2,   # Regolarizzazione
+    reg_lambda=0.2,
+    random_state=42
+)
+
+lgbm_ww.fit(X_train_ww, y_train_ww)
+print("Modello addestrato con successo!")
+
+# --- 6. TEST E PLOT DI VERIFICA (Su un ESN di training) ---
+esn_test = res_train["ESN"].unique()[0]
+mask_test = res_train["ESN"] == esn_test
+
+X_test_sample = X_train_ww[mask_test]
+y_true_sample = ww_rul_train.loc[mask_test, 'Cycles_to_WW']
+y_pred_sample = lgbm_ww.predict(X_test_sample)
+
+plt.figure(figsize=(15, 6))
+plt.plot(y_true_sample.values, label='RUL Reale (WW)', color='orange', linestyle='--', linewidth=2)
+plt.plot(y_pred_sample, label='RUL Predetta (LGBM)', color='blue', alpha=0.8)
+plt.axhline(y=30, color='red', linestyle=':', label='Soglia Allerta (30 cicli)')
+plt.title(f"Verifica Predizione Water Wash - ESN {esn_test}")
+plt.xlabel("Cicli")
+plt.ylabel("RUL (Cicli al prossimo lavaggio)")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+# Store per il notebook di test
+# %store lgbm_ww
+# %store features_ww
 
 # %%
 # PLOTTING TRAINING
@@ -593,7 +675,7 @@ fig.show()
 
 # %%
 # PLOTTING TEST
-for esn in dft["ESN"].unique():
+for esn in dfv["ESN"].unique():
   fig, axs = plt.subplots(2,3, figsize=(15,8))
   fig.suptitle(f'ESN - {esn}', fontsize=16)
   for i, ax in enumerate(axs.flat):
@@ -607,7 +689,8 @@ for esn in dft["ESN"].unique():
   fig.show()
 
 # %% [markdown]
-# # Ricerca di a,b,c,d,e,f,g globali combinazione lineare di tutti i sensori
+# # HPT e HPC
+# ## Ricerca di a,b,c,d,e,f,g globali combinazione lineare di tutti i sensori
 
 # %%
 # Standardizzazione dei residui
@@ -642,7 +725,7 @@ ww_rul_val_scaled = normalize(ww_rul_val)
 
 
 # Dati di test
-for esn in dft["ESN"].unique():
+for esn in dfv["ESN"].unique():
     mask = res_test["ESN"] == esn
     for var in degradation_vars:
         # Usa i limiti medi del training
@@ -763,19 +846,22 @@ print(f"HPC: {coefs_hpc}")
 # %%
 # PARAMETRI DI TEST SOLO PER HPT E HPC
 
-coefs_hpt = [291.33721892,
-             -474.57162399,
-             565.01867206,
-             -338.61851548,
-             -202.60278517,
-             323.38403957]
+coefs_hpt = [276.19439386,
+             -343.90020315,
+             781.45341037,
+             -593.41135514,
+             -190.36846837,
+             118.5466599]
 
-coefs_hpc = [287.94611259,
-             462.87106361,
-             -64.9796347,
-             871.84054875,
-             -802.51172691,
-             449.17014923]
+coefs_hpc = [354.11354513,
+             295.34981181,
+             -386.49672567,
+             790.99844931,
+             -679.69393928,
+             487.61887153]
+
+# %store coefs_hpt
+# %store coefs_hpc
 
 # %%
 # PLOTTING SU DATI DI TRAINING
@@ -796,7 +882,7 @@ for esn in res_train["ESN"].unique():
   # Definizione delle RUL efettive
   hpt_rul_esn = hpt_rul_train[hpt_rul_train["ESN"] == esn].copy()
   hpc_rul_esn = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
-  # ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
+  ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
 
   fig, axs = plt.subplots(1, 2, figsize=(30, 6))
   fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
@@ -1265,648 +1351,148 @@ fig.tight_layout()
 fig.show()
 
 
+# %% [markdown]
+# # WW
+
+# %%
+# TENTATIVO PER WW: CONTROLLO SE LA PENDENZA DEL RESIDUO DI T45 AUMENTA ALL'AVVICINARSI DEL WW
+
+# Calcolo della slope del residuo di T3
+window_slope = 50
+res_train['T3_Slope'] = res_train.groupby('ESN')['Sensed_Ps3'].transform(
+    lambda x: x.rolling(window=window_slope).apply(get_slope)
+)
+
+# Riempimento dei NaN con 0
+res_train['T3_Slope'] = normalize(res_train['T3_Slope'].fillna(0))
+
+
+# Iterazione per ogni ESN di train
+for esn in res_train["ESN"].unique():
+    data_plot = res_train[res_train["ESN"] == esn]
+    target_plot = ww_rul_train[ww_rul_train["ESN"] == esn]
+
+    # PLOT
+    fig, ax = plt.subplots(figsize=(15, 7))
+    ax.set_xlabel('Cicli')
+    ax.set_ylabel('Residuo Sensed_T3', color='tab:blue')
+    ax.plot(data_plot.index, data_plot['Sensed_Ps3'].rolling(20).mean(), color='tab:blue', linewidth=2, label='Residuo T3 (Smooth)')
+    ax.tick_params(axis='y', labelcolor='tab:blue')
+    ax.set_ylabel('Slope (Trend di Degrado)', color='tab:red')
+    ax.plot(data_plot.index, data_plot['T3_Slope'], color='tab:red', linewidth=2, label='T3 Slope (Window 50)')
+    ax.tick_params(axis='y', labelcolor='tab:red')
+    ax.spines.right.set_position(("axes", 1.1))
+    ax.plot(data_plot.index, target_plot['Cycles_to_WW'], color='gray', linestyle='--', alpha=0.5, label='RUL WW Reale')
+    ax.set_ylabel('RUL (Cicli mancanti al WW)', color='gray')
+
+    plt.title(f'Analisi del Degrado per ESN {esn}: Residuo vs Slope vs RUL', fontsize=16)
+    fig.tight_layout()
+
+    # Uniamo le legende di tutti gli assi
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = ax.get_legend_handles_labels()
+    lines3, labels3 = ax.get_legend_handles_labels()
+    ax.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='upper left')
+
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+
+
 # %%
 
-pred_rul_hpc = regr_hpc.predict(X_base_hpc)
-pred_rul_hpt = regr_hpc.predict(X_base_hpt)
-pred_rul_ww = regr_hpc.predict(X_base_ww)
+window_slope = 50
+sensors_to_use = ['Sensed_T3', 'Sensed_T45', 'Sensed_Ps3']
 
-gap_true_hpc = hpc_rul - pred_rul_hpc
-gap_true_hpt = hpt_rul - pred_rul_hpt
-gap_true_ww = ww_rul - pred_rul_ww
+print("Calcolo degli Slope per i sensori selezionati...")
+for sensor in sensors_to_use:
+    col_name = f'{sensor}_Slope'
+    # Calcoliamo lo slope mobile per ogni motore
+    res_train[col_name] = res_train.groupby('ESN')[sensor].transform(
+        lambda x: x.rolling(window=window_slope, min_periods=window_slope).apply(get_slope)
+    ).fillna(0)
 
-window_size = 300
+# --- 3. PREPARAZIONE DATASET DI TRAINING ---
+# Selezioniamo i residui originali + gli slope appena calcolati
+features = sensors_to_use + [f'{s}_Slope' for s in sensors_to_use]
 
-feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
+X_train_ww = res_train[features]
+y_train_ww = ww_rul_train['Cycles_to_WW']
 
-X_lgbm_hpc = pd.DataFrame({
-    'HI': hi_hpc.values,                # Valore attuale HI
-    'Slope': feat_slope_hpc,            # Pendenza locale
-    'Intercept': feat_intercept_hpc     # Intercetta locale
-})
+# Trucco: Clippiamo la RUL a 150. Oltre i 150 cicli, non ci interessa la precisione
+# y_train_ww_clipped = y_train_ww.clip(upper=150)
 
-X_lgbm_hpt = pd.DataFrame({
-    'HI': hi_hpt.values,                # Valore attuale HI
-    'Slope': feat_slope_hpt,            # Pendenza locale
-    'Intercept': feat_intercept_hpt     # Intercetta locale
-})
+# --- 4. TRAINING DEL MODELLO LIGHTGBM ---
+print("Inizio addestramento LightGBM per Water Wash...")
+lgbm_ww = lgb.LGBMRegressor(
+    n_estimators=1000,
+    learning_rate=0.03,
+    num_leaves=31,
+    importance_type='gain',
+    reg_alpha=0.2,   # L1 regularization
+    reg_lambda=0.2,  # L2 regularization
+    random_state=42
+)
 
-X_lgbm_ww = pd.DataFrame({
-    'HI': hi_ww.values,                 # Valore attuale HI
-    'Slope': feat_slope_ww,             # Pendenza locale
-    'Intercept': feat_intercept_ww      # Intercetta locale
-})
+lgbm_ww.fit(X_train_ww, y_train_ww)
+print("Addestramento completato.")
+
+# --- 5. TEST E PLOT DEI RISULTATI ---
+# Proviamo la predizione su un motore di training per vedere se "fitta"
+esn_test = res_train["ESN"].unique()[0]
+mask = res_train["ESN"] == esn_test
+
+X_example = X_train_ww[mask]
+print(f'COSE: {X_example}')
+y_real = y_train_ww[mask]
+y_pred = lgbm_ww.predict(X_example)
+
+plt.figure(figsize=(15, 6))
+plt.plot(y_real.values, label='RUL Reale (WW)', color='orange', linewidth=2)
+plt.plot(y_pred, label='RUL Predetta (LGBM)', color='blue')
+# plt.title(f"Verifica Modello WW - ESN {esn_test}")
+plt.xlabel("Cicli")
+plt.ylabel("RUL (Cicli)")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
 
 
-mask = X_lgbm_hpc['Slope'] != 0
-X_lgbm_hpc = X_lgbm_hpc[mask]
-gap_true_hpc = gap_true_hpc[mask]
-base_pred_hpc = pred_rul_hpc[mask]
-rul_target_hpc = hpc_rul[mask]
-
-mask = X_lgbm_hpt['Slope'] != 0
-X_lgbm_hpt = X_lgbm_hpc[mask]
-gap_true_hpt = gap_true_hpt[mask]
-base_pred_hpt = pred_rul_hpt[mask]
-rul_target_hpt = hpt_rul[mask]
-
-mask = X_lgbm_ww['Slope'] != 0
-X_lgbm_ww = X_lgbm_ww[mask]
-gap_true_ww = gap_true_ww[mask]
-base_pred_ww = pred_rul_ww[mask]
-rul_target_ww = ww_rul[mask]
-
-
-lgbm_hpc = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_hpc.fit(X_lgbm_hpc, gap_true_hpc)
-# %store lgbm_hpc
-
-lgbm_hpt = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_hpt.fit(X_lgbm_hpt, gap_true_hpt)
-# %store lgbm_hpt
-
-lgbm_ww = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_ww.fit(X_lgbm_ww, gap_true_ww)
 # %store lgbm_ww
 
 # %%
-# HPC
-pred_gap = lgbm_hpc.predict(X_lgbm_hpc)
-pred_rul = base_pred_hpc + pred_gap
+sensors_to_use = ['Sensed_T3', 'Sensed_T45', 'Sensed_Ps3']
 
-plt.figure(figsize=(10, 6))
-plt.scatter(gap_true_hpc, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
-min_val = min(gap_true_hpc.min(), pred_gap.min())
-max_val = max(gap_true_hpc.max(), pred_gap.max())
-plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
+# Creiamo una copia per non sporcare i dati originali
+X_test_ww = res_val[sensors_to_use].copy()
 
-plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
-plt.xlabel('True Gap Difference')
-plt.ylabel('Predicted Gap Difference')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
+# Calcoliamo le pendenze (Slope) anche per il set di validazione
+# Usiamo la stessa finestra (window_slope = 50) del training
+for sensor in sensors_to_use:
+    col_name = f'{sensor}_Slope'
+    X_test_ww[col_name] = X_test_ww[sensor].rolling(window=50, min_periods=50).apply(get_slope).fillna(0)
 
+# Selezioniamo solo le colonne usate durante il training (ordine corretto)
+features = sensors_to_use + [f'{s}_Slope' for s in sensors_to_use]
+X_test_input = X_test_ww[features]
+
+
+# Eseguiamo la predizione
+y_pred_val = lgbm_ww.predict(X_test_input)
+
+# (Opzionale) Applichiamo un leggero smoothing alla predizione per evitare sbalzi
+y_pred_val_smooth = pd.Series(y_pred_val).rolling(window=10, min_periods=1).mean()
+
+# Recuperiamo la RUL reale per il confronto
+y_true_val = ww_rul_val_scaled.values 
+
+# --- PLOT DI VALIDAZIONE ---
 plt.figure(figsize=(15, 6))
-
-plt.plot(rul_target_hpc.index, rul_target_hpc, 'k--', linewidth=2, label='True RUL')
-plt.plot(rul_target_hpc.index, base_pred_hpc, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
-plt.plot(rul_target_hpc.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
-
-plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
-plt.xlabel('Cycles')
-plt.ylabel('RUL')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# HPT
-pred_gap = lgbm_hpt.predict(X_lgbm_hpt)
-pred_rul = base_pred_hpt + pred_gap
-
-plt.figure(figsize=(10, 6))
-plt.scatter(gap_true_hpt, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
-min_val = min(gap_true_hpt.min(), pred_gap.min())
-max_val = max(gap_true_hpt.max(), pred_gap.max())
-plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
-
-plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
-plt.xlabel('True Gap Difference')
-plt.ylabel('Predicted Gap Difference')
+plt.plot(y_true_val, label='RUL Reale (Water Wash)', color='orange', linewidth=2)
+plt.plot(y_pred_val_smooth, label='RUL Predetta (Modello)', color='blue', linestyle='--')
+plt.title(f'Validazione su ESN {testing_esn}: Predizione Eventi Water Wash', fontsize=16)
+plt.xlabel('Cicli')
+plt.ylabel('RUL (Cicli mancanti)')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.show()
-
-plt.figure(figsize=(15, 6))
-
-plt.plot(rul_target_hpt.index, rul_target_hpt, 'k--', linewidth=2, label='True RUL')
-plt.plot(rul_target_hpt.index, base_pred_hpt, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
-plt.plot(rul_target_hpt.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
-
-plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
-plt.xlabel('Cycles')
-plt.ylabel('RUL')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# WW
-pred_gap = lgbm_ww.predict(X_lgbm_ww)
-pred_rul = base_pred_ww + pred_gap
-
-plt.figure(figsize=(10, 6))
-plt.scatter(gap_true_ww, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
-min_val = min(gap_true_ww.min(), pred_gap.min())
-max_val = max(gap_true_ww.max(), pred_gap.max())
-plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
-
-plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
-plt.xlabel('True Gap Difference')
-plt.ylabel('Predicted Gap Difference')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-plt.figure(figsize=(30, 6))
-
-plt.plot(rul_target_ww.index, rul_target_ww, 'k--', linewidth=2, label='True RUL')
-plt.plot(rul_target_ww.index, base_pred_ww, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
-plt.plot(rul_target_ww.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
-
-plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
-plt.xlabel('Cycles')
-plt.ylabel('RUL')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-
-# %% [markdown]
-# # Testing
-
-# %%
-def time_weighted_error(y_true, y_pred, alpha=0.02, beta=1):
-  """Returns the weighted squared error for an array of predictions."""
-
-  error = y_pred-y_true
-
-  weight = np.where(
-  error >= 0,
-  2 / (1 + alpha * y_true),
-  1 / (1 + alpha * y_true)
-  )
-  return weight * (error ** 2)*beta
-
-def score_submitted_result(df_true, df_pred):
-  '''Calculate the score for a single team's submission'''
-
-  # Extract the targets
-  true_WW = df_true.Cycles_to_WW.values
-  true_HPC = df_true.Cycles_to_HPC_SV.values
-  true_HPT = df_true.Cycles_to_HPT_SV.values
-
-  pred_WW = df_pred.Cycles_to_WW.values
-  pred_HPC = df_pred.Cycles_to_HPC_SV.values
-  pred_HPT = df_pred.Cycles_to_HPT_SV.values
-
-  # WW score
-  alpha = 0.01
-  beta = 1/float(max(true_WW))
-  score_WW = time_weighted_error(true_WW, pred_WW, alpha, beta)
-  # Take the mean of the array
-  score_WW = np.mean(score_WW)
-
-  # HPC score
-  alpha = 0.01
-  beta = 2/float(max(true_HPC))
-  score_HPC = time_weighted_error(true_HPC, pred_HPC, alpha, beta)
-  # Take the mean of the array
-  score_HPC = np.mean(score_HPC)
-
-  # HTC score
-  alpha = 0.01
-  beta = 2/float(max(true_HPT))
-  score_HPT = time_weighted_error(true_HPT, pred_HPT, alpha, beta)
-  # Take the mean of the array
-  score_HPT = np.mean(score_HPT)
-
-  # Average score
-  score = np.mean([score_WW, score_HPC, score_HPT])
-
-  return score
-
-
-# %%
-# coefs_hpt
-# coefs_hpc
-# coefs_ww
-
-model_i = 0
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
-
-df = u.load_testing(10)
-# df = u.load_training()()
-print(df.shape)
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-df = df.ffill()
-df = df.bfill()
-# model = models[model_i]['model']
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index()
-    test_data = test_data.groupby(["Cycles"]).median().reset_index()
-
-    # for var in operating_vars + degradation_vars:
-    #     test_data[var] = minmax(test_data, var)
-
-    rolling_size = 30
-    step = 2
-    X_test = test_data[operating_vars]#.rolling(rolling_size, step=step).median().dropna()
-    Y_test = test_data[degradation_vars]#.rolling(rolling_size, step=step).median().dropna()
-    Y_pred = model.predict(X_test)
-
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-
-    engines[eng]["X_test"] = X_test.copy()
-    engines[eng]["Y_test"] = Y_test.copy()
-    engines[eng]["Y_pred"] = Y_pred.copy()
-    engines[eng]["res"] = res.copy()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww  = HIE(coefs_ww, res[degradation_vars])
-
-    engines[eng]["hi_hpt"] = hi_hpt
-    engines[eng]["hi_hpc"] = hi_hpc
-    engines[eng]["hi_ww"] = hi_ww
-
-    window_size = 30
-    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    X_lgbm_hpc = pd.DataFrame({
-        'HI': hi_hpc.values,                # Valore attuale HI
-        'Slope': feat_slope_hpc,            # Pendenza locale
-        'Intercept': feat_intercept_hpc     # Intercetta locale
-    })
-    print(X_lgbm_hpc)
-    # gap_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    gap_hpc = lgbm_hpc.predict(X_lgbm_hpc)
-    print(gap_hpc)
-    pred_hpc = regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    rul_hpc = gap_hpc + pred_hpc.flatten()
-
-    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-    X_lgbm_hpt = pd.DataFrame({
-        'HI': hi_hpt.values,                # Valore attuale HI
-        'Slope': feat_slope_hpt,            # Pendenza locale
-        'Intercept': feat_intercept_hpt     # Intercetta locale
-    })
-    # gap_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    gap_hpt = lgbm_hpt.predict(X_lgbm_hpt)
-    pred_hpt = regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    rul_hpt = gap_hpt + pred_hpt.flatten()
-
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values,                 # Valore attuale HI
-        'Slope': feat_slope_ww,             # Pendenza locale
-        'Intercept': feat_intercept_ww      # Intercetta locale
-    })
-    # gap_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
-    gap_ww = lgbm_ww.predict(X_lgbm_ww)
-    pred_ww = regr_ww.predict(hi_ww.values.reshape(-1,1))
-    rul_ww = gap_ww + pred_ww.flatten()
-
-    window_size = 1
-    rul_hpc = np.lib.stride_tricks.sliding_window_view(rul_hpc, window_shape=window_size).mean(axis=1)
-    rul_hpt = np.lib.stride_tricks.sliding_window_view(rul_hpt, window_shape=window_size).mean(axis=1)
-    rul_ww = np.lib.stride_tricks.sliding_window_view(rul_ww, window_shape=20).mean(axis=1)
-
-    plt.subplots(1,3, figsize=(25,8))
-    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
-    plt.subplot(1,3,1)
-    plt.plot(rul_hpc, label='LGBM Corrected Pred HPC', color='orange')
-    plt.legend()
-    plt.subplot(1,3,2)
-    plt.plot(rul_hpt, label='LGBM Corrected Pred HPT', color='orange')
-    plt.subplot(1,3,3)
-    plt.plot(rul_ww, label='LGBM Corrected Pred WW', color='orange')
-    plt.show()
-
-# %store engines
-
-
-# %%
-# "DEBUGGING"
-# Previsioni solo con regressione lineare
-model_i = 0
-model = models[model_i]['model']
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-
-
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-
-# Per lavorare con i dati a livello di ciclo
-managed_cols = set(degradation_vars) | set(operating_vars)
-other_cols = [col for col in df.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
-agg_logic.update({col: 'median' for col in operating_vars})
-agg_logic.update({col: 'first' for col in other_cols})
-
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index().copy()
-    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
-    rolling_size = 300
-    step = 1
-    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_pred = model.predict(X_test)
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-    window = 370
-    step = 1
-    res = res.rolling(window, step).mean()
-    res = median_norm(res)
-    res = res.dropna()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww = HIE(coefs_ww, res[degradation_vars])
-
-
-    fig, axs = plt.subplots(1, 3, figsize=(16, 6))
-    axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-    ax0_rul = axs[0].twinx()
-    ax0_rul.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-    ax1_rul = axs[1].twinx()
-    ax1_rul.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    axs[2].plot(hi_ww, color='tab:green', label='Health Index (WW)')
-    ax2_rul = axs[2].twinx()
-    ax2_rul.plot(test_data["Cycles_to_WW"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    fig.tight_layout()
-    fig.show()
-
-# %%
-# Prova di Agni
-
-model_i = 0
-model = models[model_i]['model']
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-
-
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-
-# Per lavorare con i dati a livello di ciclo
-managed_cols = set(degradation_vars) | set(operating_vars)
-other_cols = [col for col in df.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
-agg_logic.update({col: 'median' for col in operating_vars})
-agg_logic.update({col: 'first' for col in other_cols})
-
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index().copy()
-    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
-    # test_data = test_data.groupby(["ESN", "Snapshot"]).median().reset_index()
-    rolling_size = 370
-    step = 1
-    X_test = test_data[operating_vars] .rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_pred = model.predict(X_test)
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-    window = 250
-    step = 1
-    res = res.rolling(window, step).mean()
-    res = median_norm(res)
-    res = res.dropna()
-
-    engines[eng]["X_test"] = X_test.copy()
-    engines[eng]["Y_test"] = Y_test.copy()
-    engines[eng]["Y_pred"] = Y_pred.copy()
-    engines[eng]["res"] = res.copy()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww  = HIE(coefs_ww, res[degradation_vars])
-
-    engines[eng]["hi_hpt"] = hi_hpt
-    engines[eng]["hi_hpc"] = hi_hpc
-    engines[eng]["hi_ww"] = hi_ww
-
-    X_base_hpc = hi_hpc.values.reshape(-1,1)
-    X_base_hpt = hi_hpt.values.reshape(-1,1)
-    X_base_ww = hi_ww.values.reshape(-1,1)
-
-    # gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-
-    # HPC
-    base_pred_hpc = regr_hpc.predict(X_base_hpc)
-    window_size = 800
-    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    X_lgbm_hpc = pd.DataFrame({
-        'HI': hi_hpc.values,                # Valore attuale HI
-        'Slope': feat_slope_hpc,            # Pendenza locale
-        'Intercept': feat_intercept_hpc     # Intercetta locale
-    })
-    # mask = X_lgbm_hpc['Slope'] != 0
-    # X_lgbm_hpc = X_lgbm_hpc[mask]
-    # base_pred_hpc = base_pred_hpc[mask]
-    gap_pred_hpc = lgbm_hpc.predict(X_lgbm_hpc)
-    pred_rul_hpc = base_pred_hpc + gap_pred_hpc
-    pred_rul_hpc = pd.Series(pred_rul_hpc).rolling(window=window, min_periods=1).mean()
-
-    # HPT
-    base_pred_hpt = regr_hpt.predict(X_base_hpt)
-    window_size = 800
-    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-    X_lgbm_hpt = pd.DataFrame({
-        'HI': hi_hpt.values,                # Valore attuale HI
-        'Slope': feat_slope_hpt,            # Pendenza locale
-        'Intercept': feat_intercept_hpt     # Intercetta locale
-    })
-    # mask = X_lgbm_hpt['Slope'] != 0
-    # X_lgbm_hpt = X_lgbm_hpt[mask]
-    # base_pred_hpt = base_pred_hpt[mask]
-    gap_pred_hpt = lgbm_hpt.predict(X_lgbm_hpt)
-    pred_rul_hpt = base_pred_hpt + gap_pred_hpt
-    pred_rul_hpt = pd.Series(pred_rul_hpt).rolling(window=window, min_periods=1).mean()
-
-
-    # WW
-    base_pred_ww = regr_ww.predict(X_base_ww)
-    window_size = 800
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values,                # Valore attuale HI
-        'Slope': feat_slope_ww,            # Pendenza locale
-        'Intercept': feat_intercept_ww     # Intercetta locale
-    })
-    # mask = X_lgbm_ww['Slope'] != 0
-    # X_lgbm_ww = X_lgbm_ww[mask]
-    # base_pred_ww = base_pred_ww[mask]
-    gap_pred_ww = lgbm_ww.predict(X_lgbm_ww)
-    pred_rul_ww = base_pred_ww + gap_pred_ww
-    pred_rul_ww = pd.Series(pred_rul_ww).rolling(window=window, min_periods=1).mean()
-
-
-    plt.subplots(1,3, figsize=(18,6))
-    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
-    plt.subplot(1,3,1)
-    plt.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), label='True RUL HPC')
-    plt.plot(pred_rul_hpc, label='LGBM Corrected Pred HPC')
-    plt.legend()
-    plt.subplot(1,3,2)
-    plt.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), label='True RUL HPT')
-    plt.plot(pred_rul_hpt, label='LGBM Corrected Pred HPT')
-    plt.legend()
-    plt.subplot(1,3,3)
-    plt.plot(test_data["Cycles_to_WW"].reset_index(drop=True), label='True RUL WW')
-    plt.plot(pred_rul_ww, label='LGBM Corrected Pred WW')
-    plt.legend()
-    plt.show()
-
-    engines[eng]["X_lgbm_hpc"] = X_lgbm_hpc
-    #engines[eng]["gap_true_hpc"] = gap_true_hpc
-    engines[eng]["base_pred_hpc"] = base_pred_hpc
-    engines[eng]["X_lgbm_hpt"] = X_lgbm_hpt
-    #engines[eng]["gap_true_hpt"] = gap_true_hpt
-    engines[eng]["base_pred_hpt"] = base_pred_hpt
-    engines[eng]["X_lgbm_ww"] = X_lgbm_ww
-    #engines[eng]["gap_true_ww"] = gap_true_ww
-    engines[eng]["base_pred_ww"] = base_pred_ww
-# %store engines
-
-# %%
-# coefs_hpt
-# coefs_hpc
-# coefs_ww
-
-model_i = 0
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-
-
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-# Per lavorare con i dati a livello di ciclo
-# managed_cols = set(degradation_vars) | set(operating_vars)
-# other_cols = [col for col in df.columns if col not in managed_cols]
-# agg_logic = {col: 'median' for col in degradation_vars}
-# agg_logic.update({col: 'median' for col in operating_vars})
-# agg_logic.update({col: 'first' for col in other_cols})
-
-model = models[model_i]['model']
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index()
-    #test_data = test_data.groupby(["Cycles_Since_New"]).mean().reset_index()
-
-    rolling_size = 25
-    step = 1
-    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    #df = df.groupby(["Snapshot"]).median().reset_index()
-    Y_pred = model.predict(X_test)
-
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-
-    window = 370
-    step = window//5
-    res = res.rolling(window, step).median()
-    res = median_norm(res)
-    res = res.dropna()
-
-    engines[eng]["X_test"] = X_test.copy()
-    engines[eng]["Y_test"] = Y_test.copy()
-    engines[eng]["Y_pred"] = Y_pred.copy()
-    engines[eng]["res"] = res.copy()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww  = HIE(coefs_ww, res[degradation_vars])
-
-    engines[eng]["hi_hpt"] = hi_hpt
-    engines[eng]["hi_hpc"] = hi_hpc
-    engines[eng]["hi_ww"] = hi_ww
-
-    # gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-
-    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    X_lgbm_hpc = pd.DataFrame({
-        'HI': hi_hpc.values,                # Valore attuale HI
-        'Slope': feat_slope_hpc,            # Pendenza locale
-        'Intercept': feat_intercept_hpc     # Intercetta locale
-    })
-
-    base_pred_hpc = regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    gap_pred_hpc = lgbm_hpc.predict(X_lgbm_hpc)
-
-    final_rul_hpc = base_pred_hpc.flatten() + gap_pred_hpc
-
-    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-    X_lgbm_hpt = pd.DataFrame({
-        'HI': hi_hpt.values,                # Valore attuale HI
-        'Slope': feat_slope_hpt,            # Pendenza locale
-        'Intercept': feat_intercept_hpt     # Intercetta locale
-    })
-    #gap_true_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    base_pred_hpt = regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    gap_pred_hpt = lgbm_hpt.predict(X_lgbm_hpt)
-    final_rul_hpt = base_pred_hpt.flatten() + gap_pred_hpt
-
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values,                 # Valore attuale HI
-        'Slope': feat_slope_ww,             # Pendenza locale
-        'Intercept': feat_intercept_ww      # Intercetta locale
-    })
-    #gap_true_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
-    base_pred_ww = regr_ww.predict(hi_ww.values.reshape(-1,1))
-    gap_pred_ww = lgbm_ww.predict(X_lgbm_ww)
-    final_rul_ww = base_pred_ww.flatten() + gap_pred_ww
-
-    plt.subplots(1,3, figsize=(18,6))
-    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
-    plt.subplot(1,3,1)
-    plt.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), label='True RUL HPC')
-    plt.plot(final_rul_hpc, label='LGBM Corrected Pred HPC')
-    plt.legend()
-    plt.subplot(1,3,2)
-    plt.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), label='True RUL HPT')
-    plt.plot(final_rul_hpt, label='LGBM Corrected Pred HPT')
-    plt.legend()
-    plt.subplot(1,3,3)
-    plt.plot(test_data["Cycles_to_WW"].reset_index(drop=True), label='True RUL WW')
-    plt.plot(final_rul_ww, label='LGBM Corrected Pred WW')
-    plt.legend()
-    plt.show()
-
-    engines[eng]["X_lgbm_hpc"] = X_lgbm_hpc
-    #engines[eng]["gap_true_hpc"] = gap_true_hpc
-    engines[eng]["base_pred_hpc"] = base_pred_hpc
-    engines[eng]["X_lgbm_hpt"] = X_lgbm_hpt
-    #engines[eng]["gap_true_hpt"] = gap_true_hpt
-    engines[eng]["base_pred_hpt"] = base_pred_hpt
-    engines[eng]["X_lgbm_ww"] = X_lgbm_ww
-    #engines[eng]["gap_true_ww"] = gap_true_ww
-    engines[eng]["base_pred_ww"] = base_pred_ww
-# %store engines
-
