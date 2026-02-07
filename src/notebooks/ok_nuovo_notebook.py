@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.10.19)
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -425,6 +425,13 @@ def get_rolling_slope_intercept(series, window):
     return np.array(slopes), np.array(intercepts)
 
 
+def normalize(col):
+  col_min, col_max = col.min(), col.max()
+  col = (col - col_min) / (col_max - col_min)
+  col = col.to_frame()
+  return col
+
+
 # %%
 # Regressore lineare per il calcolo dei residui
 
@@ -471,7 +478,7 @@ cleaned_chunks = []
 for esn in train_data_full["ESN"].unique():
   temp = res_train[res_train["ESN"] == esn].copy()
   temp = remove_outliers(temp, SENSORS, threshold=0.8)
-  temp[degradation_vars] = temp[degradation_vars].rolling(window=100, min_periods=1).mean()
+  temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).mean()
   temp = temp.dropna()
   cleaned_chunks.append(temp)
 
@@ -482,7 +489,7 @@ train_data_full.update(res_train)
 
 # integrazione residui sul dataset originale
 res_val = remove_outliers(res_val, SENSORS, threshold=0.8)
-res_val = res_val.rolling(window=100, min_periods=1).mean()
+res_val = res_val.rolling(window=50, min_periods=1).mean()
 res_val = res_val.dropna()
 val_data.update(res_val)
 
@@ -539,7 +546,7 @@ cleaned_chunks = []
 for esn in dft["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
   temp = remove_outliers(temp, SENSORS, threshold=0.8)
-  temp[degradation_vars] = temp[degradation_vars].rolling(window=100, min_periods=1).mean()
+  temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).mean()
   cleaned_chunks.append(temp)
 
 res_test = pd.concat(cleaned_chunks).dropna()
@@ -629,9 +636,9 @@ print(f'Scaled: {res_train}')
 # Dati di validation
 for var in degradation_vars:
     res_val.loc[var] = minmax(res_val, var)
-hpt_rul_val_scaled = normalize_hi(hpt_rul_val)
-hpc_rul_val_scaled = normalize_hi(hpc_rul_val)
-ww_rul_val_scaled = normalize_hi(ww_rul_val)
+hpt_rul_val_scaled = normalize(hpt_rul_val)
+hpc_rul_val_scaled = normalize(hpc_rul_val)
+ww_rul_val_scaled = normalize(ww_rul_val)
 
 
 # Dati di test
@@ -698,7 +705,7 @@ bounds = [
 
 all_coefs_hpt = []
 all_coefs_hpc = []
-all_coefs_ww = []
+# all_coefs_ww = []
 
 for esn in res_train["ESN"].unique():
   result_hpt = differential_evolution(
@@ -706,10 +713,10 @@ for esn in res_train["ESN"].unique():
       bounds=bounds,
       args=(X_train_opt.loc[X_train_opt["ESN"] == esn, degradation_vars], Y_train_hpt.loc[Y_train_hpt["ESN"] == esn, "Cycles_to_HPT_SV"]),
       strategy='best1bin',
-      maxiter=400,                # generazioni
-      popsize=100,
+      maxiter=1500,                # generazioni
+      popsize=5,
       workers=-1,
-      tol=0,                      # Tolleranza
+      tol=0.02,                      # Tolleranza
   )
   all_coefs_hpt.append(result_hpt.x)
 
@@ -718,63 +725,57 @@ for esn in res_train["ESN"].unique():
       bounds=bounds,
       args=(X_train_opt.loc[X_train_opt["ESN"] == esn, degradation_vars], Y_train_hpc.loc[Y_train_hpc["ESN"] == esn, "Cycles_to_HPC_SV"]),
       strategy='best1bin',
-      maxiter=400,                # generazioni
-      popsize=100,
+      maxiter=1500,                # generazioni
+      popsize=5,
       workers=-1,
-      tol=0,                      # Tolleranza
+      tol=0.02,                      # Tolleranza
   )
   all_coefs_hpc.append(result_hpc.x)
 
-  result_ww = differential_evolution(
-      objective_deviation,
-      bounds=bounds,
-      args=(X_train_opt.loc[X_train_opt["ESN"] == esn, degradation_vars], Y_train_ww.loc[Y_train_ww["ESN"] == esn, "Cycles_to_WW"]),
-      strategy='best1bin',
-      maxiter=400,                # generazioni
-      popsize=100,
-      workers=-1,
-      tol=0,                      # Tolleranza
-  )
-  all_coefs_ww.append(result_ww.x)
+  # result_ww = differential_evolution(
+  #     objective_deviation,
+  #     bounds=bounds,
+  #     args=(X_train_opt.loc[X_train_opt["ESN"] == esn, degradation_vars], Y_train_ww.loc[Y_train_ww["ESN"] == esn, "Cycles_to_WW"]),
+  #     strategy='best1bin',
+  #     maxiter=400,                # generazioni
+  #     popsize=100,
+  #     workers=-1,
+  #     tol=0,                      # Tolleranza
+  # )
+  # all_coefs_ww.append(result_ww.x)
 
 coefs_hpt = np.mean(all_coefs_hpt, axis=0)
 coefs_hpc = np.mean(all_coefs_hpc, axis=0)
-coefs_ww  = np.mean(all_coefs_ww, axis=0)
+# coefs_ww  = np.mean(all_coefs_ww, axis=0)
 
 # Stampa dei risultati medi
 print("\nCOEFFICIENTI MEDI FINALI (Training Set):")
 print(f"HPT: {coefs_hpt}")
 print(f"HPC: {coefs_hpc}")
-print(f"WW:  {coefs_ww}")
+# print(f"WW:  {coefs_ww}")
 
 # Store dei coefficienti medi per il testing
 # %store coefs_hpt
 # %store coefs_hpc
-# %store coefs_ww
-
+# # %store coefs_ww
 
 
 # %%
-coefs_hpt = [280.82217546,
-             -285.60620346,
-             -2.14567969,
-             11.85810011,
-             -325.74398183,
-             108.41160169]
+# PARAMETRI DI TEST SOLO PER HPT E HPC
 
-coefs_hpc = [309.71369749,
-             107.41789038,
-             -199.50020415,
-             585.15358714,
-             -665.56105852,
-             -37.90033531]
+coefs_hpt = [291.33721892,
+             -474.57162399,
+             565.01867206,
+             -338.61851548,
+             -202.60278517,
+             323.38403957]
 
-coefs_ww = [-143.42443718,
-            53.30818271,
-            -63.83384532,
-            -240.3277819,
-            398.75355915,
-            572.93332311]
+coefs_hpc = [287.94611259,
+             462.87106361,
+             -64.9796347,
+             871.84054875,
+             -802.51172691,
+             449.17014923]
 
 # %%
 # PLOTTING SU DATI DI TRAINING
@@ -782,36 +783,29 @@ coefs_ww = [-143.42443718,
 hpt_limits, hpc_limits, ww_limits = [], [], []
 for esn in res_train["ESN"].unique():
   temp = res_train[res_train["ESN"] == esn].copy()
-  hi_hpt = HIE(coefs_hpt, temp[degradation_vars])
-  hi_hpc = HIE(coefs_hpc, temp[degradation_vars])
-  hi_ww = HIE(coefs_ww, temp[degradation_vars])
+  
+  # Calcolo e standardizzazione degli health index
+  hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars]))
+  hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars]))
+  # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars]))
 
   hpt_limits.append((hi_hpt.min(), hi_hpt.max()))
   hpc_limits.append((hi_hpc.min(), hi_hpc.max()))
-  ww_limits.append((hi_ww.min(), hi_ww.max()))
+  # ww_limits.append((hi_ww.min(), hi_ww.max()))
 
-  # Standardizzazione
-  hi_min_hpt, hi_max_hpt = hi_hpt.min(), hi_hpt.max()
-  hi_hpt = (hi_hpt - hi_min_hpt) / (hi_max_hpt - hi_min_hpt)
-  hi_min_hpc, hi_max_hpc = hi_hpc.min(), hi_hpc.max()
-  hi_hpc = (hi_hpc - hi_min_hpc) / (hi_max_hpc - hi_min_hpc)
-  hi_min_ww, hi_max_ww = hi_ww.min(), hi_ww.max()
-  hi_ww = (hi_ww - hi_min_ww) / (hi_max_ww - hi_min_ww)
+  # Definizione delle RUL efettive
   hpt_rul_esn = hpt_rul_train[hpt_rul_train["ESN"] == esn].copy()
   hpc_rul_esn = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
-  ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
+  # ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
 
-  fig, axs = plt.subplots(1, 3, figsize=(30, 6))
+  fig, axs = plt.subplots(1, 2, figsize=(30, 6))
   fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
   axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-  # ax0_rul = axs[0].twinx()
   axs[0].plot(hpt_rul_esn["Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-  # ax1_rul = axs[1].twinx()
   axs[1].plot(hpc_rul_esn["Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-  axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
-  # ax2_rul = axs[2].twinx()
-  axs[2].plot(ww_rul_esn["Cycles_to_WW"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+  # axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
+  # axs[2].plot(ww_rul_esn["Cycles_to_WW"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   fig.tight_layout()
   fig.show()
 
@@ -824,7 +818,7 @@ def get_avg_limits(limits_list):
 # Calcolo limiti medi finali
 avg_min_hpt, avg_max_hpt = get_avg_limits(hpt_limits)
 avg_min_hpc, avg_max_hpc = get_avg_limits(hpc_limits)
-avg_min_ww,  avg_max_ww  = get_avg_limits(ww_limits)
+# avg_min_ww,  avg_max_ww  = get_avg_limits(ww_limits)
 
 print(f"Limiti Medi HPT: Min={avg_min_hpt:.4f}, Max={avg_max_hpt:.4f}")
 
@@ -833,35 +827,24 @@ print(f"Limiti Medi HPT: Min={avg_min_hpt:.4f}, Max={avg_max_hpt:.4f}")
 # %store avg_max_hpt
 # %store avg_min_hpc
 # %store avg_max_hpc
-# %store avg_min_ww
-# %store avg_max_ww
+# # %store avg_min_ww
+# # %store avg_max_ww
 
 # %%
 # PLOTTING SU DATI DI VALIDATION
 
-hi_hpt_val = HIE(coefs_hpt, res_val[degradation_vars]).dropna()
-hi_hpc_val = HIE(coefs_hpc, res_val[degradation_vars]).dropna()
-hi_ww_val = HIE(coefs_ww, res_val[degradation_vars]).dropna()
+hi_hpt_val = normalize(HIE(coefs_hpt, res_val[degradation_vars]).dropna())
+hi_hpc_val = normalize(HIE(coefs_hpc, res_val[degradation_vars]).dropna())
+# hi_ww_val = normalize(HIE(coefs_ww, res_val[degradation_vars]).dropna())
 
-# Standardizzazione
-hi_min_hpt, hi_max_hpt = hi_hpt_val.min(), hi_hpt_val.max()
-hi_hpt_val = (hi_hpt_val - hi_min_hpt) / (hi_max_hpt - hi_min_hpt)
-hi_min_hpc, hi_max_hpc = hi_hpc_val.min(), hi_hpc_val.max()
-hi_hpc_val = (hi_hpc_val - hi_min_hpc) / (hi_max_hpc - hi_min_hpc)
-hi_min_ww, hi_max_ww = hi_ww_val.min(), hi_ww_val.max()
-hi_ww_val = (hi_ww_val - hi_min_ww) / (hi_max_ww - hi_min_ww)
-
-fig, axs = plt.subplots(1, 3, figsize=(30, 6))
+fig, axs = plt.subplots(1, 2, figsize=(30, 6))
 fig.suptitle(f'Validation', fontsize=16)
 axs[0].plot(hi_hpt_val, color='tab:blue', label='Health Index (HPT)')
-# ax0_rul = axs[0].twinx()
 axs[0].plot(hpt_rul_val_scaled, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
 axs[1].plot(hi_hpc_val, color='tab:green', label='Health Index (HPC)')
-# ax1_rul = axs[1].twinx()
 axs[1].plot(hpc_rul_val_scaled, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-axs[2].plot(hi_ww_val, color='tab:green', label='Health Index (HPC)')
-# ax2_rul = axs[2].twinx()
-axs[2].plot(ww_rul_val_scaled, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+# axs[2].plot(hi_ww_val, color='tab:green', label='Health Index (HPC)')
+# axs[2].plot(ww_rul_val_scaled, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
 fig.tight_layout()
 fig.show()
 
@@ -870,20 +853,17 @@ fig.show()
 
 for esn in dft["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
-  hi_hpt_test = HIE(coefs_hpt, temp[degradation_vars])
-  hi_hpc_test = HIE(coefs_hpc, temp[degradation_vars])
-  hi_ww_test  = HIE(coefs_ww, temp[degradation_vars])
 
-  # Standardizzazione usando i min e max dei dati di training
-  hi_hpt_test = (hi_hpt_test - avg_min_hpt) / (avg_max_hpt - avg_min_hpt)
-  hi_hpc_test = (hi_hpc_test - avg_min_hpc) / (avg_max_hpc - avg_min_hpc)
-  hi_ww_test = (hi_ww_test - avg_min_ww) / (avg_max_ww - avg_min_ww)
+  # Calcolo e standardizzazione degli health index
+  hi_hpt_test = normalize(HIE(coefs_hpt, temp[degradation_vars]).dropna())
+  hi_hpc_test = normalize(HIE(coefs_hpc, temp[degradation_vars]).dropna())
+  # hi_ww_test  = normalize(HIE(coefs_ww, temp[degradation_vars]).dropna())
 
-  fig, axs = plt.subplots(1, 3, figsize=(30, 6))
+  fig, axs = plt.subplots(1, 2, figsize=(30, 6))
   fig.suptitle(f'Test: ESN - {esn}', fontsize=16)
   axs[0].plot(hi_hpt_test, color='tab:blue', label='Health Index (HPT)')
   axs[1].plot(hi_hpc_test, color='tab:green', label='Health Index (HPC)')
-  axs[2].plot(hi_ww_test, color='tab:red', label='Health Index (HPC)')
+  # axs[2].plot(hi_ww_test, color='tab:red', label='Health Index (HPC)')
   fig.tight_layout()
   fig.show()
 
@@ -988,60 +968,57 @@ if hpc_events[sample_esn]:
     print(res_train.loc[evt-5 : evt+5, ["ESN", "Cycle_count_HPC"]])
 
 # %%
+# NON USARE QUESTO
+
 # TRAINING REGRESSORE PER ERRORE GAP
 # lightgbm trainato su spezzoni di eventi
 # un modello per hpt e hpc e uno per ww???????????
 
 # Regressori per il calcolo dell'errore (tra predizione e RUL reale)
-regr_hpc = LinearRegression()
-regr_hpt = LinearRegression()
-regr_ww = LinearRegression()
+# NON CREDO CHE SERVANO
+# regr_hpc = LinearRegression()
+# regr_hpt = LinearRegression()
+# regr_ww = LinearRegression()
 
 # Liste per il training dei regressori
 all_train_hi_hpt = []
-all_train_hi_hpc = []
-all_train_hi_ww = []
 all_train_hpt_rul = []
+all_train_hi_hpc = []
 all_train_hpc_rul = []
-all_train_ww_rul = []
-
-def normalize_hi(hi):
-  hi_min, hi_max = hi.min(), hi.max()
-  hi = (hi - hi_min) / (hi_max - hi_min)
-  hi = hi.to_frame()
-  return hi
+# all_train_hi_ww = []
+# all_train_ww_rul = []
 
 # HI di training
 for esn in res_train["ESN"].unique():
   temp = res_train[res_train["ESN"] == esn].copy()
-  hi_hpt = normalize_hi(HIE(coefs_hpt, temp[degradation_vars]))
-  hi_hpc = normalize_hi(HIE(coefs_hpc, temp[degradation_vars]))
-  hi_ww = normalize_hi(HIE(coefs_ww, temp[degradation_vars]))
+  hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars]).dropna())
+  hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars]).dropna())
+  # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars]).dropna())
   print(f'SHAPE: {hi_hpt.shape}')
 
   hpt_rul_esn = hpt_rul_train[hpt_rul_train["ESN"] == esn].copy()
   hpc_rul_esn = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
-  ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
+  # ww_rul_esn  = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
   rul_hpt_esn = hpt_rul_esn.iloc[:, 1]
   rul_hpc_esn = hpc_rul_esn.iloc[:, 1]
-  rul_ww_esn  = ww_rul_esn.iloc[:, 1]
+  # rul_ww_esn  = ww_rul_esn.iloc[:, 1]
 
   all_train_hi_hpt.append(hi_hpt)
   all_train_hi_hpc.append(hi_hpc)
-  all_train_hi_ww.append(hi_ww)
+  # all_train_hi_ww.append(hi_ww)
   all_train_hpt_rul.append(rul_hpt_esn)
   all_train_hpc_rul.append(rul_hpc_esn)
-  all_train_ww_rul.append(rul_ww_esn)
+  # all_train_ww_rul.append(rul_ww_esn)
 
 
 # Impiliamo tutto: diventano quattro matrici uniche
 X_train_hpt = pd.concat(all_train_hi_hpt, ignore_index=True).dropna()
 X_train_hpc = pd.concat(all_train_hi_hpc, ignore_index=True).dropna()
-X_train_ww = pd.concat(all_train_hi_ww, ignore_index=True).dropna()
+# X_train_ww = pd.concat(all_train_hi_ww, ignore_index=True).dropna()
 
 Y_train_hpt = pd.concat(all_train_hpt_rul, ignore_index=True).dropna()
 Y_train_hpc = pd.concat(all_train_hpc_rul, ignore_index=True).dropna()
-Y_train_ww = pd.concat(all_train_ww_rul, ignore_index=True).dropna()
+# Y_train_ww = pd.concat(all_train_ww_rul, ignore_index=True).dropna()
 
 
 # TRAINING dei regressori per l'errore
@@ -1050,7 +1027,7 @@ print(f'Y TRAIN: {Y_train_hpt.shape}')
 
 regr_hpt.fit(X_train_hpt, Y_train_hpt)
 regr_hpc.fit(X_train_hpc, Y_train_hpc)
-regr_ww.fit(X_train_ww, X_train_ww)
+# regr_ww.fit(X_train_ww, X_train_ww)
 
 
 test_hi_hpt = normalize_hi(HIE(coefs_hpt, res_test[res_test["ESN"] == 106][degradation_vars]))
@@ -1087,9 +1064,11 @@ X_ww_list, y_ww_list = [], []
 for esn in res_train["ESN"].unique():
 
     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
-    hi_hpt = normalize_hi(HIE(coefs_hpt, temp[degradation_vars])).dropna()
-    hi_hpc = normalize_hi(HIE(coefs_hpc, temp[degradation_vars])).dropna()
-    hi_ww = normalize_hi(HIE(coefs_ww, temp[degradation_vars])).dropna()
+
+    # Calcolo e standardizzazione degli health index
+    hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars])).dropna()
+    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars])).dropna()
     print(f'SHAPE: {hi_hpt.shape}')
 
     # Valori predetti
@@ -1099,7 +1078,7 @@ for esn in res_train["ESN"].unique():
 
     hpt_rul = hpt_rul_train[hpt_rul_train["ESN"] == esn].copy()
     hpc_rul = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
-    ww_rul = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
+    # ww_rul = ww_rul_train[ww_rul_train["ESN"] == esn].copy()
 
     # Plot intermedio
     # fig, axs = plt.subplots(1, 3, figsize=(30, 6))
@@ -1116,13 +1095,13 @@ for esn in res_train["ESN"].unique():
     # Calcolo errore gap
     gap_true_hpt = hpt_rul["Cycles_to_HPT_SV"].values.flatten() - np.asarray(hi_hpt).flatten()
     gap_true_hpc = hpc_rul["Cycles_to_HPC_SV"].values.flatten() - np.asarray(hi_hpc).flatten()
-    gap_true_ww = ww_rul["Cycles_to_WW"].values.flatten() - np.asarray(hi_ww).flatten()
+    # gap_true_ww = ww_rul["Cycles_to_WW"].values.flatten() - np.asarray(hi_ww).flatten()
 
     window_size = 100
 
     feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
     feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
+    # feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
 
     # Accumulo dati HPT
     X_hpt_list.append(pd.DataFrame({'HI': np.asarray(hi_hpt).flatten(), 'Slope': feat_slope_hpt, 'Intercept': feat_intercept_hpt}))
@@ -1133,8 +1112,8 @@ for esn in res_train["ESN"].unique():
     y_hpc_list.append(gap_true_hpc)
 
     # Accumulo dati WW
-    X_ww_list.append(pd.DataFrame({'HI': np.asarray(hi_ww).flatten(), 'Slope': feat_slope_ww, 'Intercept': feat_intercept_ww}))
-    y_ww_list.append(gap_true_ww)
+    # X_ww_list.append(pd.DataFrame({'HI': np.asarray(hi_ww).flatten(), 'Slope': feat_slope_ww, 'Intercept': feat_intercept_ww}))
+    # y_ww_list.append(gap_true_ww)
 
     
 X_train_hpc = pd.concat(X_hpc_list, ignore_index=True)
@@ -1143,26 +1122,26 @@ y_train_hpc = np.concatenate(y_hpc_list)
 X_train_hpt = pd.concat(X_hpt_list, ignore_index=True)
 y_train_hpt = np.concatenate(y_hpt_list)
 
-X_train_ww = pd.concat(X_ww_list, ignore_index=True)
-y_train_ww = np.concatenate(y_hpt_list) # Attenzione: correggi se era y_ww_list
+# X_train_ww = pd.concat(X_ww_list, ignore_index=True)
+# y_train_ww = np.concatenate(y_hpt_list)
 
 # Training dei modelli
 print("Training LGBM HPC...")
-lgbm_hpc = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
+lgbm_hpc = lgb.LGBMRegressor(n_estimators=1500, learning_rate=0.03)
 lgbm_hpc.fit(X_train_hpc, y_train_hpc)
 
 print("Training LGBM HPT...")
-lgbm_hpt = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
+lgbm_hpt = lgb.LGBMRegressor(n_estimators=1500, learning_rate=0.03)
 lgbm_hpt.fit(X_train_hpt, y_train_hpt)
 
-print("Training LGBM WW...")
-lgbm_ww = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_ww.fit(X_train_ww, y_train_ww)
+# print("Training LGBM WW...")
+# lgbm_ww = lgb.LGBMRegressor(n_estimators=10000, learning_rate=0.01)
+# lgbm_ww.fit(X_train_ww, y_train_ww)
 
 
 # %store lgbm_hpc
 # %store lgbm_hpt
-# %store lgbm_ww
+# # %store lgbm_ww
 
 
 
@@ -1171,16 +1150,17 @@ lgbm_ww.fit(X_train_ww, y_train_ww)
 
 for esn in res_train["ESN"].unique():
     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
-    hi_hpt = normalize_hi(HIE(coefs_hpt, temp[degradation_vars])).dropna()
-    hi_hpc = normalize_hi(HIE(coefs_hpc, temp[degradation_vars])).dropna()
-    hi_ww = normalize_hi(HIE(coefs_ww, temp[degradation_vars])).dropna()
+
+    # Calcolo e standardizzazione degli health index
+    hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars])).dropna()
+    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars])).dropna()
     print(f'SHAPE: {hi_hpt.shape}')
 
     # RUL effettiva
     hpt_rul = hpt_rul_train.loc[hpt_rul_train["ESN"] == esn, "Cycles_to_HPT_SV"].values.copy()
     hpc_rul = hpc_rul_train.loc[hpc_rul_train["ESN"] == esn, "Cycles_to_HPC_SV"].values.copy()
-    ww_rul = ww_rul_train.loc[ww_rul_train["ESN"] == esn, "Cycles_to_WW"].values.copy()
-
+    # ww_rul = ww_rul_train.loc[ww_rul_train["ESN"] == esn, "Cycles_to_WW"].values.copy()
 
     # HPT
     feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
@@ -1202,25 +1182,25 @@ for esn in res_train["ESN"].unique():
     pred_gap_hpc = lgbm_hpc.predict(X_lgbm_hpc)
     pred_rul_hpc = hi_hpc.values.flatten() + pred_gap_hpc
 
-    # WW
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values.flatten(),                 # Valore attuale HI
-        'Slope': feat_slope_ww,             # Pendenza locale
-        'Intercept': feat_intercept_ww      # Intercetta locale
-    })
-    pred_gap_ww = lgbm_ww.predict(X_lgbm_ww)
-    pred_rul_ww = hi_ww.values.flatten() + pred_gap_ww
+    # # WW
+    # feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
+    # X_lgbm_ww = pd.DataFrame({
+    #     'HI': hi_ww.values.flatten(),                 # Valore attuale HI
+    #     'Slope': feat_slope_ww,             # Pendenza locale
+    #     'Intercept': feat_intercept_ww      # Intercetta locale
+    # })
+    # pred_gap_ww = lgbm_ww.predict(X_lgbm_ww)
+    # pred_rul_ww = hi_ww.values.flatten() + pred_gap_ww
 
 
-    fig, axs = plt.subplots(1, 3, figsize=(30, 6))
+    fig, axs = plt.subplots(1, 2, figsize=(30, 6))
     fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
     axs[0].plot(pred_rul_hpt, color='tab:blue', label='Predicted - HPT')
     axs[0].plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
     axs[1].plot(pred_rul_hpc, color='tab:blue', label='Predicted - HPC')
     axs[1].plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
-    axs[2].plot(pred_rul_ww, color='tab:blue', label='Predicted - WW')
-    axs[2].plot(ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
+    # axs[2].plot(pred_rul_ww, color='tab:blue', label='Predicted - WW')
+    # axs[2].plot(ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
     fig.tight_layout()
     fig.show()
 
@@ -1230,15 +1210,16 @@ for esn in res_train["ESN"].unique():
 # %%
 # Test sul motore di VALIDATION
 
-val_hi_hpt = normalize_hi(HIE(coefs_hpt, res_val[degradation_vars])).dropna()
-val_hi_hpc = normalize_hi(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
-val_hi_ww = normalize_hi(HIE(coefs_ww, res_val[degradation_vars])).dropna()
+# Calcolo e standardizzazione degli health index
+val_hi_hpt = normalize(HIE(coefs_hpt, res_val[degradation_vars])).dropna()
+val_hi_hpc = normalize(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
+# val_hi_ww = normalize(HIE(coefs_ww, res_val[degradation_vars])).dropna()
 print(f'SHAPE: {val_hi_hpt.shape}')
 
 # RUL effettiva
 val_hpt_rul = hpt_rul_val_scaled.values.copy()
 val_hpc_rul = hpc_rul_val_scaled.values.copy()
-val_ww_rul = ww_rul_val_scaled.values.copy()
+# val_ww_rul = ww_rul_val_scaled.values.copy()
 
 
 # HPT
@@ -1261,25 +1242,25 @@ X_lgbm_hpc_val = pd.DataFrame({
 pred_gap_hpc_val = lgbm_hpc.predict(X_lgbm_hpc_val)
 pred_rul_hpc_val = val_hi_hpc.values.flatten() + pred_gap_hpc_val
 
-# WW
-feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(val_hi_ww, window_size)
-X_lgbm_ww_val = pd.DataFrame({
-    'HI': val_hi_ww.values.flatten(),                 # Valore attuale HI
-    'Slope': feat_slope_ww,             # Pendenza locale
-    'Intercept': feat_intercept_ww      # Intercetta locale
-})
-pred_gap_ww_val = lgbm_ww.predict(X_lgbm_ww_val)
-pred_rul_ww_val = val_hi_ww.values.flatten() + pred_gap_ww_val
+# # WW
+# feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(val_hi_ww, window_size)
+# X_lgbm_ww_val = pd.DataFrame({
+#     'HI': val_hi_ww.values.flatten(),                 # Valore attuale HI
+#     'Slope': feat_slope_ww,             # Pendenza locale
+#     'Intercept': feat_intercept_ww      # Intercetta locale
+# })
+# pred_gap_ww_val = lgbm_ww.predict(X_lgbm_ww_val)
+# pred_rul_ww_val = val_hi_ww.values.flatten() + pred_gap_ww_val
 
 
-fig, axs = plt.subplots(1, 3, figsize=(30, 6))
+fig, axs = plt.subplots(1, 2, figsize=(30, 6))
 fig.suptitle(f'Validation: ESN - {testing_esn}', fontsize=16)
 axs[0].plot(pred_rul_hpt_val, color='tab:blue', label='Predicted - HPT')
 axs[0].plot(val_hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
 axs[1].plot(pred_rul_hpc_val, color='tab:blue', label='Predicted - HPC')
 axs[1].plot(val_hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
-axs[2].plot(pred_rul_ww_val, color='tab:blue', label='Predicted - WW')
-axs[2].plot(val_ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
+# axs[2].plot(pred_rul_ww_val, color='tab:blue', label='Predicted - WW')
+# axs[2].plot(val_ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
 fig.tight_layout()
 fig.show()
 
