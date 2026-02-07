@@ -1400,21 +1400,22 @@ for esn in res_train["ESN"].unique():
 
 
 # %%
+# TRAINING 
 
 window_slope = 50
-sensors_to_use = ['Sensed_T3', 'Sensed_T45', 'Sensed_Ps3']
+sensors_to_use = ['Sensed_T3', 'Sensed_T45']
 
 print("Calcolo degli Slope per i sensori selezionati...")
 for sensor in sensors_to_use:
     col_name = f'{sensor}_Slope'
     # Calcoliamo lo slope mobile per ogni motore
-    res_train[col_name] = res_train.groupby('ESN')[sensor].transform(
+    res_train[col_name] = normalize(res_train.groupby('ESN')[sensor].transform(
         lambda x: x.rolling(window=window_slope, min_periods=window_slope).apply(get_slope)
-    ).fillna(0)
+    ).fillna(0))
 
 # --- 3. PREPARAZIONE DATASET DI TRAINING ---
 # Selezioniamo i residui originali + gli slope appena calcolati
-features = sensors_to_use + [f'{s}_Slope' for s in sensors_to_use]
+features = [f'{s}_Slope' for s in sensors_to_use]
 
 X_train_ww = res_train[features]
 y_train_ww = ww_rul_train['Cycles_to_WW']
@@ -1461,7 +1462,7 @@ plt.show()
 # %store lgbm_ww
 
 # %%
-sensors_to_use = ['Sensed_T3', 'Sensed_T45', 'Sensed_Ps3']
+sensors_to_use = ['Sensed_T3', 'Sensed_T45']
 
 # Creiamo una copia per non sporcare i dati originali
 X_test_ww = res_val[sensors_to_use].copy()
@@ -1470,18 +1471,16 @@ X_test_ww = res_val[sensors_to_use].copy()
 # Usiamo la stessa finestra (window_slope = 50) del training
 for sensor in sensors_to_use:
     col_name = f'{sensor}_Slope'
-    X_test_ww[col_name] = X_test_ww[sensor].rolling(window=50, min_periods=50).apply(get_slope).fillna(0)
+    X_test_ww[col_name] = normalize(X_test_ww[sensor].rolling(window=50, min_periods=50).apply(get_slope).fillna(0))
 
 # Selezioniamo solo le colonne usate durante il training (ordine corretto)
-features = sensors_to_use + [f'{s}_Slope' for s in sensors_to_use]
+features = [f'{s}_Slope' for s in sensors_to_use]
 X_test_input = X_test_ww[features]
 
 
 # Eseguiamo la predizione
 y_pred_val = lgbm_ww.predict(X_test_input)
 
-# (Opzionale) Applichiamo un leggero smoothing alla predizione per evitare sbalzi
-y_pred_val_smooth = pd.Series(y_pred_val).rolling(window=10, min_periods=1).mean()
 
 # Recuperiamo la RUL reale per il confronto
 y_true_val = ww_rul_val_scaled.values 
@@ -1489,7 +1488,7 @@ y_true_val = ww_rul_val_scaled.values
 # --- PLOT DI VALIDAZIONE ---
 plt.figure(figsize=(15, 6))
 plt.plot(y_true_val, label='RUL Reale (Water Wash)', color='orange', linewidth=2)
-plt.plot(y_pred_val_smooth, label='RUL Predetta (Modello)', color='blue', linestyle='--')
+plt.plot(y_pred_val, label='RUL Predetta (Modello)', color='blue')
 plt.title(f'Validazione su ESN {testing_esn}: Predizione Eventi Water Wash', fontsize=16)
 plt.xlabel('Cicli')
 plt.ylabel('RUL (Cicli mancanti)')
