@@ -430,9 +430,12 @@ def get_slope(y):
 
 
 # %%
+print(df.columns)
+
+# %%
 # Regressore lineare per il calcolo dei residui
 
-cycles_healthy = 60
+cycles_healthy = 50
 
 val_data = df[df["ESN"] == testing_esn].reset_index().copy()
 X_val = val_data[operating_vars]
@@ -523,6 +526,8 @@ T45_res_val = res_val["Sensed_T45"]
 
 
 # %%
+# Calcolo dei residui per i dati di test
+
 res_test = pd.DataFrame()
 res_list = []
 
@@ -557,90 +562,6 @@ T45_res_test = res_test[["ESN", "Sensed_T45"]].copy()
 # %store res_test
 # %store T3_res_test
 # %store T45_res_test
-
-# %%
-import pandas as pd
-import numpy as np
-import lightgbm as lgb
-import matplotlib.pyplot as plt
-from scipy.stats import pearsonr
-
-# --- 1. FUNZIONE PER IL CALCOLO DELLA PENDENZA (SLOPE) ---
-def get_slope(y):
-    if len(y) < 2 or np.all(np.isnan(y)):
-        return 0.0
-    x = np.arange(len(y))
-    # Polyfit di grado 1: ritorna [pendenza, intercetta]
-    return np.polyfit(x, y, 1)[0]
-
-# --- 2. PREPARAZIONE FEATURE (SLOPE E RESIDUI) ---
-window_slope = 50  # Finestra per la pendenza
-
-print("Calcolo delle pendenze per i residui...")
-for esn in res_train["ESN"].unique():
-    mask = res_train["ESN"] == esn
-    # Calcoliamo lo slope per i sensori principali
-    # Usiamo transform per mantenere l'allineamento degli indici
-    res_train.loc[mask, 'T45_Slope'] = res_train.loc[mask, 'Sensed_T45'].rolling(window=window_slope, min_periods=10).apply(get_slope)
-    res_train.loc[mask, 'T3_Slope'] = res_train.loc[mask, 'Sensed_T3'].rolling(window=window_slope, min_periods=10).apply(get_slope)
-    res_train.loc[mask, 'Ps3_Slope'] = res_train.loc[mask, 'Sensed_Ps3'].rolling(window=window_slope, min_periods=10).apply(get_slope)
-
-# Riempiamo i NaN generati dalla rolling window iniziale
-res_train[['T45_Slope', 'T3_Slope', 'Ps3_Slope']] = res_train[['T45_Slope', 'T3_Slope', 'Ps3_Slope']].fillna(0)
-
-# --- 3. CONTROLLO CORRELAZIONE (Per rispondere alla tua domanda su T3) ---
-print("\nVerifica Correlazione Slope vs RUL WW:")
-target_ww = ww_rul_train['Cycles_to_WW'].values
-for col in ['T45_Slope', 'T3_Slope', 'Ps3_Slope']:
-    corr, _ = pearsonr(res_train[col], target_ww)
-    print(f"Correlazione {col}: {corr:.4f}")
-
-# --- 4. PREPARAZIONE DATASET DI TRAINING ---
-# Scegliamo le feature in base a quelle che hanno mostrato correlazione nel plot/test
-features_ww = ['Sensed_T45', 'T45_Slope', 'Ps3_Slope'] # Esempio: escludiamo T3 se non correla
-
-X_train_ww = res_train[features_ww].copy()
-# Applichiamo il clipping alla RUL (Target): ignoriamo tutto ciò che è sopra 150 cicli
-# Questo serve a far concentrare il modello sulla fase critica pre-lavaggio
-y_train_ww = ww_rul_train['Cycles_to_WW'].clip(upper=150)
-
-# --- 5. ADDESTRAMENTO MODELLO LIGHTGBM ---
-print("\nAddestramento LightGBM per Water Wash...")
-lgbm_ww = lgb.LGBMRegressor(
-    n_estimators=1500,
-    learning_rate=0.02,
-    num_leaves=31,
-    importance_type='gain',
-    reg_alpha=0.2,   # Regolarizzazione
-    reg_lambda=0.2,
-    random_state=42
-)
-
-lgbm_ww.fit(X_train_ww, y_train_ww)
-print("Modello addestrato con successo!")
-
-# --- 6. TEST E PLOT DI VERIFICA (Su un ESN di training) ---
-esn_test = res_train["ESN"].unique()[0]
-mask_test = res_train["ESN"] == esn_test
-
-X_test_sample = X_train_ww[mask_test]
-y_true_sample = ww_rul_train.loc[mask_test, 'Cycles_to_WW']
-y_pred_sample = lgbm_ww.predict(X_test_sample)
-
-plt.figure(figsize=(15, 6))
-plt.plot(y_true_sample.values, label='RUL Reale (WW)', color='orange', linestyle='--', linewidth=2)
-plt.plot(y_pred_sample, label='RUL Predetta (LGBM)', color='blue', alpha=0.8)
-plt.axhline(y=30, color='red', linestyle=':', label='Soglia Allerta (30 cicli)')
-plt.title(f"Verifica Predizione Water Wash - ESN {esn_test}")
-plt.xlabel("Cicli")
-plt.ylabel("RUL (Cicli al prossimo lavaggio)")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-# Store per il notebook di test
-# %store lgbm_ww
-# %store features_ww
 
 # %%
 # PLOTTING TRAINING
@@ -935,7 +856,7 @@ fig.tight_layout()
 fig.show()
 
 # %%
-# PLOTTING SU DATI DI TESTING
+# PLOTTING SU DATI DI TEST
 
 for esn in dft["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
@@ -957,6 +878,8 @@ for esn in dft["ESN"].unique():
 # ### Classificazione dell'errore con LightGBM per HPC, HPT e WW
 
 # %%
+# NON USARE QUESTO
+
 import pandas as pd
 import numpy as np
 
@@ -1355,143 +1278,93 @@ fig.show()
 # # WW
 
 # %%
-# TENTATIVO PER WW: CONTROLLO SE LA PENDENZA DEL RESIDUO DI T45 AUMENTA ALL'AVVICINARSI DEL WW
+# Test con slope dell'hpc_hi
 
-# Calcolo della slope del residuo di T3
-window_slope = 50
-res_train['T3_Slope'] = res_train.groupby('ESN')['Sensed_Ps3'].transform(
-    lambda x: x.rolling(window=window_slope).apply(get_slope)
-)
+X_ww_list, y_ww_list = [], []
 
-# Riempimento dei NaN con 0
-res_train['T3_Slope'] = normalize(res_train['T3_Slope'].fillna(0))
-
-
-# Iterazione per ogni ESN di train
 for esn in res_train["ESN"].unique():
-    data_plot = res_train[res_train["ESN"] == esn]
-    target_plot = ww_rul_train[ww_rul_train["ESN"] == esn]
+    temp = res_train[res_train["ESN"] == esn].copy()
+    hpc_hi = normalize(HIE(coefs_hpc, temp[degradation_vars]))
+    ww_rul = ww_rul_train.loc[ww_rul_train["ESN"] == esn, "Cycles_to_WW"].copy()
+    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hpc_hi, window_size)
+    feat_slope_ps3, feat_intercept_ps3 = get_rolling_slope_intercept(temp["Sensed_Ps3"], window_size)
+    # Accumulo dati HPC
+    X_ww_list.append(pd.DataFrame({'HI': hpc_hi.values.flatten(), 'Slope_hi': feat_slope_hpc, 'Intercept': feat_intercept_hpc, 'Slope_Ps3': feat_slope_ps3}))
+    y_ww_list.append(ww_rul)
 
-    # PLOT
-    fig, ax = plt.subplots(figsize=(15, 7))
-    ax.set_xlabel('Cicli')
-    ax.set_ylabel('Residuo Sensed_T3', color='tab:blue')
-    ax.plot(data_plot.index, data_plot['Sensed_Ps3'].rolling(20).mean(), color='tab:blue', linewidth=2, label='Residuo T3 (Smooth)')
-    ax.tick_params(axis='y', labelcolor='tab:blue')
-    ax.set_ylabel('Slope (Trend di Degrado)', color='tab:red')
-    ax.plot(data_plot.index, data_plot['T3_Slope'], color='tab:red', linewidth=2, label='T3 Slope (Window 50)')
-    ax.tick_params(axis='y', labelcolor='tab:red')
-    ax.spines.right.set_position(("axes", 1.1))
-    ax.plot(data_plot.index, target_plot['Cycles_to_WW'], color='gray', linestyle='--', alpha=0.5, label='RUL WW Reale')
-    ax.set_ylabel('RUL (Cicli mancanti al WW)', color='gray')
+X_train_ww = pd.concat(X_ww_list, ignore_index=True)
+y_train_ww = np.concatenate(y_ww_list)
 
-    plt.title(f'Analisi del Degrado per ESN {esn}: Residuo vs Slope vs RUL', fontsize=16)
-    fig.tight_layout()
-
-    # Uniamo le legende di tutti gli assi
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax.get_legend_handles_labels()
-    lines3, labels3 = ax.get_legend_handles_labels()
-    ax.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='upper left')
-
-    plt.grid(True, alpha=0.3)
-    plt.show()
-
-
-
-# %%
-# TRAINING 
-
-window_slope = 50
-sensors_to_use = ['Sensed_T3', 'Sensed_T45']
-
-print("Calcolo degli Slope per i sensori selezionati...")
-for sensor in sensors_to_use:
-    col_name = f'{sensor}_Slope'
-    # Calcoliamo lo slope mobile per ogni motore
-    res_train[col_name] = normalize(res_train.groupby('ESN')[sensor].transform(
-        lambda x: x.rolling(window=window_slope, min_periods=window_slope).apply(get_slope)
-    ).fillna(0))
-
-# --- 3. PREPARAZIONE DATASET DI TRAINING ---
-# Selezioniamo i residui originali + gli slope appena calcolati
-features = [f'{s}_Slope' for s in sensors_to_use]
-
-X_train_ww = res_train[features]
-y_train_ww = ww_rul_train['Cycles_to_WW']
-
-# Trucco: Clippiamo la RUL a 150. Oltre i 150 cicli, non ci interessa la precisione
-# y_train_ww_clipped = y_train_ww.clip(upper=150)
-
-# --- 4. TRAINING DEL MODELLO LIGHTGBM ---
-print("Inizio addestramento LightGBM per Water Wash...")
-lgbm_ww = lgb.LGBMRegressor(
-    n_estimators=1000,
-    learning_rate=0.03,
-    num_leaves=31,
-    importance_type='gain',
-    reg_alpha=0.2,   # L1 regularization
-    reg_lambda=0.2,  # L2 regularization
-    random_state=42
-)
-
-lgbm_ww.fit(X_train_ww, y_train_ww)
-print("Addestramento completato.")
-
-# --- 5. TEST E PLOT DEI RISULTATI ---
-# Proviamo la predizione su un motore di training per vedere se "fitta"
-esn_test = res_train["ESN"].unique()[0]
-mask = res_train["ESN"] == esn_test
-
-X_example = X_train_ww[mask]
-print(f'COSE: {X_example}')
-y_real = y_train_ww[mask]
-y_pred = lgbm_ww.predict(X_example)
-
-plt.figure(figsize=(15, 6))
-plt.plot(y_real.values, label='RUL Reale (WW)', color='orange', linewidth=2)
-plt.plot(y_pred, label='RUL Predetta (LGBM)', color='blue')
-# plt.title(f"Verifica Modello WW - ESN {esn_test}")
-plt.xlabel("Cicli")
-plt.ylabel("RUL (Cicli)")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
+print("Training LGBM HPT...")
+lgbm_ww = lgb.LGBMRegressor(n_estimators=1500, learning_rate=0.03)
+lgbm_ww.fit(X_train_ww, y_train_ww)  
 
 # %store lgbm_ww
 
+
 # %%
-sensors_to_use = ['Sensed_T3', 'Sensed_T45']
+# Test sui dati di training
 
-# Creiamo una copia per non sporcare i dati originali
-X_test_ww = res_val[sensors_to_use].copy()
+for esn in res_train["ESN"].unique():
+    temp = res_train[res_train["ESN"] == esn].reset_index().copy()
 
-# Calcoliamo le pendenze (Slope) anche per il set di validazione
-# Usiamo la stessa finestra (window_slope = 50) del training
-for sensor in sensors_to_use:
-    col_name = f'{sensor}_Slope'
-    X_test_ww[col_name] = normalize(X_test_ww[sensor].rolling(window=50, min_periods=50).apply(get_slope).fillna(0))
+    # Calcolo e standardizzazione degli health index
+    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    print(f'SHAPE: {hi_hpt.shape}')
 
-# Selezioniamo solo le colonne usate durante il training (ordine corretto)
-features = [f'{s}_Slope' for s in sensors_to_use]
-X_test_input = X_test_ww[features]
+    # RUL effettiva
+    ww_rul = ww_rul_train.loc[ww_rul_train["ESN"] == esn, "Cycles_to_WW"].values.copy()
+
+    # WW
+    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
+    feat_slope_ps3, feat_intercept_ps3 = get_rolling_slope_intercept(temp["Sensed_Ps3"], window_size)
+    X_lgbm_hpc = pd.DataFrame({
+        'HI': hi_hpc.values.flatten(),       # Valore attuale HI
+        'Slope_hi': feat_slope_hpc,          # Pendenza dell'hi
+        'Intercept': feat_intercept_hpc,     # Intercetta locale
+        'Slope_Ps3': feat_slope_ps3          # Pendenza della Ps3
+    })
+    pred_ww = lgbm_ww.predict(X_lgbm_hpc)
+
+    fig, ax = plt.subplots(figsize=(15, 6))
+    fig.suptitle(f'Training Performance: ESN {esn}', fontsize=16)
+    ax.plot(ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real RUL (WW)')
+    ax.plot(pred_ww, color='tab:blue', alpha=0.8, label='Predicted RUL (LGBM)')
+    ax.set_xlabel('Cicli (dopo finestra di slope)')
+    ax.set_ylabel('RUL (Cicli)')
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 
-# Eseguiamo la predizione
-y_pred_val = lgbm_ww.predict(X_test_input)
+# %%
+# Test sui dati di validation
 
+# Calcolo e standardizzazione degli health index
+hi_hpc = normalize(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
 
-# Recuperiamo la RUL reale per il confronto
-y_true_val = ww_rul_val_scaled.values 
+feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
+feat_slope_ps3, feat_intercept_ps3 = get_rolling_slope_intercept(res_val["Sensed_Ps3"].dropna(), window_size)
+print(feat_slope_hpc.shape)
+print(feat_slope_ps3.shape)
+X_lgbm_hpc = pd.DataFrame({
+    'HI': hi_hpc.values.flatten(),       # Valore attuale HI
+    'Slope_hi': feat_slope_hpc,          # Pendenza dell'hi
+    'Intercept': feat_intercept_hpc,     # Intercetta locale
+    'Slope_Ps3': feat_slope_ps3          # Pendenza della Ps3
+})
+pred_ww_raw = lgbm_ww.predict(X_lgbm_hpc)
 
-# --- PLOT DI VALIDAZIONE ---
-plt.figure(figsize=(15, 6))
-plt.plot(y_true_val, label='RUL Reale (Water Wash)', color='orange', linewidth=2)
-plt.plot(y_pred_val, label='RUL Predetta (Modello)', color='blue')
-plt.title(f'Validazione su ESN {testing_esn}: Predizione Eventi Water Wash', fontsize=16)
-plt.xlabel('Cicli')
-plt.ylabel('RUL (Cicli mancanti)')
-plt.legend()
-plt.grid(True, alpha=0.3)
+# Plot
+fig, ax = plt.subplots(figsize=(15, 6))
+fig.suptitle(f'Validation ESN - {testing_esn}', fontsize=16)
+ax.plot(ww_rul_val_scaled, color='tab:orange', linewidth=2, linestyle='--', label='Real RUL (WW)')
+ax.plot(pred_ww, color='tab:blue', alpha=0.8, label='Predicted RUL (LGBM)')
+ax.set_xlabel('Cicli (dopo finestra di slope)')
+ax.set_ylabel('RUL (Cicli)')
+ax.legend(loc='upper right')
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
 plt.show()
+
