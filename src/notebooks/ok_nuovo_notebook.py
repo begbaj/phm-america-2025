@@ -9,48 +9,45 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.11.9)
+#     display_name: phm-america-2025 (3.10.19)
 #     language: python
 #     name: python3
 # ---
 
 # %%
-from numpy import sign
-from pyparsing import line
-from scipy.optimize import minimize, differential_evolution
-from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import LinearRegression
-from sympy import O, deg
-import lightgbm as lgb
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import pulp
-import scipy.optimize as optimize
-import scipy.stats as stats
-import glob
-import os
-from sklearn.preprocessing import StandardScaler
-from enum import Enum
 from datetime import datetime
+from enum import Enum
+from numpy import sign
 from pandas import DataFrame, Series
 from plotly.graph_objs import Data
+from pyparsing import line
 from scipy import stats
+from scipy.optimize import minimize, differential_evolution
 from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import ParameterGrid
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
+from sympy import O, deg
 from types import FunctionType
 from xgboost import XGBRegressor
-import matplotlib.pyplot as plt
-import os.path as path
-import random
-from sklearn.svm import SVR
-import pwlf
-from sklearn.model_selection import ParameterGrid
 from xgboost import train
+import glob
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import os.path as path
+import pandas as pd
+import pulp
+import pwlf
+import random
+import scipy.optimize as optimize
+import scipy.stats as stats
 
 
 import warnings
@@ -67,85 +64,19 @@ from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 # %%
 # CONFIG
 
-DATA_TRAINING_DATA = f"training_data.csv"
-"""training_data.csv"""
-
-DATA_VALIDATION_DATA = f"test_data.csv"
-"""test_data.csv"""
-
-DATA_TEST_DATA = f"validation_data.csv"
-"""validation_data.csv"""
-
+DATA_BASE_PATH = f"../../Data/"
+DATA_TESTING_PATH= f"{DATA_BASE_PATH}/PHM2025_test_data/"
+DATA_TRAINING_PATH = f"{DATA_BASE_PATH}/PHM2025_training_data/"
+DATA_VALIDATION_PATH = f"{DATA_BASE_PATH}/PHM2025_validation_data/"
+def DATA_TEST_DATA(num):
+    return f"{DATA_TESTING_PATH}/test_{num}.csv"
+def DATA_VALIDATION_DATA(num):
+    return f"{DATA_TESTING_PATH}/val_{num}.csv"
+DATA_TRAINING_DATA = f"{DATA_TESTING_PATH}/training_data.csv"
+PLOT_PATH = f"./img/"
 
 # %%
-# UTLIS
-
-class ESENSORS(Enum):
-    """
-    è una lista dei sensori presenti nel dataset
-    serve solo per evitare di scrivere a mano i nomi dei sensori
-    """
-    Sensed_Altitude = "Sensed_Altitude"
-    Sensed_Mach = "Sensed_Mach"
-    Sensed_Pamb = "Sensed_Pamb"
-    Sensed_Pt2 = "Sensed_Pt2"
-    Sensed_TAT = "Sensed_TAT"
-    Sensed_WFuel = "Sensed_WFuel"
-    Sensed_VAFN = "Sensed_VAFN"
-    Sensed_VBV = "Sensed_VBV"
-    Sensed_Fan_Speed = "Sensed_Fan_Speed"
-    Sensed_Core_Speed = "Sensed_Core_Speed"
-    Sensed_T25 = "Sensed_T25"
-    Sensed_T3 = "Sensed_T3"
-    Sensed_Ps3 = "Sensed_Ps3"
-    Sensed_T45 = "Sensed_T45"
-    Sensed_P25 = "Sensed_P25"
-    Sensed_T5 = "Sensed_T5"
-    @classmethod
-    def values(cls) -> list[str]:
-        """Ritorna la lista dei valori."""
-        return [e.value for e in cls]
-    @classmethod
-    def iter(cls) -> list[str]:
-        """DEPRECATO, usa values. Ritorna la lista dei valori."""
-        return [e.value for e in cls]
-    @classmethod
-    def members(cls) -> list["ESENSORS"]:
-        """Ritorna la lista dei membri Enum."""
-        return list(cls)
-
-SENSORS = ESENSORS.values()
-
-def WrapData(data: DataFrame):
-    """
-    Generator di dati.
-    :param data: Description
-    :type data: DataFrame
-    """
-    def access() -> DataFrame:
-        return data.copy()
-    return access
-
-def load_training() -> FunctionType:
-    """
-    Carica il dataset di training
-    """
-    with open(DATA_TRAINING_DATA, "r") as f:
-        return WrapData(pd.read_csv(f))
-
-def load_validation() -> pd.DataFrame:
-    """
-    Carica il dataset di validation
-    """
-    with open(DATA_TEST_DATA, "r") as f:
-        return pd.read_csv(f)
-
-def load_test() -> pd.DataFrame:
-    """
-    Carica il dataset di test
-    """
-    with open(DATA_VALIDATION_DATA, "r") as f:
-        return pd.read_csv(f)
+SENSORS = u.ESENSORS.values()
 
 def remove_outliers(df: pd.DataFrame, sensor_cols=None, threshold=3, method='zscore') -> pd.DataFrame:
     """
@@ -251,10 +182,9 @@ def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], a
 
 
 # %%
-# model_i = 0
 testing_esn = 102
 operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-# degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+# degradation_vars = [s for s in u.SENSORS if s not in operating_vars] # scommentare se si vuole considerare anche i sensori non in test o valiation
 degradation_vars = [s for s in SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
 managed_cols = set(degradation_vars) | set(operating_vars)
 
@@ -296,6 +226,11 @@ agg_logic_t.update({col: 'median' for col in operating_vars})
 agg_logic_t.update({col: 'first' for col in other_cols_dft})
 dft = dft.groupby(['ESN', 'Cycles']).agg(agg_logic_t).reset_index(drop=True)
 rows_test = dft.groupby('ESN').size().reset_index(name='numero_righe').copy()
+
+# %store df
+# %store dfv
+# %store dft
+
 print(rows_test)
 
 
@@ -432,7 +367,7 @@ def get_slope(y):
 # %%
 # Regressore lineare per il calcolo dei residui
 
-cycles_healthy = 60
+cycles_healthy = 40
 
 val_data = df[df["ESN"] == testing_esn].reset_index().copy()
 X_val = val_data[operating_vars]
@@ -1495,3 +1430,37 @@ plt.ylabel('RUL (Cicli mancanti)')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.show()
+
+
+# %% [markdown]
+# # WW Come da Paper
+
+# %%
+def get_slope(y):
+    x = np.arange(len(y))
+    slope = np.polyfit(x, y, 1)[0]
+    return slope
+
+window_slope = 100
+res_train['T45_Slope'] = res_train.groupby('ESN')['Sensed_T45'].transform(
+    lambda x: x.rolling(window=window_slope).apply(get_slope)
+)
+
+res_train['T45_Diff_Slope'] = res_train.groupby("ESN")["T45_Slope"].diff()
+
+# Calcola il valore di T45 all'inizio di ogni ciclo di lavaggio (dove Cycle_count_WW è 0)
+res_train['T45_Reset'] = res_train.loc[res_train['Cycle_count_WW'] == 0, 'Sensed_T45']
+# Riempi i valori per i cicli successivi (forward fill)
+res_train['T45_Reset'] = res_train.groupby('ESN')['T45_Reset'].ffill()
+# Calcola l'incremento di temperatura attuale rispetto all'inizio del ciclo
+res_train['T45_Increment'] = res_train['Sensed_T45'] - res_train['T45_Reset']
+
+print(res_train)
+plt.figure()
+# plt.plot(res_train[res_train["ESN"] == 101]["Sensed_T45"])
+# plt.plot(res_train[res_train["ESN"] == 101]["T45_Slope"])
+# plt.plot(res_train[res_train["ESN"] == 101]["T45_Diff_Slope"])
+# plt.scatter(res_train[(res_train["ESN"] == 101) & (res_train["Cycle_count_WW"] == 0)].index.values, 0, 0.001)
+plt.plot(res_train["T45_Increment"])
+plt.show()
+
