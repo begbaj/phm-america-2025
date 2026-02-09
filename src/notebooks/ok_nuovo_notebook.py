@@ -193,39 +193,41 @@ managed_cols = set(degradation_vars) | set(operating_vars)
 df = u.load_training()()
 df = pp.remove_outliers(df, SENSORS)
 df = pp.missingfill(df).dropna()
-# Aggregazione dataset di training
-other_cols_df = [col for col in df.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
-agg_logic.update({col: 'median' for col in operating_vars})
-agg_logic.update({col: 'first' for col in other_cols_df})
-df = df.groupby(['ESN', 'Cycles_Since_New']).agg(agg_logic).reset_index(drop=True)
-rows = df.groupby('ESN').size().reset_index(name='rows').copy()
-print(rows)
+
+# # Aggregazione dataset di training
+# other_cols_df = [col for col in df.columns if col not in managed_cols]
+# agg_logic = {col: 'median' for col in degradation_vars}
+# agg_logic.update({col: 'median' for col in operating_vars})
+# agg_logic.update({col: 'first' for col in other_cols_df})
+# df = df.groupby(['ESN', 'Cycles_Since_New']).agg(agg_logic).reset_index(drop=True)
+# rows = df.groupby('ESN').size().reset_index(name='rows').copy()
+# print(rows)
 
 # DOWNSAMPLING VALIDATION PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
 dfv = u.load_validation(range(0,48))
 dfv = pp.remove_outliers(dfv, SENSORS)
 dfv = pp.missingfill(dfv, align_cols=["Snapshot", "Cycles"]).dropna()
+
 # Aggregazione dataset di validation
-other_cols_dfv = [col for col in dfv.columns if col not in managed_cols]
-agg_logic_v = {col: 'median' for col in degradation_vars}
-agg_logic_v.update({col: 'median' for col in operating_vars})
-agg_logic_v.update({col: 'first' for col in other_cols_dfv})
-dfv = dfv.groupby(['ESN', 'Cycles']).agg(agg_logic_v).reset_index(drop=True)
-rows_val = dfv.groupby('ESN').size().reset_index(name='numero_righe').copy()
-print(rows_val)
+# other_cols_dfv = [col for col in dfv.columns if col not in managed_cols]
+# agg_logic_v = {col: 'median' for col in degradation_vars}
+# agg_logic_v.update({col: 'median' for col in operating_vars})
+# agg_logic_v.update({col: 'first' for col in other_cols_dfv})
+# dfv = dfv.groupby(['ESN', 'Cycles']).agg(agg_logic_v).reset_index(drop=True)
+# rows_val = dfv.groupby('ESN').size().reset_index(name='numero_righe').copy()
+# print(rows_val)
 
 # DOWNSAMPLING TESTING PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
 dft = u.load_testing(range(0,52))
 dft = pp.remove_outliers(dft, SENSORS)
 dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
 # Aggregazione dataset di training
-other_cols_dft = [col for col in dft.columns if col not in managed_cols]
-agg_logic_t = {col: 'median' for col in degradation_vars}
-agg_logic_t.update({col: 'median' for col in operating_vars})
-agg_logic_t.update({col: 'first' for col in other_cols_dft})
-dft = dft.groupby(['ESN', 'Cycles']).agg(agg_logic_t).reset_index(drop=True)
-rows_test = dft.groupby('ESN').size().reset_index(name='numero_righe').copy()
+# other_cols_dft = [col for col in dft.columns if col not in managed_cols]
+# agg_logic_t = {col: 'median' for col in degradation_vars}
+# agg_logic_t.update({col: 'median' for col in operating_vars})
+# agg_logic_t.update({col: 'first' for col in other_cols_dft})
+# dft = dft.groupby(['ESN', 'Cycles']).agg(agg_logic_t).reset_index(drop=True)
+# rows_test = dft.groupby('ESN').size().reset_index(name='numero_righe').copy()
 
 # %store df
 # %store dfv
@@ -372,14 +374,27 @@ print(df.columns)
 
 cycles_healthy = 50
 
+testing_esn = 102
 val_data = df[df["ESN"] == testing_esn].reset_index().copy()
 X_val = val_data[operating_vars]
 Y_val = val_data[degradation_vars]
 
 train_data_full = df[df["ESN"] != testing_esn].copy()
 train_data_healthy = train_data_full.groupby("ESN").head(cycles_healthy).reset_index(drop=True)
-X_train = train_data_healthy[operating_vars]
-Y_train = train_data_healthy[degradation_vars]
+
+base_df = train_data_healthy.copy()
+new_synthetic_units = []
+for i in range(400):
+    aug_df = base_df.copy()
+    noise = np.random.normal(loc=0, scale=10, size=aug_df[degradation_vars + operating_vars].shape)
+    aug_df[degradation_vars + operating_vars] += noise
+    aug_df['ESN'] = f"aug_{i}" 
+    new_synthetic_units.append(aug_df)
+
+train_data_healthy_augmented = pd.concat([train_data_healthy] + new_synthetic_units, ignore_index=True)
+
+X_train = train_data_healthy_augmented[operating_vars]
+Y_train = train_data_healthy_augmented[degradation_vars]
 
 print(X_train.shape, Y_train.shape)
 print(X_val.shape, Y_val.shape)
@@ -387,6 +402,7 @@ print(X_val.shape, Y_val.shape)
 # training regressore lineare
 model = train_model(X_train, Y_train)
 # %store model
+
 
 # predict dei valori
 res_list = []
@@ -404,6 +420,9 @@ res_train = pd.concat(res_list)
 # residui
 res_val_list = []
 Y_pred = model.predict(X_val)
+plt.figure()
+plt.plot(Y_pred)
+plt.show()
 res_val_temp = Y_val - Y_pred
 res_val_list.append(res_val_temp)
 res_val = pd.concat(res_val_list)
@@ -413,7 +432,7 @@ cleaned_chunks = []
 for esn in train_data_full["ESN"].unique():
   temp = res_train[res_train["ESN"] == esn].copy()
   temp = remove_outliers(temp, SENSORS, threshold=0.8)
-  temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).mean()
+  temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).median()
   temp = temp.dropna()
   cleaned_chunks.append(temp)
 
@@ -458,6 +477,27 @@ T45_res_val = res_val["Sensed_T45"]
 # %store T3_res_val
 # %store T45_res_val
 
+# PLOTTING TRAINING
+fig, axs = plt.subplots(2,3, figsize=(15,8))
+for esn in res_train["ESN"].unique():
+  fig.suptitle(f'ESN - {esn}', fontsize=16)
+  for i, ax in enumerate(axs.flat):
+    if isinstance(ax, plt.Axes):
+        degrad = res_train.loc[res_train["ESN"] == esn, degradation_vars[i]].reset_index(drop=True)
+        ax.plot(degrad, linewidth=0.5, label=esn)
+        ax.set_title(degradation_vars[i])
+        ax.set_ylabel("Residuals")
+        ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.legend()
+        ax.grid()
+  fig.subplots_adjust(hspace=0.4, wspace=0.4)
+fig.show()
+
+plt.figure()
+for esn in res_train["ESN"].unique():
+  prova = res_train[res_train["ESN"] ==  esn][degradation_vars].reset_index(drop=True).sum(axis=1)
+  prova.plot(linewidth=0.3)
+plt.legend()
 
 
 # %%
@@ -466,24 +506,62 @@ T45_res_val = res_val["Sensed_T45"]
 res_test = pd.DataFrame()
 res_list = []
 
-for esn in dfv["ESN"].unique():
+
+plt.figure(figsize=(16,10))
+for i, esn in enumerate(dfv["ESN"].unique()):
+  plt.subplot(2,2,i+1)
   mask = dfv["ESN"] == esn
   X_test = dfv.loc[mask, operating_vars]
   Y_test = dfv.loc[mask, degradation_vars]
   # Predict
   Y_pred = model.predict(X_test)
+
+  plt.plot(Y_pred)
+  plt.legend(degradation_vars)
+
   res_temp = Y_test - Y_pred
+  res_temp = remove_outliers(res_temp, res_temp.columns, threshold=0.8)
+  res_temp = res_temp.ffill()
+  res_temp = res_temp.bfill()
+
+  for col in res_temp.columns:
+    res_temp[f"raw_{col}"] = res_temp[col]
+
+  res_temp[degradation_vars] = res_temp[degradation_vars].cumsum()
+  
   res_temp["ESN"] = esn
   res_list.append(res_temp)
 
+plt.show()
+
 res_test = pd.concat(res_list)
+
+plt.figure(figsize=(12,8))
+plt.subplot(3,1,1)
+for esn in res_train["ESN"].unique():
+  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
+  plt.plot(data, linewidth=1, label=f"T45 {esn} cumsum")
+  plt.legend()
+
+plt.subplot(3,1,2)
+for esn in res_train["ESN"].unique():
+  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
+  plt.plot(data.cumsum(), linewidth=1, label=f"T45 {esn} cumsum")
+  plt.legend()
+
+plt.subplot(3,1,3)
+for esn in res_train["ESN"].unique():
+  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
+  plt.plot(data.diff(), linewidth=1, label=f"T45 {esn} cumsum")
+  plt.legend()
+plt.show()
 
 
 # PULIZIA E ROLLING
 cleaned_chunks = []
 for esn in dfv["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
-  temp = remove_outliers(temp, SENSORS, threshold=0.8)
+  temp = remove_outliers(temp, SENSORS, threshold=0.9)
   temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).mean()
   cleaned_chunks.append(temp)
 
@@ -500,18 +578,20 @@ T45_res_test = res_test[["ESN", "Sensed_T45"]].copy()
 
 # %%
 # PLOTTING TRAINING
-for esn in train_data_healthy["ESN"].unique():
-  fig, axs = plt.subplots(2,3, figsize=(15,8))
+fig, axs = plt.subplots(2,3, figsize=(15,8))
+for esn in res_train["ESN"].unique():
   fig.suptitle(f'ESN - {esn}', fontsize=16)
   for i, ax in enumerate(axs.flat):
     if isinstance(ax, plt.Axes):
-        ax.plot(res_train.loc[res_train["ESN"] == esn, degradation_vars[i]], linewidth=1)
+        degrad = res_train.loc[res_train["ESN"] == esn, degradation_vars[i]].reset_index(drop=True)
+        ax.plot(degrad, linewidth=0.5, label=esn)
         ax.set_title(degradation_vars[i])
         ax.set_ylabel("Residuals")
         ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.legend()
         ax.grid()
   fig.subplots_adjust(hspace=0.4, wspace=0.4)
-  fig.show()
+fig.show()
 
 
 # %%
