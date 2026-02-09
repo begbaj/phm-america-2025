@@ -151,4 +151,5 @@ Data/snapshot_tables/averaged_final.csv
 Data/snapshot_tables/training.csv
 Data/
 
-!ok_nuovo_notebook.ipynb
+# !ok_nuovo_notebook.ipynb
+src/notebooks/ok_nuovo_notebook.ipynb
