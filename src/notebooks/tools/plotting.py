@@ -27,7 +27,7 @@ from pandas import DataFrame
 from matplotlib.figure import Figure
 from typing import overload
 from tools.types.plotdata import PlotData
-from tools.types.enums import ESENSORS, RepairEventType
+from tools.types.enums import RepairEventType
 import os
 import seaborn as sns
 

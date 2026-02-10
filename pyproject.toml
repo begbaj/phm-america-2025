@@ -94,6 +94,7 @@ dependencies = [
   "platformdirs==4.5.1",
   "plotly==6.5.0",
   "pre-commit>=4.5.1",
+  "progpy>=1.7.1",
   "prometheus-client==0.23.1",
   "prompt-toolkit==3.0.52",
   "psutil==7.1.3",

@@ -14,7 +14,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from tools import plotting
 from tools.config import DATA_TRAINING_DATA, PLOT_PATH, DATA_TESTING_PATH, DATA_VALIDATION_PATH
-from tools.types.enums import ESENSORS, RepairEventType, Snapshots
+from tools.types.enums import SENSORS, RepairEventType, Snapshots
 from types import FunctionType
 from xgboost import XGBRegressor
 import matplotlib.pyplot as plt
@@ -41,7 +41,6 @@ ESN = range(101, 105)
 for esn in u.ESN:
 """
 SNAPSHOTS = range(1,9)
-SENSORS = ESENSORS.values()
 FEATURES = ["mean", "std", "kurtosis", "skewness"]
 META_COLS = [
     'cycle', 'esn', 'esn_index', 'fault_hpc_cycle', 'fault_hpt_cycle',
@@ -79,7 +78,7 @@ def ess_iter(df: DataFrame, order=["esn", "sensor", "snapshot"], plotdata=False,
     order = [o.lower() for o in order]
     order_enum = {
         "esn": ESN,
-        "sensor": ESENSORS.values(),
+        "sensor": SENSORS,
         "snapshot": Snapshots.values(),
         "event": RepairEventType.values(),
     }
@@ -135,57 +134,7 @@ def to_signal(df, column) -> list[tuple[int,float]]:
 ### DATA
 ###
 
-def WrapData(data: DataFrame):
-    """
-    Generator di dati.
-    
-    :param data: Description
-    :type data: DataFrame
-    """
-    def access() -> DataFrame:
-        return data.copy()
-    return access
-
-
-
-def load_training() -> FunctionType:
-    """
-    Carica il dataset di training
-    """
-    with open(c.DATA_TRAINING_DATA, "r") as f:
-        return WrapData(pd.read_csv(f))
-    
-def load_ffill_training() -> FunctionType:
-    """
-    Carica il dataset di training
-    """
-    with open(c.DATA_PATH_FFILL, "r") as f:
-        return WrapData(pd.read_csv(f))
-
-def load_forward_fill() -> FunctionType:
-    with open(c.DATA_TRAINING_PATH + "training_ffill.csv", "r") as f:
-        return WrapData(pd.read_csv(f))
-    
-def load_smooth_training(orig: FunctionType, span: int) -> DataFrame:
-    """
-    Genera il dataset con smoothing
-    
-    :param orig: dataframe da filtrare
-    :type orig: DataFrame
-    :param span: finestra di punti considerati
-    :type span: int
-    """
-    data = orig()
-    try:
-        for idx, sensor in enumerate(ESENSORS.values()):
-            data[sensor] = data.groupby(['ESN', 'Snapshot'], group_keys=False)[sensor].transform(
-                lambda x: x.ewm(span=span, adjust=False).mean())
-        print(f"Dataset filtrato con successo")
-    except:
-        print("Errore nel filtraggio del dataset")
-    return WrapData(data)
-
-def _carica(ind: int | list[int] | range, path, col, typef):
+def _loader(ind: int | list[int] | range, path, col, typef):
     # Gestione caso lista o range
     if isinstance(ind, (list, range)):
         esn_cycle_tracker = {}
@@ -222,14 +171,17 @@ def load_testing(ind: int | list[int] | range = 0) -> pd.DataFrame:
     """
     Carica il dataset di training concatenando i file e aggiustando i cicli.
     """
-    return _carica(ind, DATA_TESTING_PATH, col="Cycles", typef="test")
+    return _loader(ind, DATA_TESTING_PATH, col="Cycles", typef="test")
 
 
 def load_validation(ind: int | list[int] | range = 0) -> pd.DataFrame:
     """
     Carica il dataset di training
     """
-    return _carica(ind, DATA_VALIDATION_PATH, col="Cycles", typef="val")
+    return _loader(ind, DATA_VALIDATION_PATH, col="Cycles", typef="val")
+
+def load_training():
+    return pd.read_csv(DATA_TRAINING_DATA)
 
 
 def load_event_points(
