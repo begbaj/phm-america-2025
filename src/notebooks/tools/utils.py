@@ -35,7 +35,7 @@ from sklearn.model_selection import ParameterGrid
 ###
 
 EVENTS = ["ww", "hpc", "hpt"]
-
+ESENSORS = SENSORS
 ESN = range(101, 105)
 """
 for esn in u.ESN:
