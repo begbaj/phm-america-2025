@@ -1,46 +1,8 @@
 from enum import Enum
 
-class ESENSORS(Enum):
-    """
-    è una lista dei sensori presenti nel dataset
-    serve solo per evitare di scrivere a mano i nomi dei sensori
-    """
-
-    Sensed_Altitude = "Sensed_Altitude"
-    Sensed_Mach = "Sensed_Mach"
-    Sensed_Pamb = "Sensed_Pamb"
-    Sensed_Pt2 = "Sensed_Pt2"
-    Sensed_TAT = "Sensed_TAT"
-    Sensed_WFuel = "Sensed_WFuel"
-    Sensed_VAFN = "Sensed_VAFN"
-    Sensed_VBV = "Sensed_VBV"
-    Sensed_Fan_Speed = "Sensed_Fan_Speed"
-    Sensed_Core_Speed = "Sensed_Core_Speed"
-    Sensed_T25 = "Sensed_T25"
-    Sensed_T3 = "Sensed_T3"
-    Sensed_Ps3 = "Sensed_Ps3"
-    Sensed_T45 = "Sensed_T45"
-    Sensed_P25 = "Sensed_P25"
-    Sensed_T5 = "Sensed_T5"
-
-    @classmethod
-    def values(cls) -> list[str]:
-        """Ritorna la lista dei valori."""
-        return [e.value for e in cls]
-
-    @classmethod
-    def iter(cls) -> list[str]:
-        """DEPRECATO, usa values. Ritorna la lista dei valori."""
-        return [e.value for e in cls]
-
-    @classmethod
-    def members(cls) -> list["ESENSORS"]:
-        """Ritorna la lista dei membri Enum."""
-        return list(cls)
-
-
-
+SENSORS = ["Sensed_Altitude", "Sensed_Mach", "Sensed_Pamb", "Sensed_Pt2", "Sensed_TAT", "Sensed_WFuel", "Sensed_VAFN", "Sensed_VBV", "Sensed_Fan_Speed", "Sensed_Core_Speed", "Sensed_T25", "Sensed_T3", "Sensed_Ps3", "Sensed_T45", "Sensed_P25", "Sensed_T5"]
 _REPAIR_EVENT_TYPES_STR = ["ww", "hpt", "hpc"]
+
 class RepairEventType(Enum):
     WW = 0
     HPT = 1

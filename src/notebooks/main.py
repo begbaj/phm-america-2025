@@ -49,7 +49,6 @@ import random
 import scipy.optimize as optimize
 import scipy.stats as stats
 
-
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
@@ -58,9 +57,12 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 # %load_ext autoreload
 # %autoreload 2
 
-from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
+from tools import utils as u, config as cfg, plotting as up, preprocessing as pp, algorithms as alg
 import tools
 
+
+# %% [markdown]
+# # Definizione Costanti
 
 # %%
 # CONFIG
@@ -75,144 +77,46 @@ def DATA_VALIDATION_DATA(num):
     return f"{DATA_TESTING_PATH}/val_{num}.csv"
 DATA_TRAINING_DATA = f"{DATA_TESTING_PATH}/training_data.csv"
 PLOT_PATH = f"./img/"
-
-# %%
+TESTING_ESN = 102
 SENSORS = tools.types.enums.SENSORS
-
-def remove_outliers(df: pd.DataFrame, sensor_cols=None, threshold=3, method='zscore') -> pd.DataFrame:
-    """
-    Identifica e rimuove gli outliers dai sensori, impostandoli a NaN.
-    Supporta metodi basati su Z-score, IQR e Isolation Forest.
-
-    :param df: DataFrame di input.
-    :param sensor_cols: Lista di sensori.
-    :param threshold: Soglia per lo z-score (default 3) o moltiplicatore per IQR (default 1.5/3).
-    :param method: 'zscore', 'iqr', o 'isoforest'.
-    :return: DataFrame con outliers sostituiti da NaN.
-    """
-    df_out = df.copy()
-    if sensor_cols is None:
-        target_sensors = [s.value if hasattr(s, 'value') else s for s in u.SENSORS]
-    else:
-        target_sensors = [s.value if hasattr(s, 'value') else s for s in sensor_cols]
-    target_sensors = [s for s in target_sensors if s in df_out.columns]
-    if method == 'zscore':
-        for sensor in target_sensors:
-            # Calcolo z-score ignorando i NaN
-            series = df_out[sensor]
-            if series.dropna().empty: continue
-            z_scores = np.abs(stats.zscore(series, nan_policy='omit'))
-            df_out.loc[z_scores > threshold, sensor] = np.nan
-    elif method == 'iqr':
-        for sensor in target_sensors:
-            Q1 = df_out[sensor].quantile(0.25)
-            Q3 = df_out[sensor].quantile(0.75)
-            IQR = Q3 - Q1
-            lower_bound = Q1 - threshold * IQR
-            upper_bound = Q3 + threshold * IQR
-            df_out.loc[(df_out[sensor] < lower_bound) | (df_out[sensor] > upper_bound), sensor] = np.nan
-    elif method == 'isoforest':
-        for sensor in target_sensors:
-            series_nonan = df_out[sensor].dropna()
-            if series_nonan.empty: continue
-            data = series_nonan.values.reshape(-1, 1)
-            # Contamination 'auto' o basata sulla soglia se interpretata come percentuale
-            iso = IsolationForest(contamination='auto', random_state=42)
-            preds = iso.fit_predict(data)
-            # preds == -1 sono gli outliers
-            outlier_indices = series_nonan.index[preds == -1]
-            df_out.loc[outlier_indices, sensor] = np.nan
-    return df_out
-
-def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], align_alt=['Snapshot', 'Cycles'], sensor_cols=None) -> pd.DataFrame:
-    """
-    Riempie i valori mancanti (NaN) integrando i dati presenti negli altri motori.
-    Strategia:
-    1. Calcola la media della flotta (tutti i motori disponibili) per lo stesso (Snapshot, Ciclo).
-    2. Riempie i NaN con questa media.
-    3. Per i valori ancora mancanti (es. nessun dato nella flotta per quel punto), esegue interpolazione lineare per ESN.
-    :param df: DataFrame contenente i dati.
-    :param align_cols: Colonne usate per allineare i cicli tra motori.
-    :param sensor_cols: Lista di sensori da processare. Se None, usa i SENSORS globali.
-    :return: DataFrame con i missing values riempiti.
-    """
-    # 1. Determinazione colonne sensori
-    if sensor_cols is None:
-        # Usa i sensori globali definiti in questo modulo
-        raw_sensors = list(SENSORS)
-    else:
-        raw_sensors = list(sensor_cols)
-    # Risoluzione nomi sensori (se sono Enum)
-    valid_cols = []
-    for s in raw_sensors:
-        s_name = s.value if hasattr(s, 'value') else str(s)
-        if s_name in df.columns:
-            valid_cols.append(s_name)
-    if not valid_cols:
-        print("Nessuna colonna sensore valida trovata per missingfill.")
-        return df
-    df_out = df.copy()
-    print(f"Esecuzione missingfill su {len(valid_cols)} sensori...")
-    # 2. Riempimento tramite Media Flotta (Fleet Mean)
-    # Verifica che le colonne di allineamento esistano
-    if all(col in df_out.columns for col in align_cols):
-        try:
-            # Calcola media raggruppata per align_cols sui sensori
-            # transform('mean') restituisce un DF/Series allineato all'originale con le medie dei gruppi
-            fleet_means = df_out.groupby(align_cols)[valid_cols].transform('mean')
-            # Sostituzione dei NaN con la media calcolata
-            df_out[valid_cols] = df_out[valid_cols].fillna(fleet_means)
-        except Exception as e:
-            print(f"Warning: Errore durante il calcolo della media flotta: {e}")
-    else:
-        fleet_means = df_out.groupby(align_alt)[valid_cols].transform('mean')
-        # Sostituzione dei NaN con la media calcolata
-        df_out[valid_cols] = df_out[valid_cols].fillna(fleet_means)
-        # print(f"Warning: Colonne di allineamento {align_cols} non trovate. Salto step flotta.")
-    # 3. Interpolazione Residua (Per ESN)
-    # Se la media flotta non ha coperto tutto (es. cicli dove nessuno ha dati), eseguiamo forward fill
-    if 'ESN' in df_out.columns:
-        # Applica interpolazione per ogni sensore, raggruppando per ESN
-        for col in valid_cols:
-            # Interpolazione residua: Forward Fill come richiesto
-            df_out[col] = df_out.groupby('ESN')[col].transform(lambda x: x.ffill())
-            # Fallback: Backward Fill per coprire eventuali NaN all'inizio della serie
-            df_out[col] = df_out.groupby('ESN')[col].transform(lambda x: x.bfill())
-    return df_out
-
-
-
-# %%
-testing_esn = 102
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+OPERATING_VARS = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
 # degradation_vars = [s for s in u.SENSORS if s not in operating_vars] # scommentare se si vuole considerare anche i sensori non in test o valiation
-degradation_vars = [s for s in SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
-managed_cols = set(degradation_vars) | set(operating_vars)
+DEGRADATION_VARS = [s for s in SENSORS if s not in OPERATING_VARS and s != "Sensed_P25" and s != "Sensed_T5"]
+ALL_VARS = set(DEGRADATION_VARS) | set(OPERATING_VARS)
+
+
+
+# 1 REGRESSORE LINEARE
+HEALTHY_CYCLES = -1 # -1 per considerare tutti i cicli
+DATA_AUGMENTATION = False
+DATA_AUGMENTATION_UNITS = 600
+
+
+
+# %% [markdown]
+# # Caricamento Dati
 
 # %%
+
+# TRAINING
+df = u.load_training()
+df = pp.common_pipeline(df).dropna()
+
+# # Aggregazione dataset di training
 # other_cols_df = [col for col in df.columns if col not in managed_cols]
 # agg_logic = {col: 'median' for col in degradation_vars}
 # agg_logic.update({col: 'median' for col in operating_vars})
 # agg_logic.update({col: 'first' for col in other_cols_df})
-
-# DOWNSAMPLING TRAINING PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
-df = u.load_training()
-df = pp.remove_outliers(df, SENSORS)
-df = pp.missingfill(df).dropna()
-
-# # Aggregazione dataset di training
 # df = df.groupby(['ESN', 'Cycles_Since_New']).agg(agg_logic).reset_index(drop=True)
-# rows = df.groupby('ESN').size().reset_index(name='rows').copy()
-# print(rows)
 
-# DOWNSAMPLING VALIDATION PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
+# VALIDATION 
+
 dfv = u.load_validation(range(0,48))
 temp = []
 for esn in dfv["ESN"].unique():
     temp.append(dfv[dfv["ESN"] == esn].reset_index())
 dfv = pd.concat(temp)
-dfv = pp.remove_outliers(dfv, SENSORS)
-dfv = pp.missingfill(dfv, align_cols=["Snapshot", "Cycles"]).dropna()
+dfv = pp.common_pipeline(dfv, outlier_sensors=SENSORS, missing_align_cols=["Snapshot", "Cycles"]).dropna()
 
 # Aggregazione dataset di validation
 # other_cols_dfv = [col for col in dfv.columns if col not in managed_cols]
@@ -223,15 +127,15 @@ dfv = pp.missingfill(dfv, align_cols=["Snapshot", "Cycles"]).dropna()
 # rows_val = dfv.groupby('ESN').size().reset_index(name='numero_righe').copy()
 # print(rows_val)
 
-# DOWNSAMPLING TESTING PER AVERE PER TUTTI LO STESSO NUMERO DI DATI
+# TESTING
 # dft = u.load_testing(range(0,52))
 dft = u.load_testing(39)
 temp = []
 for esn in dft["ESN"].unique():
     temp.append(dft[dft["ESN"] == esn].reset_index())
 dft = pd.concat(temp)
-dft = pp.remove_outliers(dft, SENSORS)
-dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
+dft = pp.common_pipeline(dft, outlier_sensors=SENSORS, missing_align_cols=["Snapshot", "Cycles"]).dropna()
+
 # Aggregazione dataset di training
 # other_cols_dft = [col for col in dft.columns if col not in managed_cols]
 # agg_logic_t = {col: 'median' for col in degradation_vars}
@@ -240,296 +144,160 @@ dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
 # dft = dft.groupby(['ESN', 'Cycles']).agg(agg_logic_t).reset_index(drop=True)
 # rows_test = dft.groupby('ESN').size().reset_index(name='numero_righe').copy()
 
+TRAINING_UNIQUE_ESNS = df["ESN"].unique()
+TESTING_UNIQUE_ESNS = dft["ESN"].unique()
+VALIDATION_UNIQUE_ESNS = dfv["ESN"].unique()
+
 # %store df
 # %store dfv
 # %store dft
 
-# print(rows_test)
-
 # %%
-# FUNCTIONS
-def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
-    X_train = df[operating_vars]
-    Y_train = df[degradation_vars]
-    models = {}
-    for i in range(0,8):
-        X_temp = pd.DataFrame(np.roll(X_train, i, axis=1))
-        models[i] = {}
-        models[i]["model"] = train_model(X_temp, Y_train)
-    return models
+import math
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import NearestNeighbors
+from sklearn.metrics import mean_absolute_error
 
-def train_model(X_train, Y_train):
-    model = LinearRegression()
-    model.fit(X_train, Y_train)
-    return model
+training_data = df[df["ESN"] != TESTING_ESN].copy()
 
-def s_pred(s_o, model):
-    return model.predict(s_o)
+if HEALTHY_CYCLES > 0:
+    training_data = training_data.groupby("ESN").head(HEALTHY_CYCLES).reset_index(drop=True)
+else:
+    training_data = training_data.reset_index(drop=True)
 
-def residual(s_d, s_o, model):
-    return s_d - s_pred(s_o, model)
+if DATA_AUGMENTATION:
+    # SMOTE
+    cols_smote = OPERATING_VARS + DEGRADATION_VARS
+    nbrs = NearestNeighbors(n_neighbors=5, algorithm='auto').fit(training_data[cols_smote])
+    distances, indices = nbrs.kneighbors(training_data[cols_smote])
+    new_indices = np.random.randint(0, len(training_data), DATA_AUGMENTATION_UNITS)
+    neighbor_offsets = np.random.randint(1, 5, DATA_AUGMENTATION_UNITS)
 
-def wind(y_p, y, a):
-    diff = y - y_p
-    num = np.where(diff >= 0, 2.0, 1.0)
-    if isinstance(y_p, pd.DataFrame) or isinstance(y_p, pd.Series):
-        y_p = y_p.values
-    return num / (1 + a * y_p)
+    temp_list = []
+    for i, base_idx in enumerate(new_indices):
+        neighbor_idx = indices[base_idx][neighbor_offsets[i]]
+        diff = training_data.iloc[neighbor_idx][cols_smote].values - training_data.iloc[base_idx][cols_smote].values
+        new_vals = training_data.iloc[base_idx][cols_smote].values + diff * np.random.rand()
+        temp = training_data.iloc[base_idx].copy()
+        temp[cols_smote] = new_vals
+        temp["ESN"] = f"smote_{i}"
+        temp_list.append(temp)
 
-def TWE(y_p, y, a, b):
-    if isinstance(y_p, pd.DataFrame): y_p = y_p.values
-    weight = wind(y_p, y, a)
-    squared_error = (y - y_p) ** 2
-    return weight * squared_error * b
+    training_data = pd.concat([training_data, pd.DataFrame(temp_list)], ignore_index=True)
+    del temp_list, nbrs, indices, diff 
 
-def HI(T3_res, T45_res, alpha):
-    return -alpha * T3_res - T45_res
+X_train = training_data[OPERATING_VARS]
+Y_train = training_data[DEGRADATION_VARS]
+nominal_value_model = LinearRegression()
+nominal_value_model.fit(X_train, Y_train)
+# %store nominal_value_model
 
-def minmax(df, column):
-    col_min = df[column].min()
-    col_max = df[column].max()
-    return (df[column] - col_min) / (col_max - col_min)
+Y_pred_train = nominal_value_model.predict(X_train)
+training_data[DEGRADATION_VARS] = Y_train - Y_pred_train
 
-def minmax_all(df):
-    newdf = pd.DataFrame()
-    for column in df.columns:
-        col_min = df[column].min()
-        col_max = df[column].max()
-        newdf[column] = (df[column] - col_min) / (col_max - col_min)
-    return newdf
+unique_esns = [esn for esn in training_data["ESN"].unique() if "smote" not in str(esn)]
+n_plots = len(unique_esns)
+n_cols = 2
+n_rows = math.ceil(n_plots / n_cols)
 
-def median_norm(df):
-    for i in range(0,7):
-        m = df.iloc[:,i].median()
-        df.iloc[:,i] -= m
-    return df
+fig, axs = plt.subplots(n_rows, n_cols, figsize=(10, 3 * n_rows))
+axs = axs.flat # Appiattiamo per iterare facile
 
-def objective(alpha, T3, T45, RUL):
-    hi = -alpha*T3 - T45
-    RUL = RUL.dropna()
-    hi = hi.dropna()
-    corr = stats.pearsonr(RUL,hi)
-    # return np.sqrt(np.mean((hi - RUL)**2)) + 1
-    return - corr[0]
+for i, esn in enumerate(unique_esns):
+    mask = training_data["ESN"] == esn
+    axs[i].plot(training_data.loc[mask, DEGRADATION_VARS].values)
+    mae = np.mean(np.abs(training_data.loc[mask, DEGRADATION_VARS]))
+    axs[i].set_title(f"{esn} - Mean Residual: {mae:.4f}")
 
-def objective_beta(params, T3, T45, RUL):
-    alpha, beta = params
-    hi = -alpha*T3 - beta*T45
-    RUL = RUL.dropna()
-    hi = hi.dropna()
-    corr = stats.pearsonr(RUL,hi)
-    # return np.sqrt(np.mean((hi - RUL)**2)) + 1
-    return - corr[0]
-
-def HIE(params, vars):
-    #return np.sum([-params[i]*vars.iloc[:,i] for i in range(0, 8)])
-    return vars.dot(-np.array(params))
-
-
-def objective_experimental(params, vars, RUL):
-    hi = HIE(params, vars)
-    # RUL = RUL.dropna()
-    corr = stats.pearsonr(RUL,hi)
-    return -corr[0]
-
-def objective_deviation(params, vars, RUL):
-    hi = HIE(params, vars)
-    hi_min, hi_max = hi.min(), hi.max()
-    if hi_max == hi_min:
-        # Penalità se l'HI è una linea piatta
-        return 1.0
-    hi_norm = (hi - hi_min) / (hi_max - hi_min)
-    mse = np.mean((hi_norm - RUL)**2)
-    return mse
-
-def get_rolling_slope_intercept(series, window):
-    slopes = []
-    intercepts = []
-    series = np.asarray(series).flatten()
-    for i in range(len(series)):
-        if i < window:
-            slopes.append(0)
-            intercepts.append(0)
-        else:
-            y = series[i-window:i]
-            x = np.arange(window)
-            # Fit polinomiale di grado 1 (retta) -> ritorna [slope, intercept]
-            poly = np.polyfit(x, y, 1)
-            slopes.append(float(poly[0]))
-            intercepts.append(float(poly[1]))
-    return np.array(slopes), np.array(intercepts)
-
-
-def normalize(col):
-  col_min, col_max = col.min(), col.max()
-  col = (col - col_min) / (col_max - col_min)
-  col = col.to_frame()
-  return col
-
-
-def get_slope(y):
-    """Calcola la pendenza della retta di regressione per una finestra y"""
-    x = np.arange(len(y))
-    # Polyfit di grado 1 restituisce [pendenza, intercetta]
-    slope = np.polyfit(x, y, 1)[0]
-    return slope
-
-
-# %%
-print(df.columns)
-
-# %%
-cycle_means = dfv.groupby(["ESN", "Cycles"])["Sensed_T45"].mean()
-rolled = cycle_means.groupby(level="ESN").rolling(window=150, min_periods=1).mean()
-
-rolled = rolled.droplevel(0) 
-
-rolled.loc[108].plot(title="Trend Sensed_T45 (Media Mobile 150 Cicli)")
+for j in range(i + 1, len(axs)): axs[j].axis('off')
+fig.tight_layout()
 plt.show()
 
-# %%
-# Regressore lineare per il calcolo dei residui
+# --- 5. VALIDAZIONE ---
+test_data = df[df["ESN"] == TESTING_ESN].copy()
+Y_val_pred = nominal_value_model.predict(test_data[OPERATING_VARS])
+res_val = test_data[DEGRADATION_VARS] - Y_val_pred # Residui Validazione
 
-from tkinter import W
-
-
-cycles_healthy = 20000
-
-testing_esn = 102
-val_data = df[df["ESN"] == testing_esn].reset_index().copy()
-X_val = val_data[operating_vars]
-Y_val = val_data[degradation_vars]
-
-train_data_full = df[df["ESN"] != testing_esn].copy()
-train_data_healthy = train_data_full.groupby("ESN").head(cycles_healthy).reset_index(drop=True)
-
-base_df = train_data_healthy.copy()
-new_synthetic_units = []
-for i in range(400):
-    aug_df = base_df.copy()
-    noise = np.random.normal(loc=0, scale=10, size=aug_df[degradation_vars + operating_vars].shape)
-    aug_df[degradation_vars + operating_vars] += noise
-    aug_df['ESN'] = f"aug_{i}" 
-    new_synthetic_units.append(aug_df)
-
-train_data_healthy_augmented = pd.concat([train_data_healthy] + new_synthetic_units, ignore_index=True)
-
-X_train = train_data_healthy_augmented[operating_vars]
-Y_train = train_data_healthy_augmented[degradation_vars]
-
-print(X_train.shape, Y_train.shape)
-print(X_val.shape, Y_val.shape)
-
-# training regressore lineare
-model = train_model(X_train, Y_train)
-# %store model
-
-
-# predict dei valori
-res_list = []
-for esn in train_data_full["ESN"].unique():
-  mask = train_data_full["ESN"] == esn
-  X_train = train_data_full.loc[mask, operating_vars]
-  Y_train = train_data_full.loc[mask, degradation_vars]
-  Y_pred = model.predict(X_train)
-  plt.figure()
-  plt.plot(Y_train)
-  plt.show()
-  res_temp = Y_train - Y_pred
-  res_temp["Cycles_Since_New"] = train_data_full[mask]["Cycles_Since_New"]
-  res_temp["Snapshot"] = train_data_full[mask]["Snapshot"]
-  res_temp["ESN"] = esn
-  res_list.append(res_temp)
-
-res_train = pd.concat(res_list)
-
-
-
-# residui
-res_val_list = []
-Y_pred = model.predict(X_val)
-res_val_temp = Y_val - Y_pred
-res_val_list.append(res_val_temp)
-res_val = pd.concat(res_val_list)
-
+plt.figure(figsize=(10,4))
 plt.plot(res_val)
+plt.title(f"Residuals for Testing ESN: {TESTING_ESN}")
 plt.show()
 
-# integrazione residui sul dataset originale
-cleaned_chunks = []
-for esn in train_data_full["ESN"].unique():
-  temp = res_train[res_train["ESN"] == esn].copy()
-  temp = remove_outliers(temp, SENSORS, threshold=0.8)
-  temp[degradation_vars] = temp[degradation_vars].rolling(window=15, min_periods=1).median()
-  temp = temp.dropna()
-  cleaned_chunks.append(temp)
+# --- 6. POST-PROCESSING (Outliers & Smoothing) ---
+cleaned_list = []
+for esn in training_data["ESN"].unique():
+    temp = training_data[training_data["ESN"] == esn].copy()
+    temp = pp.remove_outliers(temp, SENSORS, threshold=0.8)
+    temp[DEGRADATION_VARS] = temp[DEGRADATION_VARS].rolling(window=15, min_periods=1).median()
+    cleaned_list.append(temp.dropna())
+plot_res = pd.concat(cleaned_list).reset_index(drop=True)
+del cleaned_list, temp
 
-res_train = pd.concat(cleaned_chunks).dropna()
-
-for esn in res_train.ESN.unique():
-  plt.figure(figsize=(10,30))
-  for i,d in enumerate(degradation_vars):
-    for snap in range(1,9):
-      plt.subplot(8,1,i+1)
-      plt.plot(res_train[(res_train["ESN"] == esn) & (res_train["Snapshot"] == snap)][d], label=d, linewidth=0.4)
-      plt.legend()
-  plt.show()
-
-train_data_full.update(res_train)
-
-
+unique_esns = training_data["ESN"].unique()
+for esn in unique_esns:
+    plt.figure(figsize=(15, 7))
+    for i, d in enumerate(DEGRADATION_VARS):
+        plt.subplot(2, 3, i + 1)
+        subset = plot_res[plot_res["ESN"] == esn]
+        plt.plot(subset[d], label=d, linewidth=0.8)
+        plt.legend(loc='upper right')
+        plt.title(f"{esn} - {d} (Cleaned)")
+    plt.tight_layout()
+    plt.show()
 
 # %%
 # AGGREGAZIONE SNAPSHOT
 cols = ["Cycles_to_HPT_SV", "Cycles_to_HPC_SV", "Cycles_to_WW"]
-other_cols_df = [col for col in res_train.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
+other_cols_df = [col for col in training_data.columns if col not in ALL_VARS]
+agg_logic = {col: 'median' for col in DEGRADATION_VARS}
 agg_logic.update({col: 'first' for col in other_cols_df + cols})
 
 templ = []
-for esn in res_train["ESN"].unique():
-  temp = res_train[res_train["ESN"] == esn].copy()
+for esn in training_data["ESN"].unique():
+  temp = training_data[training_data["ESN"] == esn].copy()
   temp[cols] = df[df["ESN"] == esn][cols]
   temp = temp.groupby('Cycles_Since_New').agg(agg_logic).reset_index(drop=True)
   # temp[degradation_vars] = temp[degradation_vars].rolling(window=10, min_periods=1).mean()
   temp["ESN"] = esn
   templ.append(temp)
-res_train = pd.concat(templ)
+training_data = pd.concat(templ)
 
-for esn in res_train.ESN.unique():
-  fig, axs = plt.subplots(2,len(degradation_vars)//2, figsize=(30,12))
+for esn in training_data.ESN.unique():
+  fig, axs = plt.subplots(2,len(DEGRADATION_VARS)//2, figsize=(30,12))
   fig.suptitle(esn)
   for i,ax in enumerate(axs.flat):
-    ax.plot(res_train[res_train["ESN"] == esn][degradation_vars[i]].rolling(window=4, min_periods=1).median(), label=d, linewidth=3)
+    ax.plot(training_data[training_data["ESN"] == esn][DEGRADATION_VARS[i]].rolling(window=12, min_periods=1).mean(), label=d, linewidth=3)
     ax.legend()
   fig.show()
 
-# train_data_full = res_train.copy()
-# res_train.index = res_train.groupby("ESN").cumcount()
+# train_data_full = training_data.copy()
+# training_data.index = training_data.groupby("ESN").cumcount()
 
 # %%
 
 # integrazione residui sul dataset originale
-res_val = remove_outliers(res_val, SENSORS, threshold=0.8)
+res_val = pp.remove_outliers(res_val, SENSORS, threshold=0.8)
 res_val = res_val.rolling(window=10, min_periods=1).mean()
 res_val = res_val.dropna()
-val_data.update(res_val)
+test_data.update(res_val)
 
 
-# %store res_train
+# %store training_data
 # %store res_val
 
-valid_indices_train = res_train.index
-hpt_rul_train = train_data_full.loc[valid_indices_train, ["ESN", "Cycles_to_HPT_SV"]]
-hpc_rul_train = train_data_full.loc[valid_indices_train, ["ESN", "Cycles_to_HPC_SV"]]
-ww_rul_train = train_data_full.loc[valid_indices_train, ["ESN", "Cycles_to_WW"]]
-T3_res_train = train_data_full.loc[valid_indices_train, ["ESN", "Sensed_T3"]]
-T45_res_train = train_data_full.loc[valid_indices_train, ["ESN", "Sensed_T45"]]
+valid_indices_train = training_data.index
+hpt_rul_train = training_data.loc[valid_indices_train, ["ESN", "Cycles_to_HPT_SV"]]
+hpc_rul_train = training_data.loc[valid_indices_train, ["ESN", "Cycles_to_HPC_SV"]]
+ww_rul_train = training_data.loc[valid_indices_train, ["ESN", "Cycles_to_WW"]]
+T3_training_data = training_data.loc[valid_indices_train, ["ESN", "Sensed_T3"]]
+T45_training_data = training_data.loc[valid_indices_train, ["ESN", "Sensed_T45"]]
 
 valid_indices_val = res_val.index
-hpt_rul_val = val_data.loc[valid_indices_val, "Cycles_to_HPT_SV"]
-hpc_rul_val = val_data.loc[valid_indices_val, "Cycles_to_HPC_SV"]
-ww_rul_val  = val_data.loc[valid_indices_val, "Cycles_to_WW"]
+hpt_rul_val = test_data.loc[valid_indices_val, "Cycles_to_HPT_SV"]
+hpc_rul_val = test_data.loc[valid_indices_val, "Cycles_to_HPC_SV"]
+ww_rul_val  = test_data.loc[valid_indices_val, "Cycles_to_WW"]
 T3_res_val = res_val["Sensed_T3"]
 T45_res_val = res_val["Sensed_T45"]
 
@@ -537,8 +305,8 @@ T45_res_val = res_val["Sensed_T45"]
 # %store hpt_rul_train
 # %store hpc_rul_train
 # %store ww_rul_train
-# %store T3_res_train
-# %store T45_res_train
+# %store T3_training_data
+# %store T45_training_data
 # %store hpt_rul_val
 # %store hpc_rul_val
 # %store ww_rul_val
@@ -547,42 +315,42 @@ T45_res_val = res_val["Sensed_T45"]
 
 # PLOTTING TRAINING
 fig, axs = plt.subplots(2,3, figsize=(15,8))
-for esn in res_train["ESN"].unique():
+for esn in training_data["ESN"].unique():
   fig.suptitle(f'ESN - {esn}', fontsize=16)
   for i, ax in enumerate(axs.flat):
     if isinstance(ax, plt.Axes):
-        degrad = res_train.loc[res_train["ESN"] == esn, degradation_vars[i]].reset_index(drop=True)
+        degrad = training_data.loc[training_data["ESN"] == esn, DEGRADATION_VARS[i]].reset_index(drop=True)
         ax.plot(degrad, linewidth=0.5, label=esn)
-        ax.set_title(degradation_vars[i])
+        ax.set_title(DEGRADATION_VARS[i])
         ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.set_xlabel(f"{DEGRADATION_VARS[i]}_res")
         ax.legend()
         ax.grid()
   fig.subplots_adjust(hspace=0.4, wspace=0.4)
 fig.show()
 
 plt.figure()
-for esn in res_train["ESN"].unique():
-  prova = res_train[res_train["ESN"] ==  esn][degradation_vars].reset_index(drop=True).sum(axis=1)
+for esn in training_data["ESN"].unique():
+  prova = training_data[training_data["ESN"] ==  esn][DEGRADATION_VARS].reset_index(drop=True).sum(axis=1)
   prova.plot(linewidth=0.3)
 plt.legend()
 
-print(res_train.columns)
+print(training_data.columns)
 
 
 # %%
 
 # PLOTTING TRAINING
 fig, axs = plt.subplots(2,3, figsize=(15,8))
-for esn in res_train["ESN"].unique():
+for esn in training_data["ESN"].unique():
   fig.suptitle(f'ESN - {esn}', fontsize=16)
   for i, ax in enumerate(axs.flat):
     if isinstance(ax, plt.Axes):
-        degrad = res_train.loc[res_train["ESN"] == esn, degradation_vars[i]].reset_index(drop=True)
+        degrad = training_data.loc[training_data["ESN"] == esn, DEGRADATION_VARS[i]].reset_index(drop=True)
         ax.plot(degrad, linewidth=0.5, label=esn)
-        ax.set_title(degradation_vars[i])
+        ax.set_title(DEGRADATION_VARS[i])
         ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.set_xlabel(f"{DEGRADATION_VARS[i]}_res")
         ax.legend()
         ax.grid()
   # fig.subplots_adjust(hspace=0.4, wspace=0.4)
@@ -590,12 +358,12 @@ for esn in res_train["ESN"].unique():
 fig.show()
 
 plt.figure()
-for esn in res_train["ESN"].unique():
-  prova = res_train[res_train["ESN"] ==  esn][degradation_vars].reset_index(drop=True).sum(axis=1)
+for esn in training_data["ESN"].unique():
+  prova = training_data[training_data["ESN"] ==  esn][DEGRADATION_VARS].reset_index(drop=True).sum(axis=1)
   prova.plot(linewidth=0.3)
 plt.legend()
 
-print(res_train.columns)
+print(training_data.columns)
 
 
 # %%
@@ -607,24 +375,24 @@ plt.figure(figsize=(16,10))
 for i, esn in enumerate(dfv["ESN"].unique()):
   plt.subplot(2,2,i+1)
   mask = dfv["ESN"] == esn
-  X_test = dfv.loc[mask, operating_vars]
-  Y_test = dfv.loc[mask, degradation_vars]
+  X_test = dfv.loc[mask, OPERATING_VARS]
+  Y_test = dfv.loc[mask, DEGRADATION_VARS]
 
   # Predict
-  Y_pred = model.predict(X_test)
+  Y_pred = nominal_value_model.predict(X_test)
 
   plt.plot(Y_pred)
-  plt.legend(degradation_vars)
+  plt.legend(DEGRADATION_VARS)
 
-  res_temp = Y_test - Y_pred
-  res_temp["ESN"] = esn
-  res_temp = remove_outliers(res_temp, res_temp.columns, threshold=0.8)
-  res_temp = res_temp.ffill()
-  res_temp = res_temp.bfill()
+  temp = Y_test - Y_pred
+  temp["ESN"] = esn
+  temp = pp.remove_outliers(temp, temp.columns, threshold=0.8)
+  temp = temp.ffill()
+  temp = temp.bfill()
 
-  print(res_temp.columns)
+  print(temp.columns)
 
-  res_list.append(res_temp)
+  res_list.append(temp)
 
 plt.show()
 
@@ -632,20 +400,20 @@ res_test = pd.concat(res_list)
 
 plt.figure(figsize=(12,8))
 plt.subplot(3,1,1)
-for esn in res_train["ESN"].unique():
-  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
+for esn in training_data["ESN"].unique():
+  data = training_data.loc[training_data["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
   plt.plot(data, linewidth=1, label=f"T45 {esn} cumsum")
   plt.legend()
 
 plt.subplot(3,1,2)
-for esn in res_train["ESN"].unique():
-  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
+for esn in training_data["ESN"].unique():
+  data = training_data.loc[training_data["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
   plt.plot(data.cumsum(), linewidth=1, label=f"T45 {esn} cumsum")
   plt.legend()
 
 plt.subplot(3,1,3)
-for esn in res_train["ESN"].unique():
-  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
+for esn in training_data["ESN"].unique():
+  data = training_data.loc[training_data["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
   plt.plot(data.diff(), linewidth=1, label=f"T45 {esn} cumsum")
   plt.legend()
 plt.show()
@@ -655,8 +423,8 @@ plt.show()
 cleaned_chunks = []
 for esn in dfv["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
-  temp = remove_outliers(temp, SENSORS, threshold=0.1)
-  temp[degradation_vars] = temp[degradation_vars].rolling(window=50, min_periods=1).mean()
+  temp = pp.remove_outliers(temp, SENSORS, threshold=0.1)
+  temp[DEGRADATION_VARS] = temp[DEGRADATION_VARS].rolling(window=50, min_periods=1).mean()
   cleaned_chunks.append(temp)
 
 res_test = pd.concat(cleaned_chunks).dropna()
@@ -673,15 +441,15 @@ T45_res_test = res_test[["ESN", "Sensed_T45"]].copy()
 # %%
 # PLOTTING TRAINING
 fig, axs = plt.subplots(2,3, figsize=(15,8))
-for esn in res_train["ESN"].unique():
+for esn in training_data["ESN"].unique():
   fig.suptitle(f'ESN - {esn}', fontsize=16)
   for i, ax in enumerate(axs.flat):
     if isinstance(ax, plt.Axes):
-        degrad = res_train.loc[res_train["ESN"] == esn, degradation_vars[i]].reset_index(drop=True)
+        degrad = training_data.loc[training_data["ESN"] == esn, DEGRADATION_VARS[i]].reset_index(drop=True)
         ax.plot(degrad, linewidth=0.5, label=esn)
-        ax.set_title(degradation_vars[i])
+        ax.set_title(DEGRADATION_VARS[i])
         ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.set_xlabel(f"{DEGRADATION_VARS[i]}_res")
         ax.legend()
         ax.grid()
   fig.subplots_adjust(hspace=0.4, wspace=0.4)
@@ -691,13 +459,13 @@ fig.show()
 # %%
 # PLOTTING VALIDATION
 fig, axs = plt.subplots(2,3, figsize=(15,8))
-fig.suptitle(f'ESN - {testing_esn}', fontsize=16)
+fig.suptitle(f'ESN - {TESTING_ESN}', fontsize=16)
 for i, ax in enumerate(axs.flat):
     if isinstance(ax, plt.Axes):
-        ax.plot(res_val.loc[:, degradation_vars[i]].rolling(window=95, min_periods=1).mean(), linewidth=1)
-        ax.set_title(degradation_vars[i])
+        ax.plot(res_val.loc[:, DEGRADATION_VARS[i]].rolling(window=95, min_periods=1).mean(), linewidth=1)
+        ax.set_title(DEGRADATION_VARS[i])
         ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.set_xlabel(f"{DEGRADATION_VARS[i]}_res")
         ax.grid()
 fig.subplots_adjust(hspace=0.4, wspace=0.4)
 fig.show()
@@ -710,10 +478,10 @@ for esn in dfv["ESN"].unique():
   fig.suptitle(f'ESN - {esn}', fontsize=16)
   for i, ax in enumerate(axs.flat):
     if isinstance(ax, plt.Axes):
-        ax.plot(res_test.loc[res_test["ESN"] == esn, degradation_vars[i]], linewidth=1)
-        ax.set_title(degradation_vars[i])
+        ax.plot(res_test.loc[res_test["ESN"] == esn, DEGRADATION_VARS[i]], linewidth=1)
+        ax.set_title(DEGRADATION_VARS[i])
         ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
+        ax.set_xlabel(f"{DEGRADATION_VARS[i]}_res")
         ax.grid()
   fig.subplots_adjust(hspace=0.4, wspace=0.4)
   fig.show()
@@ -727,40 +495,39 @@ for esn in dfv["ESN"].unique():
 
 # Dati di training
 train_chunks = []
-dict_mins = {var: [] for var in degradation_vars}
-dict_maxs = {var: [] for var in degradation_vars}
-for esn in res_train["ESN"].unique():
-    mask = res_train["ESN"] == esn
+dict_mins = {var: [] for var in DEGRADATION_VARS}
+dict_maxs = {var: [] for var in DEGRADATION_VARS}
+for esn in training_data["ESN"].unique():
+    mask = training_data["ESN"] == esn
     # mask_hpt = hpt_rul_train["ESN"] == esn
     # hpt_rul_train.loc[mask, "Cycles_to_HPT_SV"] = minmax(hpt_rul_train[mask_hpt], "Cycles_to_HPT_SV")
     # mask_hpc = hpc_rul_train["ESN"] == esn
     # hpc_rul_train.loc[mask, "Cycles_to_HPC_SV"] = minmax(hpc_rul_train[mask_hpc], "Cycles_to_HPC_SV")
     # mask_ww = ww_rul_train["ESN"] == esn
     # ww_rul_train.loc[mask, "Cycles_to_WW"] = minmax(ww_rul_train[mask_ww], "Cycles_to_WW")
-    hpt_rul = res_train[mask]["Cycles_to_HPT_SV"]
-    hpc_rul = res_train[mask]["Cycles_to_HPC_SV"]
-    ww_rul = res_train[mask]["Cycles_to_WW"]
-    for var in degradation_vars:
-        dict_mins[var].append(res_train.loc[mask, var].min())
-        dict_maxs[var].append(res_train.loc[mask, var].max())
-        res_train.loc[mask, var] = minmax(res_train.loc[mask], var)
+    hpt_rul = training_data[mask]["Cycles_to_HPT_SV"]
+    hpc_rul = training_data[mask]["Cycles_to_HPC_SV"]
+    ww_rul = training_data[mask]["Cycles_to_WW"]
+    for var in DEGRADATION_VARS:
+        dict_mins[var].append(training_data.loc[mask, var].min())
+        dict_maxs[var].append(training_data.loc[mask, var].max())
+        training_data.loc[mask, var] = alg.minmax(training_data.loc[mask], var)
 avg_mins_per_var = {var: np.mean(lst) for var, lst in dict_mins.items()}
 avg_maxs_per_var = {var: np.mean(lst) for var, lst in dict_maxs.items()}
 
-print(f'Scaled: {res_train}')
 
 # Dati di validation
-for var in degradation_vars:
-    res_val.loc[var] = minmax(res_val, var)
-hpt_rul_val_scaled = normalize(hpt_rul_val)
-hpc_rul_val_scaled = normalize(hpc_rul_val)
-ww_rul_val_scaled = normalize(ww_rul_val)
+for var in DEGRADATION_VARS:
+    res_val.loc[var] = alg.minmax(res_val, var)
+hpt_rul_val_scaled = alg.normalize(hpt_rul_val)
+hpc_rul_val_scaled = alg.normalize(hpc_rul_val)
+ww_rul_val_scaled = alg.normalize(ww_rul_val)
 
 
 # Dati di test
 for esn in dfv["ESN"].unique():
     mask = res_test["ESN"] == esn
-    for var in degradation_vars:
+    for var in DEGRADATION_VARS:
         # Usa i limiti medi del training
         m = avg_mins_per_var[var]
         M = avg_maxs_per_var[var]
@@ -768,7 +535,7 @@ for esn in dfv["ESN"].unique():
 
 
 
-# %store res_train
+# %store training_data
 # %store res_val
 # %store res_test
 # %store hpt_rul_train
@@ -789,8 +556,8 @@ all_train_hpt_rul = []
 all_train_hpc_rul = []
 all_train_ww_rul = []
 
-for esn in res_train["ESN"].unique():
-    res_esn = res_train.loc[res_train["ESN"] == esn, ["ESN"] + degradation_vars]
+for esn in training_data["ESN"].unique():
+    res_esn = training_data.loc[training_data["ESN"] == esn, ["ESN"] + DEGRADATION_VARS]
 
     rul_hpt_esn = hpt_rul_train.loc[hpt_rul_train["ESN"] == esn]
     rul_hpc_esn = hpc_rul_train.loc[hpc_rul_train["ESN"] == esn]
@@ -823,26 +590,26 @@ all_coefs_hpt = []
 all_coefs_hpc = []
 # all_coefs_ww = []
 
-for esn in res_train["ESN"].unique():
+for esn in training_data["ESN"].unique():
   result_hpt = differential_evolution(
-      objective_deviation,
+      alg.objective_deviation,
       bounds=bounds,
-      args=(X_train_opt.loc[X_train_opt["ESN"] == esn, degradation_vars], Y_train_hpt.loc[Y_train_hpt["ESN"] == esn, "Cycles_to_HPT_SV"]),
+      args=(X_train_opt.loc[X_train_opt["ESN"] == esn, DEGRADATION_VARS], Y_train_hpt.loc[Y_train_hpt["ESN"] == esn, "Cycles_to_HPT_SV"]),
       strategy='best1bin',
       maxiter=600,                # generazioni
-      popsize=100,
+      popsize=30,
       workers=-1,
-      tol=0.02,                      # Tolleranza
+      tol=0.001,                      # Tolleranza
   )
   all_coefs_hpt.append(result_hpt.x)
 
   result_hpc = differential_evolution(
-      objective_deviation,
+      alg.objective_deviation,
       bounds=bounds,
-      args=(X_train_opt.loc[X_train_opt["ESN"] == esn, degradation_vars], Y_train_hpc.loc[Y_train_hpc["ESN"] == esn, "Cycles_to_HPC_SV"]),
+      args=(X_train_opt.loc[X_train_opt["ESN"] == esn, DEGRADATION_VARS], Y_train_hpc.loc[Y_train_hpc["ESN"] == esn, "Cycles_to_HPC_SV"]),
       strategy='best1bin',
       maxiter=600,                # generazioni
-      popsize=100,
+      popsize=30,
       workers=-1,
       tol=0.001,                      # Tolleranza
   )
@@ -902,12 +669,12 @@ coefs_hpc = [6.56571436,-4.15254605,-3.98586221, 2.5092515, -3.09432992,-3.70538
 # PLOTTING SU DATI DI TRAINING
 
 hpt_limits, hpc_limits, ww_limits = [], [], []
-for esn in res_train["ESN"].unique():
-  temp = res_train[res_train["ESN"] == esn].copy()
+for esn in training_data["ESN"].unique():
+  temp = training_data[training_data["ESN"] == esn].copy()
   
   # Calcolo e standardizzazione degli health index
-  hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars]))
-  hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars]))
+  hi_hpt = alg.normalize(alg.HIE(coefs_hpt, temp[DEGRADATION_VARS]))
+  hi_hpc = alg.normalize(alg.HIE(coefs_hpc, temp[DEGRADATION_VARS]))
   # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars]))
 
   hpt_limits.append((hi_hpt.min(), hi_hpt.max()))
@@ -957,8 +724,8 @@ print(f"Limiti Medi HPT: Min={avg_min_hpt:.4f}, Max={avg_max_hpt:.4f}")
 # %%
 # PLOTTING SU DATI DI VALIDATION
 
-hi_hpt_val = normalize(HIE(coefs_hpt, res_val[degradation_vars]).dropna())
-hi_hpc_val = normalize(HIE(coefs_hpc, res_val[degradation_vars]).dropna())
+hi_hpt_val = alg.normalize(alg.HIE(coefs_hpt, res_val[DEGRADATION_VARS]).dropna())
+hi_hpc_val = alg.normalize(alg.HIE(coefs_hpc, res_val[DEGRADATION_VARS]).dropna())
 # hi_ww_val = normalize(HIE(coefs_ww, res_val[degradation_vars]).dropna())
 
 fig, axs = plt.subplots(1, 2, figsize=(30, 6))
@@ -979,8 +746,8 @@ for esn in dft["ESN"].unique():
   temp = res_test[res_test["ESN"] == esn].copy()
 
   # Calcolo e standardizzazione degli health index
-  hi_hpt_test = normalize(HIE(coefs_hpt, temp[degradation_vars]).dropna())
-  hi_hpc_test = normalize(HIE(coefs_hpc, temp[degradation_vars]).dropna())
+  hi_hpt_test = alg.normalize(alg.HIE(coefs_hpt, temp[DEGRADATION_VARS]).dropna())
+  hi_hpc_test = alg.normalize(alg.HIE(coefs_hpc, temp[DEGRADATION_VARS]).dropna())
   # hi_ww_test  = normalize(HIE(coefs_ww, temp[degradation_vars]).dropna())
 
   fig, axs = plt.subplots(1, 2, figsize=(30, 6))
@@ -1117,8 +884,8 @@ all_train_hpc_rul = []
 # HI di training
 for esn in res_train["ESN"].unique():
   temp = res_train[res_train["ESN"] == esn].copy()
-  hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars]).dropna())
-  hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars]).dropna())
+  hi_hpt = normalize(HIE(coefs_hpt, temp[DEGRADATION_VARS]).dropna())
+  hi_hpc = normalize(HIE(coefs_hpc, temp[DEGRADATION_VARS]).dropna())
   # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars]).dropna())
   print(f'SHAPE: {hi_hpt.shape}')
 
@@ -1156,13 +923,13 @@ regr_hpc.fit(X_train_hpc, Y_train_hpc)
 # regr_ww.fit(X_train_ww, X_train_ww)
 
 
-test_hi_hpt = normalize_hi(HIE(coefs_hpt, res_test[res_test["ESN"] == 106][degradation_vars]))
-test_hi_hpc = normalize_hi(HIE(coefs_hpc, res_test[res_test["ESN"] == 106][degradation_vars]))
-test_hi_ww = normalize_hi(HIE(coefs_ww, res_test[res_test["ESN"] == 106][degradation_vars]))
+test_hi_hpt = normalize_hi(HIE(coefs_hpt, res_test[res_test["ESN"] == 106][DEGRADATION_VARS]))
+test_hi_hpc = normalize_hi(HIE(coefs_hpc, res_test[res_test["ESN"] == 106][DEGRADATION_VARS]))
+test_hi_ww = normalize_hi(HIE(coefs_ww, res_test[res_test["ESN"] == 106][DEGRADATION_VARS]))
 
-val_hi_hpt = normalize_hi(HIE(coefs_hpt, res_val[degradation_vars])).dropna()
-val_hi_hpc = normalize_hi(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
-val_hi_ww = normalize_hi(HIE(coefs_ww, res_val[degradation_vars])).dropna()
+val_hi_hpt = normalize_hi(HIE(coefs_hpt, res_val[DEGRADATION_VARS])).dropna()
+val_hi_hpc = normalize_hi(HIE(coefs_hpc, res_val[DEGRADATION_VARS])).dropna()
+val_hi_ww = normalize_hi(HIE(coefs_ww, res_val[DEGRADATION_VARS])).dropna()
 
 # %store X_train_hpt
 # %store X_train_hpc
@@ -1192,8 +959,8 @@ for esn in res_train["ESN"].unique():
     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
 
     # Calcolo e standardizzazione degli health index
-    hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars])).dropna()
-    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    hi_hpt = normalize(HIE(coefs_hpt, temp[DEGRADATION_VARS])).dropna()
+    hi_hpc = normalize(HIE(coefs_hpc, temp[DEGRADATION_VARS])).dropna()
     # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars])).dropna()
     print(f'SHAPE: {hi_hpt.shape}')
 
@@ -1278,8 +1045,8 @@ for esn in res_train["ESN"].unique():
     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
 
     # Calcolo e standardizzazione degli health index
-    hi_hpt = normalize(HIE(coefs_hpt, temp[degradation_vars])).dropna()
-    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    hi_hpt = normalize(HIE(coefs_hpt, temp[DEGRADATION_VARS])).dropna()
+    hi_hpc = normalize(HIE(coefs_hpc, temp[DEGRADATION_VARS])).dropna()
     # hi_ww = normalize(HIE(coefs_ww, temp[degradation_vars])).dropna()
     print(f'SHAPE: {hi_hpt.shape}')
 
@@ -1337,8 +1104,8 @@ for esn in res_train["ESN"].unique():
 # Test sul motore di VALIDATION
 
 # Calcolo e standardizzazione degli health index
-val_hi_hpt = normalize(HIE(coefs_hpt, res_val[degradation_vars])).dropna()
-val_hi_hpc = normalize(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
+val_hi_hpt = normalize(HIE(coefs_hpt, res_val[DEGRADATION_VARS])).dropna()
+val_hi_hpc = normalize(HIE(coefs_hpc, res_val[DEGRADATION_VARS])).dropna()
 # val_hi_ww = normalize(HIE(coefs_ww, res_val[degradation_vars])).dropna()
 print(f'SHAPE: {val_hi_hpt.shape}')
 
@@ -1380,7 +1147,7 @@ pred_rul_hpc_val = val_hi_hpc.values.flatten() + pred_gap_hpc_val
 
 
 fig, axs = plt.subplots(1, 2, figsize=(30, 6))
-fig.suptitle(f'Validation: ESN - {testing_esn}', fontsize=16)
+fig.suptitle(f'Validation: ESN - {TESTING_ESN}', fontsize=16)
 axs[0].plot(pred_rul_hpt_val, color='tab:blue', label='Predicted - HPT')
 axs[0].plot(val_hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real')
 axs[1].plot(pred_rul_hpc_val, color='tab:blue', label='Predicted - HPC')
@@ -1401,7 +1168,7 @@ X_ww_list, y_ww_list = [], []
 
 for esn in res_train["ESN"].unique():
     temp = res_train[res_train["ESN"] == esn].copy()
-    hpc_hi = normalize(HIE(coefs_hpc, temp[degradation_vars]))
+    hpc_hi = normalize(HIE(coefs_hpc, temp[DEGRADATION_VARS]))
     ww_rul = ww_rul_train.loc[ww_rul_train["ESN"] == esn, "Cycles_to_WW"].copy()
     feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hpc_hi, window_size)
     feat_slope_ps3, feat_intercept_ps3 = get_rolling_slope_intercept(temp["Sensed_Ps3"], window_size)
@@ -1426,7 +1193,7 @@ for esn in res_train["ESN"].unique():
     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
 
     # Calcolo e standardizzazione degli health index
-    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    hi_hpc = normalize(HIE(coefs_hpc, temp[DEGRADATION_VARS])).dropna()
     print(f'SHAPE: {hi_hpt.shape}')
 
     # RUL effettiva
@@ -1459,7 +1226,7 @@ for esn in res_train["ESN"].unique():
 # Test sui dati di validation
 
 # Calcolo e standardizzazione degli health index
-hi_hpc = normalize(HIE(coefs_hpc, res_val[degradation_vars])).dropna()
+hi_hpc = normalize(HIE(coefs_hpc, res_val[DEGRADATION_VARS])).dropna()
 
 feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
 feat_slope_ps3, feat_intercept_ps3 = get_rolling_slope_intercept(res_val["Sensed_Ps3"].dropna(), window_size)
@@ -1475,7 +1242,7 @@ pred_ww_raw = lgbm_ww.predict(X_lgbm_hpc)
 
 # Plot
 fig, ax = plt.subplots(figsize=(15, 6))
-fig.suptitle(f'Validation ESN - {testing_esn}', fontsize=16)
+fig.suptitle(f'Validation ESN - {TESTING_ESN}', fontsize=16)
 ax.plot(ww_rul_val_scaled, color='tab:orange', linewidth=2, linestyle='--', label='Real RUL (WW)')
 ax.plot(pred_ww_raw, color='tab:blue', alpha=0.8, label='Predicted RUL (LGBM)')
 ax.set_xlabel('Cicli (dopo finestra di slope)')

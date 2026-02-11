@@ -149,140 +149,153 @@ def remove_outliers(df: pd.DataFrame, sensor_cols=None, threshold=3, method='zsc
                 
     return df_out
 
-def preprocess_pipeline(
-        df: pd.DataFrame,
-        sensor_cols=None,
-        outlier_method='zscore',
-        outlier_threshold: int | float = 3,
-        smoothing_window: int=5,
-        smoothing_step: int =2
-    ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    """
-    Esegue la pipeline di preprocessing con visualizzazione comparativa finale.
-    """
+def common_pipeline(df,
+                    outlier_sensors=None,
+                    outlier_threshold=0.8,
+                    outlier_method="isoforest",
+                    missing_align_cols=["Snapshot","Cycles_Since_New"],
+                    missing_sensors=None
+) -> pd.DataFrame:
+    df = remove_outliers(df, sensor_cols=outlier_sensors, threshold=outlier_threshold, method=outlier_method)
+    df = missingfill(df, align_cols=missing_align_cols, sensor_cols=missing_sensors).dropna()
+    return df
 
-    history = {}
-    history['Original'] = df.copy()
 
-    # 1. Missing Fill
-    print("Step 1: Filling Missing Values...")
-    dfo = missingfill(df, sensor_cols=sensor_cols)
-    history['Missing Filled First'] = dfo.copy()
+# def preprocess_pipeline(
+#         df: pd.DataFrame,
+#         sensor_cols=None,
+#         outlier_method='zscore',
+#         outlier_threshold: int | float = 3,
+#         smoothing_window: int=5,
+#         smoothing_step: int =2
+#     ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+#     """
+#     Esegue la pipeline di preprocessing con visualizzazione comparativa finale.
+#     """
 
-    # 2. Outlier Removal
-    print(f"Step 2: Removing Outliers ({outlier_method})...")
-    dfo = remove_outliers(dfo, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold)
-    history['Outliers Removed'] = dfo.copy()
+#     history = {}
+#     history['Original'] = df.copy()
 
-    # 3. Missing Fill per gli outlier rimossi impostati a NaN
-    print("Step 3: Filling Missing Values...")
-    dfo = missingfill(dfo, sensor_cols=sensor_cols)
-    history['Missing Filled Second'] = dfo.copy()
+#     # 1. Missing Fill
+#     print("Step 1: Filling Missing Values...")
+#     dfo = missingfill(df, sensor_cols=sensor_cols)
+#     history['Missing Filled First'] = dfo.copy()
+
+#     # 2. Outlier Removal
+#     print(f"Step 2: Removing Outliers ({outlier_method})...")
+#     dfo = remove_outliers(dfo, sensor_cols=sensor_cols, method=outlier_method, threshold=outlier_threshold)
+#     history['Outliers Removed'] = dfo.copy()
+
+#     # 3. Missing Fill per gli outlier rimossi impostati a NaN
+#     print("Step 3: Filling Missing Values...")
+#     dfo = missingfill(dfo, sensor_cols=sensor_cols)
+#     history['Missing Filled Second'] = dfo.copy()
     
-    # Identifica sensori
-    target_sensors = sensor_cols if sensor_cols else [s.value if hasattr(s, 'value') else s for s in u.SENSORS]
-    target_sensors = [s for s in target_sensors if s in dfo.columns]
+#     # Identifica sensori
+#     target_sensors = sensor_cols if sensor_cols else [s.value if hasattr(s, 'value') else s for s in u.SENSORS]
+#     target_sensors = [s for s in target_sensors if s in dfo.columns]
     
-    # 3. Kalman Filter
-    # print("Step 3: Applying Kalman Filter...")
-    # if 'ESN' in df_filled.columns and 'Snapshot' in df_filled.columns:
-    #     for sensor in target_sensors:
-    #         df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
+#     # 3. Kalman Filter
+#     # print("Step 3: Applying Kalman Filter...")
+#     # if 'ESN' in df_filled.columns and 'Snapshot' in df_filled.columns:
+#     #     for sensor in target_sensors:
+#     #         df_filled[sensor] = df_filled.groupby(['ESN', 'Snapshot'])[sensor].transform(apply_kalman)
 
-    print("Step 3: Smoothing...")
-    for sensor in target_sensors:
-        dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(
-            lambda x: x.rolling(window=smoothing_window, min_periods=smoothing_step).mean()
-        ).reset_index(drop=True)
+#     print("Step 3: Smoothing...")
+#     for sensor in target_sensors:
+#         dfo[sensor] = dfo.groupby(["ESN"])[sensor].transform(
+#             lambda x: x.rolling(window=smoothing_window, min_periods=smoothing_step).mean()
+#         ).reset_index(drop=True)
 
-    history['Smoothing'] = dfo.copy()
+#     history['Smoothing'] = dfo.copy()
     
-    print("Pipeline completata.")
-    return dfo, history
-def preprocess_data(train: pd.DataFrame):
-    # 1. PREPARAZIONE INDICI
-    # Reset dell'indice per preservare l'indice originale come 'global_index'
-    dfp = train.reset_index().rename(columns={"index": "global_index"})
+#     print("Pipeline completata.")
+#     return dfo, history
 
-    ## PREPROCESSING
-    dfp , history = preprocess_pipeline(dfp,
-                                    outlier_method='isoforest',
-                                    outlier_threshold=0.08,
-                                    smoothing_window=100,
-                                    smoothing_step=25,
-                                    )
+# def preprocess_data(train: pd.DataFrame):
+#     # 1. PREPARAZIONE INDICI
+#     # Reset dell'indice per preservare l'indice originale come 'global_index'
+#     dfp = train.reset_index().rename(columns={"index": "global_index"})
 
-    ### PREPROCESSING 
-    # Rinominazione di alcune colonne per semplicità di scrittura
-    rename_map = {
-        'ESN': 'esn',
-        'Snapshot': 'snap',
-        'Cumulative_WWs': 'ww_cycle',
-        'Cumulative_HPC_SVs': 'hpc_cycle',
-        'Cumulative_HPT_SVs': 'hpt_cycle',
-        'Cycles_to_WW': 'to_next_ww_cycle',
-        'Cycles_to_HPC_SV': 'to_next_hpc_cycle',
-        'Cycles_to_HPT_SV': 'to_next_hpt_cycle',
-        'Cycles_Since_New': 'cycle'
-    }
-    dfp = dfp.rename(columns=rename_map)
+#     ## PREPROCESSING
+#     dfp , history = preprocess_pipeline(dfp,
+#                                     outlier_method='isoforest',
+#                                     outlier_threshold=0.08,
+#                                     smoothing_window=100,
+#                                     smoothing_step=25,
+#                                     )
 
-    # Rimozione Sensed_ dai sensori (clogged view)
-    sensor_cols = [c for c in dfp.columns if c.startswith('Sensed_')]
-    sensor_rename_map = {c: c.replace('Sensed_', '') for c in sensor_cols}
-    dfp = dfp.rename(columns=sensor_rename_map)
-    final_sensor_names = list(sensor_rename_map.values())
+#     ### PREPROCESSING 
+#     # Rinominazione di alcune colonne per semplicità di scrittura
+#     rename_map = {
+#         'ESN': 'esn',
+#         'Snapshot': 'snap',
+#         'Cumulative_WWs': 'ww_cycle',
+#         'Cumulative_HPC_SVs': 'hpc_cycle',
+#         'Cumulative_HPT_SVs': 'hpt_cycle',
+#         'Cycles_to_WW': 'to_next_ww_cycle',
+#         'Cycles_to_HPC_SV': 'to_next_hpc_cycle',
+#         'Cycles_to_HPT_SV': 'to_next_hpt_cycle',
+#         'Cycles_Since_New': 'cycle'
+#     }
+#     dfp = dfp.rename(columns=rename_map)
 
-    # Nuovi indici
-    dfp['esn_index'] = dfp.groupby('esn').cumcount()
-    dfp['snap_index'] = dfp.groupby(["esn", 'snap']).cumcount()
-    dfp['ww_cycle_index']  = dfp.groupby(['ww_cycle', "snap", "esn"]).cumcount()
-    dfp['hpc_cycle_index'] = dfp.groupby(['hpc_cycle', "snap", "esn"]).cumcount()
-    dfp['hpt_cycle_index'] = dfp.groupby(['hpt_cycle', "snap", "esn"]).cumcount()
+#     # Rimozione Sensed_ dai sensori (clogged view)
+#     sensor_cols = [c for c in dfp.columns if c.startswith('Sensed_')]
+#     sensor_rename_map = {c: c.replace('Sensed_', '') for c in sensor_cols}
+#     dfp = dfp.rename(columns=sensor_rename_map)
+#     final_sensor_names = list(sensor_rename_map.values())
 
-    # Aggiunta della colonna "faulty" per ogni tipo di evento
-    fault_map = {
-        'to_next_ww_cycle': 'fault_ww_cycle',
-        'to_next_hpc_cycle': 'fault_hpc_cycle',
-        'to_next_hpt_cycle': 'fault_hpt_cycle'
-    }
+#     # Nuovi indici
+#     dfp['esn_index'] = dfp.groupby('esn').cumcount()
+#     dfp['snap_index'] = dfp.groupby(["esn", 'snap']).cumcount()
+#     dfp['ww_cycle_index']  = dfp.groupby(['ww_cycle', "snap", "esn"]).cumcount()
+#     dfp['hpc_cycle_index'] = dfp.groupby(['hpc_cycle', "snap", "esn"]).cumcount()
+#     dfp['hpt_cycle_index'] = dfp.groupby(['hpt_cycle', "snap", "esn"]).cumcount()
 
-    for source_col, fault_name in fault_map.items():
-        dfp[fault_name] = 0
-        dfp.loc[dfp[source_col] == 0, fault_name] = 1
-        dfp.loc[dfp.groupby('esn').cumcount(ascending=False) == 0, fault_name] = 1
-    new_fault_columns = ['fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle']
+#     # Aggiunta della colonna "faulty" per ogni tipo di evento
+#     fault_map = {
+#         'to_next_ww_cycle': 'fault_ww_cycle',
+#         'to_next_hpc_cycle': 'fault_hpc_cycle',
+#         'to_next_hpt_cycle': 'fault_hpt_cycle'
+#     }
 
-    # 4. DEFINIZIONE ORDINE COLONNE
-    # Definiamo l'ordine esatto in cui vogliamo che appaiano nel CSV Wide
-    # Prima gli identificatori, poi gli indici di manutenzione, infine i sensori
-    cols_order = [
-        'snap_index',
-        'esn',
-        'cycle',
-        'snap',
-        'esn_index',
-        'global_index',
-        'ww_cycle_index',
-        'hpc_cycle_index',
-        'hpt_cycle_index',
-        'ww_cycle',
-        'hpc_cycle',
-        'hpt_cycle',
-        'to_next_ww_cycle',
-        'to_next_hpc_cycle',
-        'to_next_hpt_cycle'
-    ] + final_sensor_names + new_fault_columns
+#     for source_col, fault_name in fault_map.items():
+#         dfp[fault_name] = 0
+#         dfp.loc[dfp[source_col] == 0, fault_name] = 1
+#         dfp.loc[dfp.groupby('esn').cumcount(ascending=False) == 0, fault_name] = 1
+#     new_fault_columns = ['fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle']
 
-    dfp = dfp[cols_order]
+#     # 4. DEFINIZIONE ORDINE COLONNE
+#     # Definiamo l'ordine esatto in cui vogliamo che appaiano nel CSV Wide
+#     # Prima gli identificatori, poi gli indici di manutenzione, infine i sensori
+#     cols_order = [
+#         'snap_index',
+#         'esn',
+#         'cycle',
+#         'snap',
+#         'esn_index',
+#         'global_index',
+#         'ww_cycle_index',
+#         'hpc_cycle_index',
+#         'hpt_cycle_index',
+#         'ww_cycle',
+#         'hpc_cycle',
+#         'hpt_cycle',
+#         'to_next_ww_cycle',
+#         'to_next_hpc_cycle',
+#         'to_next_hpt_cycle'
+#     ] + final_sensor_names + new_fault_columns
 
-    # for snap_id, group_data in dfp.groupby('snap'):
-    #     print(f"Scrittura file per SNAP {snap_id}...")
-    #     filename = f"snapshot_{snap_id}.csv"
-    #     path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
-    #     # index=False perché 'global_index' è già una colonna esplicita
-    #     group_data.to_csv(path, index=False)
+#     dfp = dfp[cols_order]
 
-    # u.SENSORS = final_sensor_names
-    del new_fault_columns, sensor_cols, sensor_rename_map
-    return dfp, history, final_sensor_names
+#     # for snap_id, group_data in dfp.groupby('snap'):
+#     #     print(f"Scrittura file per SNAP {snap_id}...")
+#     #     filename = f"snapshot_{snap_id}.csv"
+#     #     path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename=filename)
+#     #     # index=False perché 'global_index' è già una colonna esplicita
+#     #     group_data.to_csv(path, index=False)
+
+#     # u.SENSORS = final_sensor_names
+#     del new_fault_columns, sensor_cols, sensor_rename_map
+#     return dfp, history, final_sensor_names
