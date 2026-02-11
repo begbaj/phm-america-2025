@@ -1,5 +1,4 @@
 *.ipynb
-!ok_nuovo_notebook.ipynb
 __pycache__/
 img/
 # Autosave files
