@@ -11,6 +11,106 @@ import scipy as sp
 import scipy.stats as spstats
 import progpy
 import numba
+from sklearn.linear_model import LinearRegression
+import scipy.stats as stats
+
+def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
+    X_train = df[operating_vars]
+    Y_train = df[degradation_vars]
+    models = {}
+    for i in range(0,8):
+        X_temp = pd.DataFrame(np.roll(X_train, i, axis=1))
+        models[i] = {}
+        models[i]["model"] = train_model(X_temp, Y_train)
+    return models
+
+def train_model(X_train, Y_train):
+    model = LinearRegression()
+    model.fit(X_train, Y_train)
+    return model
+
+def s_pred(s_o, model):
+    return model.predict(s_o)
+
+def residual(s_d, s_o, model):
+    return s_d - s_pred(s_o, model)
+
+def wind(y_p, y, a):
+    diff = y - y_p
+    num = np.where(diff >= 0, 2.0, 1.0)
+    if isinstance(y_p, pd.DataFrame) or isinstance(y_p, pd.Series):
+        y_p = y_p.values
+    return num / (1 + a * y_p)
+
+def TWE(y_p, y, a, b):
+    if isinstance(y_p, pd.DataFrame): y_p = y_p.values
+    weight = wind(y_p, y, a)
+    squared_error = (y - y_p) ** 2
+    return weight * squared_error * b
+
+def HI(T3_res, T45_res, alpha):
+    return -alpha * T3_res - T45_res
+
+def objective(alpha, T3, T45, RUL):
+    hi = -alpha*T3 - T45
+    RUL = RUL.dropna()
+    hi = hi.dropna()
+    corr = stats.pearsonr(RUL,hi)
+    # return np.sqrt(np.mean((hi - RUL)**2)) + 1
+    return - corr[0]
+
+def objective_beta(params, T3, T45, RUL):
+    alpha, beta = params
+    hi = -alpha*T3 - beta*T45
+    RUL = RUL.dropna()
+    hi = hi.dropna()
+    corr = stats.pearsonr(RUL,hi)
+    # return np.sqrt(np.mean((hi - RUL)**2)) + 1
+    return - corr[0]
+
+def HIE(params, vars):
+    #return np.sum([-params[i]*vars.iloc[:,i] for i in range(0, 8)])
+    return vars.dot(-np.array(params))
+
+def objective_experimental(params, vars, RUL):
+    hi = HIE(params, vars)
+    # RUL = RUL.dropna()
+    corr = stats.pearsonr(RUL,hi)
+    return -corr[0]
+
+def objective_deviation(params, vars, RUL):
+    hi = HIE(params, vars)
+    hi_min, hi_max = hi.min(), hi.max()
+    if hi_max == hi_min:
+        # Penalità se l'HI è una linea piatta
+        return 1.0
+    hi_norm = (hi - hi_min) / (hi_max - hi_min)
+    mse = np.mean((hi_norm - RUL)**2)
+    return mse
+
+def get_rolling_slope_intercept(series, window):
+    slopes = []
+    intercepts = []
+    series = np.asarray(series).flatten()
+    for i in range(len(series)):
+        if i < window:
+            slopes.append(0.0)
+            intercepts.append(0.0)
+        else:
+            y = series[i-window:i]
+            x = np.arange(window)
+            # Fit polinomiale di grado 1 (retta) -> ritorna [slope, intercept]
+            poly = np.polyfit(x, y, 1)
+            slopes.append(float(poly[0]))
+            intercepts.append(float(poly[1]))
+    return np.array(slopes), np.array(intercepts)
+
+def get_slope(y):
+    """Calcola la pendenza della retta di regressione per una finestra y"""
+    x = np.arange(len(y))
+    # Polyfit di grado 1 restituisce [pendenza, intercetta]
+    slope = np.polyfit(x, y, 1)[0]
+    return slope
 
 
 def fft(v: pd.DataFrame | np.ndarray, fs: float = 1.0) -> tuple[float, float]:

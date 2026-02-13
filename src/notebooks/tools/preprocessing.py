@@ -34,7 +34,7 @@ def apply_kalman(series: pd.Series, transition_matrices=[1], observation_matrice
     
     return filtered_means.flatten()
 
-def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], sensor_cols=None) -> pd.DataFrame:
+def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], align_alt=['Snapshot', 'Cycles'], sensor_cols=None) -> pd.DataFrame:
     """
     Riempie i valori mancanti (NaN) integrando i dati presenti negli altri motori.
     
@@ -45,6 +45,7 @@ def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], s
     
     :param df: DataFrame contenente i dati.
     :param align_cols: Colonne usate per allineare i cicli tra motori.
+    :param align_alt: Colonne alternative usate per allineare i cicli tra motori se align_cols fallisce.
     :param sensor_cols: Lista di sensori da processare. Se None, usa i SENSORS globali.
     :return: DataFrame con i missing values riempiti.
     """
@@ -82,8 +83,12 @@ def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], s
             df_out[valid_cols] = df_out[valid_cols].fillna(fleet_means)
         except Exception as e:
             print(f"Warning: Errore durante il calcolo della media flotta: {e}")
+    elif all(col in df_out.columns for col in align_alt):
+        fleet_means = df_out.groupby(align_alt)[valid_cols].transform('mean')
+        # Sostituzione dei NaN con la media calcolata
+        df_out[valid_cols] = df_out[valid_cols].fillna(fleet_means)
     else:
-        print(f"Warning: Colonne di allineamento {align_cols} non trovate. Salto step flotta.")
+        print(f"Warning: Colonne di allineamento {align_cols} o {align_alt} non trovate. Salto step flotta.")
         
     # 3. Interpolazione Residua (Per ESN)
     # Se la media flotta non ha coperto tutto (es. cicli dove nessuno ha dati), eseguiamo forward fill
@@ -97,6 +102,49 @@ def missingfill(df: pd.DataFrame, align_cols=['Snapshot', 'Cycles_Since_New'], s
             df_out[col] = df_out.groupby('ESN')[col].transform(lambda x: x.bfill())
 
     return df_out
+
+def minmax(df, column):
+    col_min = df[column].min()
+    col_max = df[column].max()
+    return (df[column] - col_min) / (col_max - col_min)
+
+def minmax_all(df):
+    newdf = pd.DataFrame()
+    for column in df.columns:
+        col_min = df[column].min()
+        col_max = df[column].max()
+        newdf[column] = (df[column] - col_min) / (col_max - col_min)
+    return newdf
+
+def normalize(col):
+  col_min, col_max = col.min(), col.max()
+  col = (col - col_min) / (col_max - col_min)
+  col = col.to_frame()
+  return col
+
+def median_norm(df):
+    for i in range(df.shape[1]):
+        m = df.iloc[:,i].median()
+        df.iloc[:,i] -= m
+    return df
+
+def calculate_rolling_slope(df, column, window, groupby='ESN'):
+    from tools.algorithms import get_slope
+    return df.groupby(groupby)[column].transform(
+        lambda x: x.rolling(window=window).apply(get_slope)
+    )
+
+def calculate_cycle_increment(df, value_col, reset_col, groupby='ESN'):
+    """
+    Calculates the increment of a value since the last reset (where reset_col == 0).
+    """
+    df_temp = df.copy()
+    # Identify reset points
+    df_temp['temp_reset'] = df_temp.loc[df_temp[reset_col] == 0, value_col]
+    # Forward fill the reset values within each group
+    df_temp['temp_reset'] = df_temp.groupby(groupby)['temp_reset'].ffill()
+    # Calculate increment
+    return df_temp[value_col] - df_temp['temp_reset']
 
 def remove_outliers(df: pd.DataFrame, sensor_cols=None, threshold=3, method='zscore') -> pd.DataFrame:
     """
