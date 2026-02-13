@@ -30,12 +30,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import ParameterGrid
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.svm import SVR
 from sympy import O, deg
 from types import FunctionType
-from xgboost import XGBRegressor
-from xgboost import train
+from xgboost import XGBRegressor, train
 import glob
 import lightgbm as lgb
 import matplotlib.pyplot as plt
@@ -48,6 +47,8 @@ import pwlf
 import random
 import scipy.optimize as optimize
 import scipy.stats as stats
+from sklearn.svm import SVR
+from sklearn.pipeline import Pipeline
 
 
 import warnings
@@ -435,27 +436,6 @@ T45_res_val = res_val["Sensed_T45"]
 # %store T3_res_val
 # %store T45_res_val
 
-# PLOTTING TRAINING
-fig, axs = plt.subplots(2,3, figsize=(15,8))
-for esn in res_train["ESN"].unique():
-  fig.suptitle(f'ESN - {esn}', fontsize=16)
-  for i, ax in enumerate(axs.flat):
-    if isinstance(ax, plt.Axes):
-        degrad = res_train.loc[res_train["ESN"] == esn, degradation_vars[i]].reset_index(drop=True)
-        ax.plot(degrad, linewidth=0.5, label=esn)
-        ax.set_title(degradation_vars[i])
-        ax.set_ylabel("Residuals")
-        ax.set_xlabel(f"{degradation_vars[i]}_res")
-        ax.legend()
-        ax.grid()
-  fig.subplots_adjust(hspace=0.4, wspace=0.4)
-fig.show()
-
-plt.figure()
-for esn in res_train["ESN"].unique():
-  prova = res_train[res_train["ESN"] ==  esn][degradation_vars].reset_index(drop=True).sum(axis=1)
-  prova.plot(linewidth=0.3)
-plt.legend()
 
 
 # %%
@@ -464,18 +444,12 @@ plt.legend()
 res_test = pd.DataFrame()
 res_list = []
 
-
-plt.figure(figsize=(16,10))
 for i, esn in enumerate(dfv["ESN"].unique()):
-  plt.subplot(2,2,i+1)
   mask = dfv["ESN"] == esn
   X_test = dfv.loc[mask, operating_vars]
   Y_test = dfv.loc[mask, degradation_vars]
   # Predict
   Y_pred = model.predict(X_test)
-
-  plt.plot(Y_pred)
-  plt.legend(degradation_vars)
 
   res_temp = Y_test - Y_pred
   res_temp = remove_outliers(res_temp, res_temp.columns, threshold=0.8)
@@ -490,29 +464,7 @@ for i, esn in enumerate(dfv["ESN"].unique()):
   res_temp["ESN"] = esn
   res_list.append(res_temp)
 
-plt.show()
-
 res_test = pd.concat(res_list)
-
-plt.figure(figsize=(12,8))
-plt.subplot(3,1,1)
-for esn in res_train["ESN"].unique():
-  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
-  plt.plot(data, linewidth=1, label=f"T45 {esn} cumsum")
-  plt.legend()
-
-plt.subplot(3,1,2)
-for esn in res_train["ESN"].unique():
-  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
-  plt.plot(data.cumsum(), linewidth=1, label=f"T45 {esn} cumsum")
-  plt.legend()
-
-plt.subplot(3,1,3)
-for esn in res_train["ESN"].unique():
-  data = res_train.loc[res_train["ESN"] == esn, "Sensed_T45"].reset_index(drop=True)
-  plt.plot(data.diff(), linewidth=1, label=f"T45 {esn} cumsum")
-  plt.legend()
-plt.show()
 
 
 # PULIZIA E ROLLING
@@ -844,7 +796,7 @@ for esn in res_train["ESN"].unique():
         'HI': hi_hpc,
         'Slope': feat_slope_hpc,
         'Cycles_Accumulated': np.arange(len(hi_hpc)),        # Cicli passati
-        'HI_Rolling_Mean': pd.Series(hi_hpc).rolling(500).mean().bfill()
+        'HI_Rolling_Mean': pd.Series(hi_hpc).rolling(200).mean().bfill()
     })
 
     valid_idx = df_features.dropna().index
@@ -857,8 +809,8 @@ y_train_hpc = np.concatenate(y_hpc_list)
 # --- TRAINING DEL MODELLO ---
 print("Training LGBM Classifier per identificazione Terzo Ciclo...")
 lgbm_classifier_hpc = lgb.LGBMClassifier(
-    n_estimators=10000, 
-    learning_rate=0.02,
+    n_estimators=2000, 
+    learning_rate=0.03,
     objective='binary',
     importance_type='gain'
 )
@@ -870,13 +822,59 @@ lgbm_classifier_hpc.fit(X_train_hpc, y_train_hpc)
 
 
 # %%
-# TEST DEL CLASSIFICATORE SUI DATI DI TRAINING
+# TRAINING DEL REGRESSORE LINEARE PER LA CORREZIONE DEL GAP
+
+X_hpc_list, y_hpc_list = [], []
+
+# Preprocessing per TRAINING del modello
+for esn in res_train["ESN"].unique():
+
+    temp = res_train[res_train["ESN"] == esn].reset_index().copy()
+
+    mask = temp["Cumulative_HPC_SVs"] == 2
+
+    # Calcolo e standardizzazione degli health index
+    hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
+    hpc_rul = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
+
+    # Calcolo errore gap
+    gap_true_hpc = hpc_rul["Cycles_to_HPC_SV"].values.flatten() - np.asarray(hi_hpc).flatten()
+
+    window_size = 200
+
+    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
+
+    indices = np.where(mask)[0]
+
+    # Accumulo dati HPC
+    X_hpc_list.append(pd.DataFrame({'HI': np.asarray(hi_hpc).flatten(),
+                                    'Slope': feat_slope_hpc, 
+                                    'Cycles_Accumulated': np.arange(len(hi_hpc)),
+                                    'Intercept': feat_intercept_hpc}).iloc[indices].dropna())
+    y_hpc_list.append(gap_true_hpc[indices])
+  
+X_train_hpc = pd.concat(X_hpc_list, ignore_index=True)
+y_train_hpc = np.concatenate(y_hpc_list)
+
+gap_regr_hpc = LinearRegression()
+
+# TRAINING del regressore lineare
+gap_regr_hpc.fit(X_train_hpc, y_train_hpc)
+
+
+# %store gap_regr_hpc
+
+
+# %%
+# TEST DI CLASSIFICATORE E REGRESSORE SUI DATI DI TRAINING
 
 for esn in res_train["ESN"].unique():
     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
 
     hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).values.flatten()
     hpc_rul = hpc_rul_train.loc[hpc_rul_train["ESN"] == esn, "Cycles_to_HPC_SV"].values
+    
+    final_output_hpc = hi_hpc.copy()
 
     feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
 
@@ -884,226 +882,94 @@ for esn in res_train["ESN"].unique():
         'HI': hi_hpc,
         'Slope': feat_slope_hpc,
         'Cycles_Accumulated': np.arange(len(hi_hpc)),        # Cicli passati
-        'HI_Rolling_Mean': pd.Series(hi_hpc).rolling(500).mean().bfill()
+        'HI_Rolling_Mean': pd.Series(hi_hpc).rolling(200).mean().bfill()
     })
     
     X_test_esn = X_test_esn.ffill().bfill().fillna(0)
 
     # PREDIZIONE
-    preds_class = lgbm_classifier_hpc.predict(X_test_esn)
+    pred_class = lgbm_classifier_hpc.predict(X_test_esn)
+    
+    mask_real = temp["Cumulative_HPC_SVs"] == 2
+    mask_pred = (pred_class == 1)
 
-    mask_real = (temp["Cumulative_HPC_SVs"] == 2)
+    if mask_pred.any():
+        X_reg_input = pd.DataFrame({
+            'HI': hi_hpc,
+            'Slope': feat_slope_hpc,
+            'Cycles_Accumulated': np.arange(len(hi_hpc)),
+            'Intercept': feat_intercept_hpc
+        }).loc[mask_pred]
+        pred_gap = gap_regr_hpc.predict(X_reg_input)
+        final_output_hpc[mask_pred] = hi_hpc[mask_pred] + pred_gap.flatten()
+
 
     # Plot
     fig, ax1 = plt.subplots(figsize=(20, 6))
-    ax1.plot(hi_hpc, color='tab:blue', label='Health Index', alpha=0.7)
-    ax1.plot(hpc_rul, color='tab:orange', linestyle='--', label='Real RUL', alpha=0.8)
-    ax1.set_ylabel('HI / RUL')
+    ax1.plot(hpc_rul, color='tab:orange', linestyle='--', label='HPC RUL', alpha=0.8)
+    ax1.plot(final_output_hpc, color='tab:red', label='HI corrertto', linewidth=2)
+    ax1.fill_between(range(len(pred_class)), 0, 1, where=mask_pred, 
+                    color='red', alpha=0.05, label='Predizione: Terzo Ciclo')
+    ax1.fill_between(range(len(mask_real)), 0, 0.05, where=mask_real, 
+                    color='green', alpha=0.5, label='Ground Truth (SV=2)')
+    ax1.set_ylabel('Value')
     ax1.set_xlabel('Cycles')
-    ax1.fill_between(range(len(preds_class)), 0, 1, where=preds_class.astype(bool), 
-                     color='red', alpha=0.1, label='Classificato come terzo ciclo')
-    ax1.fill_between(range(len(mask_real)), 0, 0.1, where=mask_real, 
-                     color='green', alpha=0.5, label='Ground Truth')
-    ax1.set_ylabel('Probability / Decision')
-    ax1.set_ylim(-0.05, 1.05)
-    plt.title(f'Test Classificatore ESN {esn}: Rilevamento Terzo Ciclo di Manutenzione')
-    lines, labels = ax1.get_legend_handles_labels()
-    ax1.legend(lines, labels, loc='upper left')
+    plt.title(f'Training ESN {esn} - LightGBM + gap correction')
+    ax1.legend(loc='upper left')
     ax1.grid(True, alpha=0.2)
-    plt.tight_layout()
     plt.show()
-    
+
 
 # %%
-# TEST DEL CLASSIFICATORE SUI DATI DI VALIDATION
+# TEST DI CLASSIFICATORE E REGRESSORE SUI DATI DI VALIDATION
 
 hi_hpc_val = normalize(HIE(coefs_hpc, res_val[degradation_vars]))
 valid_indices = hi_hpc_val.index
 hi_hpc_val = hi_hpc_val.values.flatten()
+final_output_hpc_val = hi_hpc_val.copy()
 
 feat_slope_hpc_val, feat_intercept_hpc_val = get_rolling_slope_intercept(hi_hpc_val, window_size)
     
-
 X_test_val = pd.DataFrame({
         'HI': hi_hpc_val,
         'Slope': feat_slope_hpc_val,
         'Cycles_Accumulated': np.arange(len(hi_hpc_val)),        # Cicli passati
-        'HI_Rolling_Mean': pd.Series(hi_hpc_val).rolling(500).mean().bfill().values
+        'HI_Rolling_Mean': pd.Series(hi_hpc_val).rolling(200).mean().bfill().values
     })
     
 X_test_val = X_test_val.ffill().bfill().fillna(0)
 
 # PREDIZIONE
-preds_class_val = lgbm_classifier_hpc.predict(X_test_val)
+pred_class_val = lgbm_classifier_hpc.predict(X_test_val)
 
-mask_real = (res_val["Cumulative_HPC_SVs"] == 2)
+mask_real_val = (res_val["Cumulative_HPC_SVs"] == 2)
+
+mask_pred_val = (pred_class_val == 1)
+
+if mask_pred_val.any():
+    X_reg_input_val = pd.DataFrame({
+        'HI': hi_hpc_val,
+        'Slope': feat_slope_hpc_val,
+        'Cycles_Accumulated': np.arange(len(hi_hpc_val)),
+        'Intercept': feat_intercept_hpc_val
+    }).loc[mask_pred_val]
+    X_reg_input_val = X_reg_input_val.ffill().bfill().fillna(0)
+    pred_gap_val = gap_regr_hpc.predict(X_reg_input_val)
+    final_output_hpc_val[mask_pred_val] = hi_hpc_val[mask_pred_val] + pred_gap_val.flatten()
+
 
 # Plot
 fig, ax1 = plt.subplots(figsize=(20, 6))
-ax1.plot(hi_hpc_val, color='tab:blue', label='Health Index', alpha=0.7)
-ax1.plot(hpc_rul_val_scaled, color='tab:orange', linestyle='--', label='Real RUL', alpha=0.8)
-ax1.set_ylabel('HI / RUL')
+ax1.plot(hpc_rul_val_scaled, color='tab:orange', linestyle='--', label='HPC RUL', alpha=0.8)
+ax1.plot(final_output_hpc_val, color='tab:red', label='HI corrertto', linewidth=2)
+ax1.fill_between(range(len(pred_class_val)), 0, 1, where=mask_pred_val, 
+                color='red', alpha=0.05, label='Predizione: Terzo Ciclo')
+ax1.fill_between(range(len(mask_real_val)), 0, 0.05, where=mask_real_val, 
+                color='green', alpha=0.5, label='Ground Truth (SV=2)')
+ax1.set_ylabel('Value')
 ax1.set_xlabel('Cycles')
-ax1.fill_between(range(len(preds_class_val)), 0, 1, where=preds_class_val.astype(bool), 
-                color='red', alpha=0.1, label='Classificato come terzo ciclo')
-ax1.fill_between(range(len(mask_real)), 0, 0.1, where=mask_real, 
-                color='green', alpha=0.5, label='Ground Truth')
-ax1.set_ylabel('Probability / Decision')
-ax1.set_ylim(-0.05, 1.05)
-plt.title(f'Test Classificatore ESN {testing_esn}: Rilevamento Terzo Ciclo di Manutenzione HPC')
-lines, labels = ax1.get_legend_handles_labels()
-ax1.legend(lines, labels, loc='upper left')
+plt.title(f'Validation ESN {testing_esn} - LightGBM + gap correction')
+ax1.legend(loc='upper left')
 ax1.grid(True, alpha=0.2)
-plt.tight_layout()
 plt.show()
-    
 
-# %%
-# # VERSIONE LIGHTGBM DEL PAPER
-
-# X_hpc_list, y_hpc_list = [], []
-
-# # Sui dati di training
-# for esn in res_train["ESN"].unique():
-
-#     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
-
-#     mask = temp["Cumulative_HPC_SVs"] == 2
-
-#     # Calcolo e standardizzazione degli health index
-#     hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).dropna()
-#     hpc_rul = hpc_rul_train[hpc_rul_train["ESN"] == esn].copy()
-
-#     # Calcolo errore gap
-#     gap_true_hpc = hpc_rul["Cycles_to_HPC_SV"].values.flatten() - np.asarray(hi_hpc).flatten()
-
-#     window_size = 300
-
-#     feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-
-#     indices = np.where(mask)[0]
-
-#     # Accumulo dati HPC
-#     X_hpc_list.append(pd.DataFrame({'HI': np.asarray(hi_hpc).flatten(),
-#                                     'Slope': feat_slope_hpc, 'Intercept': feat_intercept_hpc}).iloc[indices].dropna())
-#     y_hpc_list.append(gap_true_hpc[indices])
-  
-# X_train_hpc = pd.concat(X_hpc_list, ignore_index=True)
-# y_train_hpc = np.concatenate(y_hpc_list)
-
-# # Training dei modelli
-# print("Training LGBM HPC...")
-# lgbm_hpc = lgb.LGBMRegressor(n_estimators=10000, learning_rate=0.02)
-# lgbm_hpc.fit(X_train_hpc, y_train_hpc)
-
-
-# # %store lgbm_hpc
-
-
-
-# %%
-# # TEST sui dati di TRAINING
-
-# for esn in res_train["ESN"].unique():
-#     temp = res_train[res_train["ESN"] == esn].reset_index().copy()
-#     # Maschera per l'applicazione del modello
-#     mask = temp["Cumulative_HPC_SVs"] == 2
-
-#     # Calcolo e standardizzazione degli health index
-#     hi_hpc = normalize(HIE(coefs_hpc, temp[degradation_vars])).values.flatten()
-
-#     # RUL effettiva
-#     hpc_rul = hpc_rul_train.loc[hpc_rul_train["ESN"] == esn, "Cycles_to_HPC_SV"].values
-
-#     # HPC
-#     feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-#     X_lgbm_hpc_all = pd.DataFrame({
-#         'HI': hi_hpc,                # Valore attuale HI
-#         'Slope': feat_slope_hpc,            # Pendenza locale
-#         'Intercept': feat_intercept_hpc     # Intercetta locale
-#     })
-
-#     pred_rul_hpc_full = hi_hpc.copy()
-    
-#     if mask.any():
-#         X_lgbm_filtered = X_lgbm_hpc_all.loc[mask]
-        
-#         # Predizione del gap solo nei punti desiderati
-#         pred_gap_hpc = lgbm_hpc.predict(X_lgbm_filtered)
-        
-#         # Calcoliamo la RUL finale sommando HI ai gap predetti
-#         hi_values_filtered = hi_hpc[mask]
-#         # pred_rul_hpc_full[mask] = pd.Series(hi_values_filtered + pred_gap_hpc.flatten()).rolling(window=10, min_periods=1).mean()
-#         pred_rul_hpc_full[mask] = hi_values_filtered + pred_gap_hpc.flatten()
-
-
-#     # Plot
-#     fig, ax = plt.subplots(figsize=(22, 7))
-#     fig.suptitle(f'Training: ESN - {esn} (LGBM attivo sul terzo ciclo di manutenzione HPC)', fontsize=16)
-#     ax.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real RUL')
-#     # Linea Predetta/HI (sarà HI fino a Phase 2, poi diventerà la predizione LGBM)
-#     ax.plot(pred_rul_hpc_full, color='tab:blue', linewidth=2, label='HI + LGBM Prediction')
-#     # Evidenziatore zona attiva
-#     ax.fill_between(range(len(mask)), ax.get_ylim()[0], ax.get_ylim()[1], 
-#                     where=mask, color='green', alpha=0.05, label='LGBM Overwrite Zone')
-#     ax.set_xlabel('Cycles')
-#     ax.set_ylabel('Health Index / RUL')
-#     ax.legend()
-#     ax.grid(True, alpha=.3)
-#     plt.tight_layout()
-#     plt.show()
-
-
-# %%
-# # Test sul motore di VALIDATION
-
-# # Calcolo e standardizzazione degli health index
-# mask = (res_val["Cumulative_HPC_SVs"] == 2).values
-
-# val_hi_hpc = normalize(HIE(coefs_hpc, res_val[degradation_vars])).values.flatten()
-
-# # RUL effettiva
-# val_hpc_rul = hpc_rul_val_scaled.values
-
-# # HPC
-# feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(val_hi_hpc, window_size)
-# X_lgbm_hpc_val = pd.DataFrame({
-#     'HI': val_hi_hpc,                # Valore attuale HI
-#     'Slope': feat_slope_hpc,            # Pendenza locale
-#     'Intercept': feat_intercept_hpc     # Intercetta locale
-# })
-
-# pred_rul_hpc_full_val = val_hi_hpc.copy()
-    
-# if mask.any():
-#     X_lgbm_filtered_val = X_lgbm_hpc_val.loc[mask]
-        
-#     # Predizione del gap solo nei punti desiderati
-#     pred_gap_hpc_val = lgbm_hpc.predict(X_lgbm_filtered_val)
-        
-#     # Calcoliamo la RUL finale sommando HI ai gap predetti
-#     hi_values_filtered_val = val_hi_hpc[mask]
-#     # pred_rul_hpc_full_val[mask] = pd.Series(hi_values_filtered_val + pred_gap_hpc_val.flatten()).rolling(window=20, min_periods=1).mean()
-#     pred_rul_hpc_full_val[mask] = hi_values_filtered_val + pred_gap_hpc_val.flatten()
-
-# # Plot
-# fig, ax = plt.subplots(figsize=(22, 7))
-# fig.suptitle(f'Validation: ESN - {testing_esn} (LGBM attivo sul terzo ciclo di manutenzione HPC)', fontsize=16)
-# ax.plot(val_hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='Real RUL')
-# # Linea Predetta/HI (sarà HI fino a Phase 2, poi diventerà la predizione LGBM)
-# ax.plot(pred_rul_hpc_full_val, color='tab:blue', linewidth=2, label='HI + LGBM Prediction')
-# # Evidenziatore zona attiva
-# ax.fill_between(range(len(mask)), ax.get_ylim()[0], ax.get_ylim()[1], 
-#                 where=mask, color='green', alpha=0.05, label='LGBM Overwrite Zone')
-# ax.set_xlabel('Cycles')
-# ax.set_ylabel('Health Index / RUL')
-# ax.legend()
-# ax.grid(True, alpha=.3)
-# plt.tight_layout()
-# plt.show()
-
-
-
-
-# %% [markdown]
-# # WW
