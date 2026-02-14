@@ -248,6 +248,8 @@ if INCLUDE_TEST:
 else:
     train_data = df[df["ESN"] != TESTING_ESN].copy()
 
+test_data = df[df["ESN"] == TESTING_ESN].copy()
+
 if cycles_healthy > 0:
     train_data = train_data.groupby("ESN").head(cycles_healthy*8).reset_index(drop=True).copy()
 else:
@@ -558,6 +560,7 @@ print(f"HPC: {chpc}")
 # %%
 # PLOTTING SU DATI DI TRAINING
 hpt_limits, hpc_limits, ww_limits = [], [], []
+
 def calc_hi(sd):
   if USE_ALL_VARS:
     hi_hpt = HIE(ahpt, sd[target_vars])
@@ -605,5 +608,63 @@ for esn in data["ESN"].unique():
 # per il ww bisogna fare una cosa diversa. Intanto bisogna "normalizzare" la salita, ovvero eliminare gli effetti delle manutenzioni hpc e hpt sui residui di T45_res
 
 # %%
-res_test["Sensed_T45"].plot()
+from tkinter import W
 
+
+# def remove_effect(df):
+#     heads = df.groupby("Cumulative_HPT_SVs", as_index=False).head(1)
+#     tails = df.groupby("Cumulative_HPT_SVs", as_index=False).tail(1)
+    
+#     heads = heads[1:]
+#     tails = tails[:-1]
+    
+#     print(heads["Cumulative_HPT_SVs"])
+#     print(tails["Cumulative_HPT_SVs"])
+#     for c in len(heads["Cumulative_HPT_SVs"]):
+#         difference = df.iloc[c, "Sensed_T45"]
+
+
+def remove_effect(df, col):
+    df = df.sort_values([col, "Cycles_Since_New", "Snapshot"])
+    grp_stats = df.groupby(col)["Sensed_T45"].agg(['first', 'last'])
+    grp_stats = grp_stats.sort_index()
+    grp_stats['prev_last'] = grp_stats['last'].shift(1)
+    grp_stats['jump'] = grp_stats['first'] - grp_stats['prev_last']
+    grp_stats['jump'] = grp_stats['jump'].fillna(0)
+    grp_stats['cumulative_offset'] = grp_stats['jump'].cumsum()
+    offset_map = grp_stats['cumulative_offset'].to_dict()
+    df["Sensed_T45"] = df["Sensed_T45"] - df[col].map(offset_map)
+    return df
+
+wwdf = test_data.copy()
+print(wwdf.columns)
+wwdf[DEGRAD_VARS] = res_test[DEGRAD_VARS]
+wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
+wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+
+# reg = LinearRegression().fit(wwdf["Cycles_Since_New"], wwdf["Sensed_T45"])
+# slope = reg.coef_[0][0]
+wwdf = test_data.copy()
+# Sovrascriviamo le variabili con i residui puliti
+wwdf[DEGRAD_VARS] = res_test[DEGRAD_VARS]
+
+# Rimuoviamo gli effetti a gradino (Stitching)
+wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
+wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+
+# Reshape necessario per scikit-learn: (n_righe, 1 colonna)
+X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
+Y = wwdf["Sensed_T45"].values # Target
+
+reg = LinearRegression().fit(X, Y)
+
+# coef_ è un array, prendiamo il primo elemento
+slope = reg.coef_[0]
+
+print(f"Slope: {slope}")
+
+# Plot rapido per verifica
+plt.plot(wwdf["Cycles_Since_New"], wwdf["Sensed_T45"], label="Data")
+plt.plot(wwdf["Cycles_Since_New"], reg.predict(X), color='red', label=f"Slope: {slope:.5f}")
+plt.legend()
+plt.show()
