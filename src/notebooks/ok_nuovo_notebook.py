@@ -234,21 +234,29 @@ dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
 from sklearn.neighbors import NearestNeighbors
 
 # Preparazione dati training
-cycles_healthy = 7
+cycles_healthy = 3
 
 augmented_data = False
 augmented_count = 100
 SMOTE = False
-
-TESTING_ESN = 102
-INCLUDE_TEST = True
+SMOOTH = False
+SMOOTH_WINDOW = [8,8]
+TESTING_ESN = 103
+INCLUDE_TEST = False
 
 if INCLUDE_TEST:
-    train_data = df.copy()
+    train_data = df.copy().reset_index(drop=True)
 else:
-    train_data = df[df["ESN"] != TESTING_ESN].copy()
+    train_data = df[df["ESN"] != TESTING_ESN].copy().reset_index(drop=True)
 
-test_data = df[df["ESN"] == TESTING_ESN].copy()
+train_data_testing = df[df["ESN"] != TESTING_ESN].copy().reset_index(drop=True)
+test_data = df[df["ESN"] == TESTING_ESN].copy().reset_index(drop=True)
+
+if SMOOTH:
+    train_data[ALL_VARS] = train_data.groupby(["ESN", "Snapshot"])[ALL_VARS].transform(
+        lambda x: x.rolling(window=SMOOTH_WINDOW[0], min_periods=SMOOTH_WINDOW[1]).mean()
+    )
+    train_data = train_data.dropna().reset_index(drop=True)
 
 if cycles_healthy > 0:
     train_data = train_data.groupby("ESN").head(cycles_healthy*8).reset_index(drop=True).copy()
@@ -295,23 +303,26 @@ if SMOTE:
 import time
 ENSAMBLE = True
 SEPARATE_MODELS = True
-
+train_data = train_data.sort_values(["ESN", "Cycles_Since_New", "Snapshot"])
 if ENSAMBLE:
   # con ESNAMBLE creiamo un modello per ogni ESN
   # e poi, con la funziona residual, otterremo la media
   # di tutti i valori predetti
   models = {}
   for esn in train_data["ESN"].unique():
-      start = time.time()
       print(f"esn {esn}: ", end="")
       mask = train_data["ESN"] == esn
       X_train = train_data.loc[mask, OPERATING_VARS]
+      X_train = X_train.reset_index(drop=True)
       Y_train = train_data.loc[mask, DEGRAD_VARS]
+      Y_train = Y_train.reset_index(drop=True)
+      start = time.time()
       model = train_model(X_train, Y_train)
       end = time.time()
       print(end - start)
       models[str(esn)] = model
-  del model
+      del model
+  print(models)
   # %store models
 
 else:
@@ -328,20 +339,22 @@ else:
   model = train_model(X_train, Y_train)
   models["all"] = model
 
-
-def residual_regressor(data, esn=None):
-  if not SEPARATE_MODELS:
+def ensamble(data):
     predictions = []
     for model in models.values():
       predictions.append(model.predict(data))
     return np.mean(predictions, axis=0) # mean lo applichiamo indistintamente, nel secondo caso la media è pari al valore stesso
+
+def residual_regressor(data, esn=None):
+  if not SEPARATE_MODELS:
+    return ensamble(data)
   else:
     if esn:
       try:
         return models[str(esn)].predict(data)
       except KeyError:
-        print("Non ci sono modelli addestrati per questo motore")
-        return None
+        print("Non ci sono modelli addestrati per questo motore, usiamo ensamble generico")
+        return ensamble(data)
     else:
       print("Dagli un ESN porcone")
 
@@ -351,35 +364,43 @@ def residual_regressor(data, esn=None):
 
 # %%
 # calcolo residui
-def residuals(df):
+def residuals(dfo):
   res_list = []
+  df = dfo.copy()
   for esn in df["ESN"].unique():
+    res_temp = None
     mask = df["ESN"] == esn
     X_train = df.loc[mask, OPERATING_VARS]
     Y_train = df.loc[mask, DEGRAD_VARS]
+
     if SEPARATE_MODELS:
       Y_pred = residual_regressor(X_train, esn)
     else:
       Y_pred = residual_regressor(X_train)
     if Y_pred is None:
       return
+
     twe = np.mean(TWE(Y_pred, Y_train))
     res_temp = Y_train - Y_pred
     res_temp = pp.remove_outliers(res_temp, threshold=3)
-    res_temp.rolling(window=10,min_periods=1).median()
+    # res_temp.rolling(window=5,min_periods=1).median()
     res_temp = res_temp.ffill()
     res_temp = res_temp.bfill()
     res_temp["ESN"] = esn
+
     try:
       res_temp["Cycles"] = df.loc[mask, "Cycles_Since_New"]
     except:
       res_temp["Cycles"] = df.loc[mask, "Cycles"]
+
     res_list.append(res_temp)
     print(f"TWE for {esn}: {twe}")
   return pd.concat(res_list)
 
 print("TRAINING DATASET")
 res_train = residuals(train_data)
+
+res_all_train = residuals(train_data_testing)
 print(" testing esn")
 res_test = residuals(test_data)
 print("DFT")
@@ -392,16 +413,15 @@ res_dfv = residuals(dfv)
 
 GROUP_CYCLES = True
 REMOVE_OUTLIERS = True
-OUTLIERS_THRESHOLD = 3
+OUTLIERS_THRESHOLD = 1.7
 
 def plot(data, window, min):
     fig, axs = plt.subplots(2, 3, figsize=(15,8))
-    fig.suptitle(f'Residuals Comparison (Window: {window})', fontsize=16)
     axs = axs.flatten()
     for esn in data["ESN"].unique():
         if "aug" in str(esn):
             continue
-        res_temp = data[data["ESN"] == esn]
+        res_temp = data[data["ESN"] == esn].copy()
         if GROUP_CYCLES:
             res_temp = res_temp.groupby("Cycles").mean()
         if REMOVE_OUTLIERS:
@@ -409,20 +429,22 @@ def plot(data, window, min):
             res_temp = res_temp.ffill()
             res_temp = res_temp.bfill()
         for i, ax in enumerate(axs):
-            if i < len(DEGRAD_VARS): # Safety check
+            if i < len(DEGRAD_VARS):
                 d_var = DEGRAD_VARS[i]
                 t = res_temp[d_var]
-                degrad = t.rolling(window=window, min_periods=min).mean().reset_index(drop=True)
-                ax.plot(degrad, linewidth=0.6, alpha=0.7, label=str(esn))
+                degrad = t.rolling(window=window, min_periods=min).mean()
+                ax.plot(degrad.index, degrad.values, linewidth=1.5, alpha=0.7, label=str(esn))
                 ax.set_title(d_var)
                 ax.grid(True, alpha=0.3)
+                ax.set_xlabel("Cycles") # Aggiungi etichetta asse X
                 
     axs[0].legend(fontsize='small', loc='upper right')
     plt.tight_layout()
     plt.show()
 
 plot(res_train, 1, 1)
-plot(res_test, 1, 1)
+plot(res_all_train, 1, 1)
+plot(res_test, 3, 1)
 # plot(residuals(dfv), 10, 1)
 # plot(residuals(dft), 10, 1)
 
@@ -561,7 +583,7 @@ print(f"HPC: {chpc}")
 # PLOTTING SU DATI DI TRAINING
 hpt_limits, hpc_limits, ww_limits = [], [], []
 
-def calc_hi(sd):
+def calc_hi(sd, ahpt, ahpc):
   if USE_ALL_VARS:
     hi_hpt = HIE(ahpt, sd[target_vars])
     hi_hpc = HIE(ahpc, sd[target_vars])
@@ -584,15 +606,16 @@ for esn in data["ESN"].unique():
   else:
     ahpt = chpt
     ahpc = chpc
+  hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
 
-  hi_hpt, hi_hpc = calc_hi(sd)
-
-  fig, axs = plt.subplots(1, 2, figsize=(30, 6))
+  fig, axs = plt.subplots(1, 3, figsize=(30, 6))
   fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
   axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
   # ax = axs[0].twinx()
   # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
+
+  axs[2].plot(sd["Sensed_T45"])
   # ax = axs[1].twinx()
   # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   # axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
@@ -636,35 +659,58 @@ def remove_effect(df, col):
     df["Sensed_T45"] = df["Sensed_T45"] - df[col].map(offset_map)
     return df
 
-wwdf = test_data.copy()
-print(wwdf.columns)
-wwdf[DEGRAD_VARS] = res_test[DEGRAD_VARS]
-wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
-wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+def slope_plot(data, res_data):
+    plt.figure(figsize=(14, 7))
+    unique_esns = data["ESN"].unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_esns)))
 
-# reg = LinearRegression().fit(wwdf["Cycles_Since_New"], wwdf["Sensed_T45"])
-# slope = reg.coef_[0][0]
-wwdf = test_data.copy()
-# Sovrascriviamo le variabili con i residui puliti
-wwdf[DEGRAD_VARS] = res_test[DEGRAD_VARS]
+    for i, esn in enumerate(unique_esns):
+        mask = data["ESN"] == esn
+        wwdf = data.loc[mask].copy()
+        wwdf[DEGRAD_VARS] = res_data.loc[mask, DEGRAD_VARS]
+        wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
+        wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+        X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
+        Y = wwdf["Sensed_T45"].values
 
-# Rimuoviamo gli effetti a gradino (Stitching)
-wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
-wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+        reg = LinearRegression().fit(X, Y)
+        slope = reg.coef_[0]
+        y_pred = reg.predict(X)
 
-# Reshape necessario per scikit-learn: (n_righe, 1 colonna)
-X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
-Y = wwdf["Sensed_T45"].values # Target
+        plt.plot(wwdf["Cycles_Since_New"], Y, 
+                 label=f"ESN {esn} (Data)", 
+                 color=colors[i], 
+                 linewidth=0.3, 
+                 alpha=0.6)
+        
+        plt.plot(wwdf["Cycles_Since_New"], y_pred, 
+                 label=f"ESN {esn} Slope: {slope:.5f}", 
+                 color=colors[i], 
+                 linewidth=2.5, 
+                 linestyle='--')
+                 
+        jumps = wwdf[wwdf["Cycles_to_WW"].diff() > 0]
+        if not jumps.empty:
+            first_jump = True 
+            for x_val in jumps["Cycles_Since_New"]:
+                label = f"Jump ESN {esn}" if first_jump else None
+                plt.axvline(x=x_val,           # Coordinata X del salto
+                            color=colors[i],   # Stesso colore del motore
+                            linestyle='--',    # Tratteggiata
+                            linewidth=1.5,     # Spessore
+                            alpha=0.6,         # Un po' trasparente per non coprire i dati
+                            label=label)       # Legenda (solo al primo giro)
+                
+                first_jump = False
+    plt.title("Slope Analysis: Sensed_T45 vs Cycles")
+    plt.xlabel("Cycles Since New")
+    plt.ylabel("Sensed_T45 (Residuals)")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left') # Legenda fuori dal grafico per pulizia
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
-reg = LinearRegression().fit(X, Y)
+slope_plot(test_data, res_test)
+slope_plot(train_data_testing, res_all_train)
 
-# coef_ è un array, prendiamo il primo elemento
-slope = reg.coef_[0]
-
-print(f"Slope: {slope}")
-
-# Plot rapido per verifica
-plt.plot(wwdf["Cycles_Since_New"], wwdf["Sensed_T45"], label="Data")
-plt.plot(wwdf["Cycles_Since_New"], reg.predict(X), color='red', label=f"Slope: {slope:.5f}")
-plt.legend()
-plt.show()
+# %%
