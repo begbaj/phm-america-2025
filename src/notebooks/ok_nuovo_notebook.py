@@ -372,14 +372,15 @@ def residuals(dfo):
     mask = df["ESN"] == esn
     X_train = df.loc[mask, OPERATING_VARS]
     Y_train = df.loc[mask, DEGRAD_VARS]
-
+    print(X_train.shape)
+    print(Y_train.shape)
     if SEPARATE_MODELS:
       Y_pred = residual_regressor(X_train, esn)
     else:
       Y_pred = residual_regressor(X_train)
     if Y_pred is None:
       return
-
+    print(Y_pred.shape)
     twe = np.mean(TWE(Y_pred, Y_train))
     res_temp = Y_train - Y_pred
     res_temp = pp.remove_outliers(res_temp, threshold=3)
@@ -413,7 +414,7 @@ res_dfv = residuals(dfv)
 
 GROUP_CYCLES = True
 REMOVE_OUTLIERS = True
-OUTLIERS_THRESHOLD = 1.7
+OUTLIERS_THRESHOLD = 3
 
 def plot(data, window, min):
     fig, axs = plt.subplots(2, 3, figsize=(15,8))
@@ -425,14 +426,14 @@ def plot(data, window, min):
         if GROUP_CYCLES:
             res_temp = res_temp.groupby("Cycles").mean()
         if REMOVE_OUTLIERS:
-            res_temp = pp.remove_outliers(res_temp, threshold=OUTLIERS_THRESHOLD)
+            res_temp = pp.remove_outliers(res_temp, threshold=OUTLIERS_THRESHOLD, method="iqr")
             res_temp = res_temp.ffill()
             res_temp = res_temp.bfill()
         for i, ax in enumerate(axs):
             if i < len(DEGRAD_VARS):
                 d_var = DEGRAD_VARS[i]
                 t = res_temp[d_var]
-                degrad = t.rolling(window=window, min_periods=min).mean()
+                degrad = t.rolling(window=window, min_periods=min).mean().dropna()
                 ax.plot(degrad.index, degrad.values, linewidth=1.5, alpha=0.7, label=str(esn))
                 ax.set_title(d_var)
                 ax.grid(True, alpha=0.3)
@@ -443,7 +444,7 @@ def plot(data, window, min):
     plt.show()
 
 plot(res_train, 1, 1)
-plot(res_all_train, 1, 1)
+plot(res_all_train, 10, 1)
 plot(res_test, 3, 1)
 # plot(residuals(dfv), 10, 1)
 # plot(residuals(dft), 10, 1)
@@ -455,11 +456,13 @@ plot(res_test, 3, 1)
 
 # %%
 USE_ALL_VARS = False
-MAXITER = 100
+MAXITER = 5000
 POPSIZE = 500
-TOL = 0.001
+TOL = 0.00001
+
 USE_ONLY_TRAIN = False # usare solo i motori indicati come train? oppure anche il testing_esn?
 USE_CLEAN_DATA = True  # dati preprocessati
+
 OUTLIERS_THRESHOLD = 3
 SEPARATE_COEFS = True
 
@@ -560,26 +563,6 @@ print(f"HPC: {chpc}")
 
 
 # %%
-# PARAMETRI DI TEST SOLO PER HPT E HPC
-
-# coefs_hpt = [276.19439386,
-#              -343.90020315,
-#              781.45341037,
-#              -593.41135514,
-#              -190.36846837,
-#              118.5466599]
-
-# coefs_hpc = [354.11354513,
-#              295.34981181,
-#              -386.49672567,
-#              790.99844931,
-#              -679.69393928,
-#              487.61887153]
-
-# %store coefs_hpt
-# %store coefs_hpc
-
-# %%
 # PLOTTING SU DATI DI TRAINING
 hpt_limits, hpc_limits, ww_limits = [], [], []
 
@@ -594,7 +577,11 @@ def calc_hi(sd, ahpt, ahpc):
 
 #alias per cambiare facilmente dataset
 data = coef_data.copy()
-for esn in data["ESN"].unique():
+esns = data["ESN"].unique()
+fig, axs = plt.subplots(len(esns), 2, figsize=(30, len(esns)*6))
+axs = axs.flatten()
+i = 0
+for esn in esns:
   sd = data[data["ESN"] == esn].copy()
 
   if SEPARATE_COEFS:
@@ -606,18 +593,19 @@ for esn in data["ESN"].unique():
   else:
     ahpt = chpt
     ahpc = chpc
+
   hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
 
-  fig, axs = plt.subplots(1, 3, figsize=(30, 6))
-  fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
-  axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-  # ax = axs[0].twinx()
-  # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-  axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-
-  axs[2].plot(sd["Sensed_T45"])
-  # ax = axs[1].twinx()
-  # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+  axs[i].set_title(f'{"Training" if esn != test_data["ESN"].unique()[0] else "TEST" }: ESN - {esn}', fontsize=16)
+  axs[i].plot(hi_hpt.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
+  ax = axs[i].twinx()
+  ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+  i += 1
+  axs[i].set_title(f'{"Training" if esn != test_data["ESN"].unique()[0] else "TEST" }: ESN - {esn}', fontsize=16)
+  axs[i].plot(hi_hpc.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
+  ax = axs[i].twinx()
+  ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+  i += 1
   # axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
   # axs[2].plot(ww_rul_esn["Cycles_to_WW"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   fig.tight_layout()
@@ -631,9 +619,6 @@ for esn in data["ESN"].unique():
 # per il ww bisogna fare una cosa diversa. Intanto bisogna "normalizzare" la salita, ovvero eliminare gli effetti delle manutenzioni hpc e hpt sui residui di T45_res
 
 # %%
-from tkinter import W
-
-
 # def remove_effect(df):
 #     heads = df.groupby("Cumulative_HPT_SVs", as_index=False).head(1)
 #     tails = df.groupby("Cumulative_HPT_SVs", as_index=False).tail(1)
@@ -647,8 +632,8 @@ from tkinter import W
 #         difference = df.iloc[c, "Sensed_T45"]
 
 
-def remove_effect(df, col):
-    df = df.sort_values([col, "Cycles_Since_New", "Snapshot"])
+def remove_effect(df, col, cycles_col="Cycles_Since_New"):
+    df = df.sort_values([col, cycles_col, "Snapshot"])
     grp_stats = df.groupby(col)["Sensed_T45"].agg(['first', 'last'])
     grp_stats = grp_stats.sort_index()
     grp_stats['prev_last'] = grp_stats['last'].shift(1)
@@ -659,58 +644,155 @@ def remove_effect(df, col):
     df["Sensed_T45"] = df["Sensed_T45"] - df[col].map(offset_map)
     return df
 
-def slope_plot(data, res_data):
-    plt.figure(figsize=(14, 7))
+def remove_effect_predict(df, res_col, cycles_col="Cycles_Since_New", threshold=3.0):
+    df = df.sort_values([cycles_col, "Snapshot"]).copy()
+    df["res"] = res_col
+    diffs = df["res"].diff().fillna(0)
+    df["jumps"] = (diffs.abs() > threshold).cumsum()
+    df = remove_effect(df, "jumps", cycles_col=cycles_col)
+    return df
+
+def comedicoio(df, col, cycles_col="Cycles_Since_New"):
+    df = df.sort_values([cycles_col, "Snapshot"]).copy()
+    try:
+        is_new_regime = df[col].diff() > 0
+        t45_diff = df["Sensed_T45"] - df["Sensed_T45"].shift(1)
+        step_jumps = t45_diff.where(is_new_regime, 0.0)
+        gdiff = step_jumps.cumsum()
+        df["Sensed_T45"] = df["Sensed_T45"] - gdiff
+        return df
+    except:
+        hi_hpt, hi_hpc = calc_hi(df, ahpt, ahpc)
+        df = remove_effect_predict(df, hi_hpt, cycles_col=cycles_col)
+        df = remove_effect_predict(df, hi_hpc, cycles_col=cycles_col)
+        return df
+
+def plot_t45_no_effect(data, res_data, win=1, mp=1, cycles_col="Cycles_Since_New"):
+    plt.figure(figsize=(10, 7))
     unique_esns = data["ESN"].unique()
     colors = plt.cm.tab10(np.linspace(0, 1, len(unique_esns)))
-
+    dfs = []
     for i, esn in enumerate(unique_esns):
         mask = data["ESN"] == esn
         wwdf = data.loc[mask].copy()
         wwdf[DEGRAD_VARS] = res_data.loc[mask, DEGRAD_VARS]
-        wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
-        wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
-        X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
+        hi_hpt, hi_hpc = calc_hi(wwdf, ahpt, ahpc)
+        wwdf = comedicoio(wwdf, "Cumulative_HPT_SVs", cycles_col=cycles_col)
+        wwdf = comedicoio(wwdf, "Cumulative_HPC_SVs", cycles_col=cycles_col)
+        # wwdf = remove_effect_predict(wwdf, hi_hpt)
+        # wwdf = remove_effect_predict(wwdf, hi_hpc)
+        dfs.append(wwdf)
+        if win > 1:
+            wwdf = wwdf.rolling(window=win, min_periods=mp).mean().dropna()
+        X = wwdf[cycles_col].values.reshape(-1, 1)
         Y = wwdf["Sensed_T45"].values
-
         reg = LinearRegression().fit(X, Y)
         slope = reg.coef_[0]
         y_pred = reg.predict(X)
 
-        plt.plot(wwdf["Cycles_Since_New"], Y, 
+        plt.plot(wwdf[cycles_col], Y, 
                  label=f"ESN {esn} (Data)", 
                  color=colors[i], 
                  linewidth=0.3, 
                  alpha=0.6)
         
-        plt.plot(wwdf["Cycles_Since_New"], y_pred, 
+        plt.plot(wwdf[cycles_col], y_pred, 
                  label=f"ESN {esn} Slope: {slope:.5f}", 
                  color=colors[i], 
                  linewidth=2.5, 
                  linestyle='--')
-                 
-        jumps = wwdf[wwdf["Cycles_to_WW"].diff() > 0]
-        if not jumps.empty:
-            first_jump = True 
-            for x_val in jumps["Cycles_Since_New"]:
-                label = f"Jump ESN {esn}" if first_jump else None
-                plt.axvline(x=x_val,           # Coordinata X del salto
-                            color=colors[i],   # Stesso colore del motore
-                            linestyle='--',    # Tratteggiata
-                            linewidth=1.5,     # Spessore
-                            alpha=0.6,         # Un po' trasparente per non coprire i dati
-                            label=label)       # Legenda (solo al primo giro)
-                
-                first_jump = False
+        try: 
+            jumps = wwdf[wwdf["Cycles_to_WW"].diff() > 0]
+            if not jumps.empty:
+                first_jump = True 
+                for x_val in jumps["Cycles_Since_New"]:
+                    label = f"Jump ESN {esn}" if first_jump else None
+                    plt.axvline(x=x_val, color=colors[i], linestyle='--', 
+                                linewidth=1.5, alpha=0.6, label=label) 
+                    first_jump = False
+        except KeyError:
+            print("No WW data")
+
+    if len(unique_esns) > 1:
+        all_processed_data = pd.concat(dfs)
+        X_all = all_processed_data[cycles_col].values.reshape(-1, 1)
+        Y_all = all_processed_data["Sensed_T45"].values
+        reg_all = LinearRegression().fit(X_all, Y_all)
+        slope_all = reg_all.coef_[0]
+        x_range = np.array([X_all.min(), X_all.max()]).reshape(-1, 1)
+        y_pred_all = reg_all.predict(x_range)
+        plt.plot(x_range, y_pred_all,
+                 label=f"Overall mean slope: {slope_all:.5f}", 
+                 color='purple', 
+                 linewidth=2, 
+                 linestyle='-')
+
     plt.title("Slope Analysis: Sensed_T45 vs Cycles")
     plt.xlabel("Cycles Since New")
     plt.ylabel("Sensed_T45 (Residuals)")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left') # Legenda fuori dal grafico per pulizia
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
 
-slope_plot(test_data, res_test)
-slope_plot(train_data_testing, res_all_train)
+plot_t45_no_effect(test_data, res_test, 1,1)
+plot_t45_no_effect(train_data_testing, res_all_train, 1, 1)
 
 # %%
+# VALIDATION
+for i in range(0, 48):
+    dfv = u.load_validation(i)
+    res_val = residuals(dfv.copy())
+
+    X_train = res_val.groupby(["ESN", "Cycles"], as_index=False).median()
+    X_train = pp.remove_outliers(X_train, threshold=OUTLIERS_THRESHOLD)
+    X_train = X_train.ffill()
+    X_train = X_train.bfill().dropna()
+
+    ahpt = np.mean(list(chpt.values()))
+    ahpc = np.mean(list(chpc.values()))
+
+    data = X_train.copy()
+    for esn in data["ESN"].unique():
+        sd = data[data["ESN"] == esn].copy()
+
+        hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
+
+        fig, axs = plt.subplots(1, 2, figsize=(30, 6))
+        fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
+        axs[0].plot(hi_hpt.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
+        # ax = axs[0].twinx()
+        # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+        axs[1].plot(hi_hpc.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
+        # ax = axs[1].twinx()
+        # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+        # axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
+        # axs[2].plot(ww_rul_esn["Cycles_to_WW"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+        fig.tight_layout()
+        fig.show()
+    plot_t45_no_effect(dfv, res_val, cycles_col="Cycles")
+
+# %%
+# VALIDATION insomma testing cioè quello che si chiama validation ma è testing
+for i in range(0, 52):
+    dft = u.load_testing(i)
+    res_val = residuals(dft.copy())
+
+    X_train = res_val.groupby(["ESN", "Cycles"], as_index=False).median()
+    X_train = pp.remove_outliers(X_train, threshold=OUTLIERS_THRESHOLD)
+    X_train = X_train.ffill()
+    X_train = X_train.bfill().dropna()
+
+    ahpt = np.mean(list(chpt.values()))
+    ahpc = np.mean(list(chpc.values()))
+
+    data = X_train.copy()
+    for esn in data["ESN"].unique():
+        sd = data[data["ESN"] == esn].copy()
+        hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
+        fig, axs = plt.subplots(1, 2, figsize=(30, 6))
+        fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
+        axs[0].plot(hi_hpt.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
+        axs[1].plot(hi_hpc.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
+        fig.tight_layout()
+        fig.show()

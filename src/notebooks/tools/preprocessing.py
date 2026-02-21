@@ -188,8 +188,7 @@ def remove_outliers(df: pd.DataFrame, sensor_cols=None, threshold=3, method='zsc
             series_nonan = df_out[sensor].dropna()
             if series_nonan.empty: continue
             data = series_nonan.values.reshape(-1, 1)
-            # Contamination 'auto' o basata sulla soglia se interpretata come percentuale
-            iso = IsolationForest(contamination='auto', random_state=42)
+            iso = IsolationForest(contamination='auto')
             preds = iso.fit_predict(data)
             # preds == -1 sono gli outliers
             outlier_indices = series_nonan.index[preds == -1]
