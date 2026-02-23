@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.18.1
 #   kernelspec:
-#     display_name: phm-america-2025 (3.10.19)
+#     display_name: phm-america-2025 (3.11.9)
 #     language: python
 #     name: python3
 # ---
@@ -381,10 +381,10 @@ def residuals(dfo):
     if Y_pred is None:
       return
     print(Y_pred.shape)
+    print(f'Nulli: {np.isnan(Y_pred).sum()}')
     twe = np.mean(TWE(Y_pred, Y_train))
     res_temp = Y_train - Y_pred
     res_temp = pp.remove_outliers(res_temp, threshold=3)
-    # res_temp.rolling(window=5,min_periods=1).median()
     res_temp = res_temp.ffill()
     res_temp = res_temp.bfill()
     res_temp["ESN"] = esn
@@ -452,12 +452,12 @@ plot(res_test, 3, 1)
 
 # %% [markdown]
 # # HPT e HPC
-# ## Ricerca di a,b,c,d,e,f,g globali combinazione lineare di tutti i sensori
+# ## Ricerca di a globale per la combinazione lineare di T3 e T45
 
 # %%
 USE_ALL_VARS = False
-MAXITER = 5000
-POPSIZE = 500
+MAXITER = 500
+POPSIZE = 100
 TOL = 0.00001
 
 USE_ONLY_TRAIN = False # usare solo i motori indicati come train? oppure anche il testing_esn?
@@ -513,58 +513,69 @@ if USE_CLEAN_DATA:
 coef_data = X_train.copy()
 # %store coef_data
 
-chpt = {}
-chpc = {}
+# chpt = {}
+# chpc = {}
 
-for esn in X_train["ESN"].unique():
-  print(esn)
-  tv = X_train.loc[X_train["ESN"] == esn, target_vars]
-  rul = X_train.loc[X_train["ESN"] == esn, "Cycles_to_HPT_SV"]
-  result_hpt = differential_evolution(
-      target,
-      bounds=bounds,
-      args=(tv, rul),
-      strategy='best1bin',
-      maxiter=MAXITER,                # generazioni
-      popsize=POPSIZE,
-      workers=-1,
-      tol=TOL,                      # Tolleranza
-  )
+# for esn in X_train["ESN"].unique():
+#   print(esn)
+#   tv = X_train.loc[X_train["ESN"] == esn, target_vars]
+#   rul = X_train.loc[X_train["ESN"] == esn, "Cycles_to_HPT_SV"]
+#   result_hpt = differential_evolution(
+#       target,
+#       bounds=bounds,
+#       args=(tv, rul),
+#       strategy='best1bin',
+#       maxiter=MAXITER,                # generazioni
+#       popsize=POPSIZE,
+#       workers=-1,
+#       tol=TOL,                      # Tolleranza
+#   )
 
-  chpt[str(esn)] = result_hpt.x
+#   chpt[str(esn)] = result_hpt.x
 
-  rul = X_train.loc[X_train["ESN"] == esn, "Cycles_to_HPC_SV"]
-  result_hpc = differential_evolution(
-      target,
-      bounds=bounds,
-      args=(tv, rul),
-      strategy='best1bin',
-      maxiter=MAXITER,                # generazioni
-      popsize=POPSIZE,
-      workers=-1,
-      tol=TOL,                      # Tolleranza
-  )
-  chpc[str(esn)] = result_hpc.x
+#   rul = X_train.loc[X_train["ESN"] == esn, "Cycles_to_HPC_SV"]
+#   result_hpc = differential_evolution(
+#       target,
+#       bounds=bounds,
+#       args=(tv, rul),
+#       strategy='best1bin',
+#       maxiter=MAXITER,                # generazioni
+#       popsize=POPSIZE,
+#       workers=-1,
+#       tol=TOL,                      # Tolleranza
+#   )
+#   chpc[str(esn)] = result_hpc.x
 
-if not SEPARATE_COEFS:
-    chpt = np.median(np.array(chpt.values()))
-    chpc = np.median(np.array(chpc.values()))
-
-
+# if not SEPARATE_COEFS:
+#     chpt = np.median(np.array(chpt.values()))
+#     chpc = np.median(np.array(chpc.values()))
 
 
-print("\nCOEFFICIENTI MEDI FINALI (Training Set):")
-print(f"HPT: {chpt}")
-print(f"HPC: {chpc}")
 
 
-# %store coefs_hpt
-# %store coefs_hpc
+# print("\nCOEFFICIENTI MEDI FINALI (Training Set):")
+# print(f"HPT: {chpt}")
+# print(f"HPC: {chpc}")
 
+
+# # %store coefs_hpt
+# # %store coefs_hpc
+
+
+# %%
+chpt = {'101': -2.21999815, '102': -2.21689538, '103': -1.86943406, '104': -2.43053548}
+chpc = {'101': 4.23411867, '102': 3.39890229, '103': 4.70926506, '104': 3.85075143}
 
 # %%
 # PLOTTING SU DATI DI TRAINING
 hpt_limits, hpc_limits, ww_limits = [], [], []
+MEAN_WINDOW_HPT = 45
+MEAN_WINDOW_HPC = 100
+
+scaling_coefs_hpt = {}
+scaling_coefs_hpc = {}
+scaling_coefs_hpt_final = {}
+scaling_coefs_hpc_final = {}
 
 def calc_hi(sd, ahpt, ahpc):
   if USE_ALL_VARS:
@@ -574,6 +585,22 @@ def calc_hi(sd, ahpt, ahpc):
     hi_hpt = HI(sd["Sensed_T3"], sd["Sensed_T45"], ahpt)
     hi_hpc = HI(sd["Sensed_T3"], sd["Sensed_T45"], ahpc)
   return hi_hpt, hi_hpc
+
+# Funzione per portare l'health index nella scala della rul
+# In fase di testing bisogna usare una funzione differente, se no diventa troppo complicato. La scrivo nella cella sotto.
+def scale_to_target(source, target, coefs):
+    s_min, s_max = source.min(), source.max()
+    t_min, t_max = target.min(), target.max()
+    # Salvo i coefficienti per scalare in fase di test
+    # quando non ho il ground truth
+    if isinstance(coefs, dict):
+        if "min" not in coefs:
+            coefs["min"] = []
+        if "max" not in coefs:
+            coefs["max"] = []   
+        coefs["min"].append(t_min)
+        coefs["max"].append(t_max)
+    return (source - s_min) / (s_max - s_min) * (t_max - t_min) + t_min
 
 #alias per cambiare facilmente dataset
 data = coef_data.copy()
@@ -595,24 +622,44 @@ for esn in esns:
     ahpc = chpc
 
   hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
+  # Smoothing con la media per migliore interpretabilità
+  hi_hpt_smooth = pd.Series(hi_hpt).rolling(window=MEAN_WINDOW_HPT, min_periods=1).mean()
+  hi_hpc_smooth = pd.Series(hi_hpc).rolling(window=MEAN_WINDOW_HPC, min_periods=1).mean()
+
+  # Porto l'hi alla stessa scala della RUL 
+  hi_hpt_final = scale_to_target(hi_hpt_smooth, sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], scaling_coefs_hpt)
+  hi_hpc_final = scale_to_target(hi_hpc_smooth, sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], scaling_coefs_hpc)
 
   axs[i].set_title(f'{"Training" if esn != test_data["ESN"].unique()[0] else "TEST" }: ESN - {esn}', fontsize=16)
-  axs[i].plot(hi_hpt.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
-  ax = axs[i].twinx()
-  ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+  axs[i].plot(hi_hpt_final, color='tab:blue', label='Health Index (HPT)')
+  axs[i].plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   i += 1
   axs[i].set_title(f'{"Training" if esn != test_data["ESN"].unique()[0] else "TEST" }: ESN - {esn}', fontsize=16)
-  axs[i].plot(hi_hpc.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
-  ax = axs[i].twinx()
-  ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+  axs[i].plot(hi_hpc_final, color='tab:green', label='Health Index (HPC)')
+  axs[i].plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   i += 1
-  # axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
-  # axs[2].plot(ww_rul_esn["Cycles_to_WW"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
   fig.tight_layout()
   fig.show()
 
-# %% [markdown]
-# ### Classificazione dell'errore con LightGBM per HPC, HPT e WW
+scaling_coefs_hpt_final["min"] = np.median(scaling_coefs_hpt["min"])
+scaling_coefs_hpt_final["max"] = np.median(scaling_coefs_hpt["max"])
+scaling_coefs_hpc_final["min"] = np.median(scaling_coefs_hpc["min"])
+scaling_coefs_hpc_final["max"] = np.median(scaling_coefs_hpc["max"])
+print(scaling_coefs_hpt_final)
+print(scaling_coefs_hpc_final)
+
+
+# %%
+# Funzione per portare l'health index nella scala della rul
+def scale_to_target_test(source, coefs):
+    s_min, s_max = source.min(), source.max()
+    return (source - s_min) / (s_max - s_min) * (coefs["max"] - coefs["min"]) + coefs["min"]
+
+
+# I COEFFICIENTI DA UTILIZZARE SONO:
+# scaling_coefs_hpt_final
+# scaling_coefs_hpc_final
+
 
 # %% [markdown]
 # # WW
