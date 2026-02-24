@@ -622,13 +622,14 @@ for esn in esns:
     ahpc = chpc
 
   hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
-  # Smoothing con la media per migliore interpretabilità
-  hi_hpt_smooth = pd.Series(hi_hpt).rolling(window=MEAN_WINDOW_HPT, min_periods=1).mean()
-  hi_hpc_smooth = pd.Series(hi_hpc).rolling(window=MEAN_WINDOW_HPC, min_periods=1).mean()
 
   # Porto l'hi alla stessa scala della RUL 
-  hi_hpt_final = scale_to_target(hi_hpt_smooth, sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], scaling_coefs_hpt)
-  hi_hpc_final = scale_to_target(hi_hpc_smooth, sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], scaling_coefs_hpc)
+  hi_hpt_scaled = scale_to_target(hi_hpt, sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], scaling_coefs_hpt)
+  hi_hpc_scaled = scale_to_target(hi_hpc, sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], scaling_coefs_hpc)
+  
+  # Smoothing con la media per migliore interpretabilità
+  hi_hpt_final = pd.Series(hi_hpt_scaled).rolling(window=MEAN_WINDOW_HPT, min_periods=1).mean()
+  hi_hpc_final = pd.Series(hi_hpc_scaled).rolling(window=MEAN_WINDOW_HPC, min_periods=1).mean()
 
   axs[i].set_title(f'{"Training" if esn != test_data["ESN"].unique()[0] else "TEST" }: ESN - {esn}', fontsize=16)
   axs[i].plot(hi_hpt_final, color='tab:blue', label='Health Index (HPT)')
