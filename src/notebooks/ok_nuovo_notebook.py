@@ -648,19 +648,8 @@ scaling_coefs_hpc_final["min"] = np.median(scaling_coefs_hpc["min"])
 scaling_coefs_hpc_final["max"] = np.median(scaling_coefs_hpc["max"])
 print(scaling_coefs_hpt_final)
 print(scaling_coefs_hpc_final)
-
-
-# %%
-# Funzione per portare l'health index nella scala della rul
-def scale_to_target_test(source, coefs):
-    s_min, s_max = source.min(), source.max()
-    return (source - s_min) / (s_max - s_min) * (coefs["max"] - coefs["min"]) + coefs["min"]
-
-
-# I COEFFICIENTI DA UTILIZZARE SONO:
-# scaling_coefs_hpt_final
-# scaling_coefs_hpc_final
-
+# %store scaling_coefs_hpt_final
+# %store scaling_coefs_hpc_final
 
 # %% [markdown]
 # # WW
@@ -787,7 +776,171 @@ plot_t45_no_effect(test_data, res_test, 1,1)
 plot_t45_no_effect(train_data_testing, res_all_train, 1, 1)
 
 # %%
+# PROVA
+
+LIMIT_DELTA = 21
+delta_slope = []
+
+def remove_effect(df, col, cycles_col="Cycles_Since_New"):
+    df = df.sort_values([col, cycles_col, "Snapshot"])
+    grp_stats = df.groupby(col)["Sensed_T45"].agg(['first', 'last'])
+    grp_stats = grp_stats.sort_index()
+    grp_stats['prev_last'] = grp_stats['last'].shift(1)
+    grp_stats['jump'] = grp_stats['first'] - grp_stats['prev_last']
+    grp_stats['jump'] = grp_stats['jump'].fillna(0)
+    grp_stats['cumulative_offset'] = grp_stats['jump'].cumsum()
+    offset_map = grp_stats['cumulative_offset'].to_dict()
+    df["Sensed_T45"] = df["Sensed_T45"] - df[col].map(offset_map)
+    return df
+
+def remove_effect_predict(df, res_col, cycles_col="Cycles_Since_New", threshold=3.0):
+    df = df.sort_values([cycles_col, "Snapshot"]).copy()
+    df["res"] = res_col
+    diffs = df["res"].diff().fillna(0)
+    df["jumps"] = (diffs.abs() > threshold).cumsum()
+    df = remove_effect(df, "jumps", cycles_col=cycles_col)
+    return df
+
+def comedicoio(df, col, cycles_col="Cycles_Since_New"):
+    df = df.sort_values([cycles_col, "Snapshot"]).copy()
+    try:
+        is_new_regime = df[col].diff() > 0
+        t45_diff = df["Sensed_T45"] - df["Sensed_T45"].shift(1)
+        step_jumps = t45_diff.where(is_new_regime, 0.0)
+        gdiff = step_jumps.cumsum()
+        df["Sensed_T45"] = df["Sensed_T45"] - gdiff
+        return df
+    except:
+        hi_hpt, hi_hpc = calc_hi(df, ahpt, ahpc)
+        df = remove_effect_predict(df, hi_hpt, cycles_col=cycles_col)
+        df = remove_effect_predict(df, hi_hpc, cycles_col=cycles_col)
+        return df
+
+def plot_t45_no_effect(data, res_data, win=1, mp=1, cycles_col="Cycles_Since_New", limit_delta=None):
+    plt.figure(figsize=(10, 7))
+    unique_esns = data["ESN"].unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_esns)))
+    dfs = []
+    for i, esn in enumerate(unique_esns):
+        mask = data["ESN"] == esn
+        wwdf = data.loc[mask].copy()
+        wwdf[DEGRAD_VARS] = res_data.loc[mask, DEGRAD_VARS]
+        hi_hpt, hi_hpc = calc_hi(wwdf, ahpt, ahpc)
+        wwdf = comedicoio(wwdf, "Cumulative_HPT_SVs", cycles_col=cycles_col)
+        wwdf = comedicoio(wwdf, "Cumulative_HPC_SVs", cycles_col=cycles_col)
+        # wwdf = remove_effect_predict(wwdf, hi_hpt)
+        # wwdf = remove_effect_predict(wwdf, hi_hpc)
+        dfs.append(wwdf)
+        if win > 1:
+            wwdf = wwdf.rolling(window=win, min_periods=mp).mean().dropna()
+        X = wwdf[cycles_col].values.reshape(-1, 1)
+        Y = wwdf["Sensed_T45"].values
+        reg = LinearRegression().fit(X, Y)
+        slope = reg.coef_[0]
+        intercept = reg.intercept_
+        y_pred = reg.predict(X)
+
+        try:
+            # Cicli in cui avvengono i WW
+            ww_points = wwdf["Cycles_to_WW"].diff() > 0
+            ww_events = wwdf.loc[ww_points, cycles_col].values
+            # Si aggiungono l'inizio e la fine della serie per coprire tutti gli intervalli
+            boundary_cycles = np.sort(np.concatenate(([wwdf[cycles_col].min()], 
+                                                      ww_events, 
+                                                      [wwdf[cycles_col].max()])))
+            # Si calcola il valore della regressione (y_pred) in questi punti
+            y_boundaries = reg.predict(boundary_cycles.reshape(-1, 1))
+            # La differenza tra i valori y_pred consecutivi è l'aumento dello slope
+            deltas = np.diff(y_boundaries)
+            delta_slope.extend(deltas.tolist())
+        except KeyError:
+            pass
+
+        if limit_delta is not None and slope > 0:
+            y_min, y_max = y_pred.min(), y_pred.max()
+            # Calcoliamo i multipli di limit_delta compresi nel range della y predetta
+            first_threshold = (y_min // limit_delta + 1) * limit_delta
+            thresholds = np.arange(first_threshold, y_max, limit_delta)
+            for t in thresholds:
+                # Calcolo del ciclo x corrispondente alla soglia t: x = (y - q) / m
+                x_threshold = (t - intercept) / slope
+                plt.axvline(x=x_threshold, color='red', linestyle=':', 
+                            linewidth=1, alpha=0.8, 
+                            label=f'Limit {limit_delta}' if t == thresholds[0] else "")
+
+        plt.plot(wwdf[cycles_col], Y, 
+                 label=f"ESN {esn} (Data)", 
+                 color=colors[i], 
+                 linewidth=0.3, 
+                 alpha=0.6)
+        
+        plt.plot(wwdf[cycles_col], y_pred, 
+                 label=f"ESN {esn} Slope: {slope:.5f}", 
+                 color=colors[i], 
+                 linewidth=2.5, 
+                 linestyle='--')
+        try: 
+            jumps = wwdf[wwdf["Cycles_to_WW"].diff() > 0]
+            if not jumps.empty:
+                first_jump = True 
+                for x_val in jumps["Cycles_Since_New"]:
+                    label = f"Jump ESN {esn}" if first_jump else None
+                    plt.axvline(x=x_val, color=colors[i], linestyle='--', 
+                                linewidth=1.5, alpha=0.6, label=label) 
+                    first_jump = False
+        except KeyError:
+            print("No WW data")
+
+    if len(unique_esns) > 1:
+        all_processed_data = pd.concat(dfs)
+        X_all = all_processed_data[cycles_col].values.reshape(-1, 1)
+        Y_all = all_processed_data["Sensed_T45"].values
+        reg_all = LinearRegression().fit(X_all, Y_all)
+        slope_all = reg_all.coef_[0]
+        x_range = np.array([X_all.min(), X_all.max()]).reshape(-1, 1)
+        y_pred_all = reg_all.predict(x_range)
+        plt.plot(x_range, y_pred_all,
+                 label=f"Overall mean slope: {slope_all:.5f}", 
+                 color='purple', 
+                 linewidth=2, 
+                 linestyle='-')
+
+    plt.title("Slope Analysis: Sensed_T45 vs Cycles")
+    plt.xlabel("Cycles Since New")
+    plt.ylabel("Sensed_T45 (Residuals)")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+plot_t45_no_effect(test_data, res_test, 1,1, limit_delta=LIMIT_DELTA)
+df_filtered = train_data_testing[train_data_testing['ESN'] == 104]
+res_filtered = res_all_train[train_data_testing['ESN'] == 104]
+plot_t45_no_effect(df_filtered, res_filtered, win=1, mp=1, limit_delta=LIMIT_DELTA)
+media_delta = np.mean(delta_slope)
+print(f"L'aumento medio della Y tra i lavaggi è: {media_delta:.4f}")
+
+
+# %% [markdown]
+# # Test
+
+# %%
+# Funzione per portare l'health index nella scala della rul nel testing
+def scale_to_target_test(source, coefs):
+    s_min, s_max = source.min(), source.max()
+    return (source - s_min) / (s_max - s_min) * (coefs["max"] - coefs["min"]) + coefs["min"]
+
+
+# I COEFFICIENTI DA UTILIZZARE SONO:
+# scaling_coefs_hpt_final
+# scaling_coefs_hpc_final
+
+# %%
 # VALIDATION
+
+MEAN_WINDOW_HPT = 45
+MEAN_WINDOW_HPC = 100
+
 for i in range(0, 48):
     dfv = u.load_validation(i)
     res_val = residuals(dfv.copy())
@@ -806,22 +959,29 @@ for i in range(0, 48):
 
         hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
 
+        # Porto l'hi alla stessa scala della RUL con gli i coefs presi dal training
+        hi_hpt_scaled = scale_to_target_test(hi_hpt, scaling_coefs_hpt_final)
+        hi_hpc_scaled = scale_to_target_test(hi_hpc, scaling_coefs_hpc_final)
+        
+        # Smoothing con la media per migliore interpretabilità
+        hi_hpt_final = pd.Series(hi_hpt_scaled).rolling(window=MEAN_WINDOW_HPT, min_periods=1).mean()
+        hi_hpc_final = pd.Series(hi_hpc_scaled).rolling(window=MEAN_WINDOW_HPC, min_periods=1).mean()
+
         fig, axs = plt.subplots(1, 2, figsize=(30, 6))
         fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
-        axs[0].plot(hi_hpt.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
-        # ax = axs[0].twinx()
-        # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPT_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-        axs[1].plot(hi_hpc.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
-        # ax = axs[1].twinx()
-        # ax.plot(sd.loc[sd["ESN"] == esn, "Cycles_to_HPC_SV"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-        # axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
-        # axs[2].plot(ww_rul_esn["Cycles_to_WW"], color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
+        axs[0].plot(hi_hpt_final.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
+        axs[1].plot(hi_hpc_final.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
         fig.tight_layout()
         fig.show()
+
     plot_t45_no_effect(dfv, res_val, cycles_col="Cycles")
 
 # %%
 # VALIDATION insomma testing cioè quello che si chiama validation ma è testing
+
+MEAN_WINDOW_HPT = 45
+MEAN_WINDOW_HPC = 100
+
 for i in range(0, 52):
     dft = u.load_testing(i)
     res_val = residuals(dft.copy())
@@ -838,9 +998,15 @@ for i in range(0, 52):
     for esn in data["ESN"].unique():
         sd = data[data["ESN"] == esn].copy()
         hi_hpt, hi_hpc = calc_hi(sd, ahpt, ahpc)
+        # Porto l'hi alla stessa scala della RUL con gli i coefs presi dal training
+        hi_hpt_scaled = scale_to_target_test(hi_hpt, scaling_coefs_hpt_final)
+        hi_hpc_scaled = scale_to_target_test(hi_hpc, scaling_coefs_hpc_final)
+        # Smoothing con la media per migliore interpretabilità
+        hi_hpt_final = pd.Series(hi_hpt_scaled).rolling(window=MEAN_WINDOW_HPT, min_periods=1).mean()
+        hi_hpc_final = pd.Series(hi_hpc_scaled).rolling(window=MEAN_WINDOW_HPC, min_periods=1).mean()
         fig, axs = plt.subplots(1, 2, figsize=(30, 6))
         fig.suptitle(f'Training: ESN - {esn}', fontsize=16)
-        axs[0].plot(hi_hpt.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
-        axs[1].plot(hi_hpc.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
+        axs[0].plot(hi_hpt_final.rolling(window=1,min_periods=1).mean(), color='tab:blue', label='Health Index (HPT)')
+        axs[1].plot(hi_hpc_final.rolling(window=1,min_periods=1).mean(), color='tab:green', label='Health Index (HPC)')
         fig.tight_layout()
         fig.show()
