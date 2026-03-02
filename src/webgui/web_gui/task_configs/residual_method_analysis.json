@@ -1,0 +1,77 @@
+{
+    "title": "Residual Analysis (Exact Logic)",
+    "description": "Analysis using Train/Test split and Residual Optimization.",
+    "groups": [
+        {
+            "title": "🧪 Test Configuration",
+            "params": [
+                {
+                    "id": "testing_esn",
+                    "label": "Testing ESN",
+                    "type": "select",
+                    "options": [101, 102, 103, 104],
+                    "default": 102
+                },
+                {
+                    "id": "target_rul",
+                    "label": "Target RUL (Folder)",
+                    "type": "select",
+                    "options": ["HPC", "HPT", "WW"],
+                    "default": "HPT"
+                }
+            ]
+        },
+        {
+            "title": "🧹 Pre-Processing",
+            "params": [
+                {
+                    "id": "remove_outliers",
+                    "label": "Remove Data Outliers",
+                    "type": "checkbox",
+                    "default": true
+                },
+                {
+                    "id": "fill_missing",
+                    "label": "Fill Missing Values",
+                    "type": "checkbox",
+                    "default": true
+                }
+            ]
+        },
+        {
+            "title": "📉 Residual Processing",
+            "params": [
+                {
+                    "id": "res_outlier_threshold",
+                    "label": "Residual Outlier Threshold",
+                    "type": "number",
+                    "default": 3.0
+                },
+                {
+                    "id": "rolling_window",
+                    "label": "Rolling Window Size",
+                    "type": "number",
+                    "default": 370
+                },
+                {
+                    "id": "rolling_step_div",
+                    "label": "Window Step Divisor",
+                    "type": "number",
+                    "default": 5,
+                    "description": "Step = Window // Divisor"
+                }
+            ]
+        },
+        {
+            "title": "⚙️ System",
+            "params": [
+                {
+                    "id": "debug_mode",
+                    "label": "Enable Debug Output",
+                    "type": "checkbox",
+                    "default": false
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,40 @@
+/* Custom Scrollbar for task content */
+.task-content::-webkit-scrollbar {
+    width: 8px;
+}
+.task-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+.task-content::-webkit-scrollbar-thumb {
+    background: #c7c7cc;
+    border-radius: 4px;
+}
+.task-content::-webkit-scrollbar-thumb:hover {
+    background: #a1a1aa;
+}
+
+/* Modal Zoom Transition */
+#modal-img {
+    transition: transform 0.2s ease-out;
+    cursor: grab;
+}
+#modal-img:active {
+    cursor: grabbing;
+}
+
+/* Loader Animation */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+.loader {
+    border-top-color: #6366f1; /* Indigo-500 */
+    -webkit-animation: spin 1s linear infinite;
+    animation: spin 1s linear infinite;
+}
+
+/* Custom Gradient Text */
+.text-gradient {
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
