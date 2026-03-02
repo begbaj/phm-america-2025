@@ -375,26 +375,36 @@ def df_sensors_subset(df: DataFrame) -> DataFrame:
     return df.loc[:, SENSORS].copy()
 
 
-def refactor_table(df: DataFrame, snap: int, span: int) -> DataFrame:
-    """
-    Funzione per il refactoring del dataset e per la moving average
+###
+# GLOBAL STATE
+###
+DEBUG_ENABLED = False
 
-    :param df: Dataset per il refactoring
-    :type df: DataFrame
-    :param snap: Numero di snapshot
-    :type snap: int
-    :param span: Ampiezza della finestra per la moving average
-    :type span: int
-    :return: Dataset modificato
-    :rtype: DataFrame
-    """
-    subset = df[df["Snapshot"] == snap]
-    final_table = subset.pivot(
-        index="Cycles_Since_New", columns="ESN", values=SENSORS)
-    final_table.columns = [f"{sensor}_{esn}" for sensor, esn in final_table.columns]
-    final_table = final_table.reset_index()
-    for column in final_table.columns:
-        final_table[column] = final_table[column].transform(
-            lambda x: x.ewm(span=span, adjust=False).mean()
-        )
-    return final_table
+def set_debug(enabled: bool):
+    global DEBUG_ENABLED
+    DEBUG_ENABLED = enabled
+
+def debug_print(*args, **kwargs):
+    if DEBUG_ENABLED:
+        print(*args, **kwargs)
+
+###
+# SCORING
+###
+
+def calculate_twe(y_true, y_pred, alpha=0.001, beta=1.0) -> np.ndarray:
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    diff = y_pred - y_true
+    denom = 1 + alpha * y_true
+    w = np.where(diff >= 0, 2.0 / denom, 1.0 / denom)
+    return w * (diff**2) * beta
+
+def target_score(all_y_true, all_y_pred, alpha=0.001, beta=1.0):
+    twe_sum  = calculate_twe(all_y_true, all_y_pred, alpha, beta)
+    return np.mean(twe_sum)
+
+def calculate_score(ww: tuple, hpt: tuple, hpc: tuple, alpha=0.001, beta=1.0):
+    ww_score = target_score(ww[0], ww[1], alpha, beta)
+    hpt_score = target_score(hpt[0], hpt[1], alpha, beta)
+    hpc_score = target_score(hpc[0], hpc[1], alpha, beta)
+    return np.mean([ww_score, hpt_score, hpc_score])

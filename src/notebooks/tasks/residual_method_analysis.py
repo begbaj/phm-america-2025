@@ -5,221 +5,298 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import argparse
 import traceback
-from tools import utils as u, config as cfg, plotting as up, features as f, preprocessing as pp, algorithms as algo
+from scipy.optimize import minimize
 from sklearn.linear_model import LinearRegression
-from tools.types.enums import SENSORS
+from tools import utils as u, config as cfg, plotting as up, features as f, preprocessing as pp, algorithms as algo
 
 # ==============================================================================
-# DESIGN PATTERN: STRATEGY & COMMAND ORCHESTRATOR
+# LOGIC IMPLEMENTATION
 # ==============================================================================
 
 class ResidualAnalysisPipeline:
-    """
-    Orchestrator for the Residual Analysis workflow.
-    Uses a Pipeline-like structure to separate concerns.
-    """
     def __init__(self, args):
         self.args = args
-        self.target_rul = args.target_rul
-        self.rul_column = self._get_rul_column(args.target_rul)
         self.output_folder = u.plot_path("residual_analysis", args.target_rul)
+        self.operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 
+                               'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
+        self.degradation_vars = [] # Populated dynamically
         
-        self.df = None          # Raw/Preprocessed data
-        self.df_residuals = None # Data with residuals
-        self.df_final = None     # Data with HI and predictions
+        self.df_train = None
+        self.df_test = None
+        self.X_train = None
+        self.Y_train = None
+        self.X_test = None
+        self.Y_test = None
         
-        # Mappings
-        self.operating_vars = ['Altitude', 'Mach', 'Pamb', 'TAT', 'VAFN', 'VBV', 'Fan_Speed', 'Pt2']
-        self.rename_vars_map = {
-            'WFuel': 'WFuel_res', 'Core_Speed': 'Core_Speed_res', 'T25': 'T25_res',
-            'T3': 'T3_res', 'Ps3': 'Ps3_res', 'T45': 'T45_res', 'P25': 'P25_res', 'T5': 'T5_res'
-        }
-
-    def _get_rul_column(self, target):
-        rul_map = {'HPC': 'Cycles_to_HPC_SV', 'HPT': 'Cycles_to_HPT_SV', 'WW': 'Cycles_to_WW'}
-        return rul_map.get(target, 'Cycles_to_HPT_SV')
+        self.model = None
+        self.Y_pred = None
+        self.residuals = None
+        
+        self.hi_hpt = None
+        self.hi_hpc = None
+        self.hpt_rul = None
+        self.hpc_rul = None
+        self.alpha_hpt = -2.75
+        self.alpha_hpc = 9.0
 
     def load_and_preprocess(self):
-        """Step 1: Load data and apply initial cleaning."""
-        print(f"Loading data for target RUL: {self.target_rul}...")
-        train = u.load_training()()
+        """Step 1: Load data, specific preprocessing and split."""
+        print("Loading and Preprocessing data...")
+        u.set_debug(self.args.debug_mode)
         
-        # Initial outlier removal and missing fill
-        sensor_cols = [c for c in train.columns if c.startswith("Sensed_")]
+        # Load Data
+        df = u.load_training()()
+        
+        # Define degradation vars based on available sensors minus operating vars
+        self.degradation_vars = [s for s in u.SENSORS if s not in self.operating_vars]
+        
+        # 1. Preprocessing (Outliers & Missing)
         if self.args.remove_outliers:
-            df = pp.remove_outliers(train, sensor_cols=sensor_cols, method=self.args.outlier_method, threshold=self.args.outlier_threshold)
+             # The snippet uses pp.remove_outliers(df, u.SENSORS) - assuming default method or zscore
+            df = pp.remove_outliers(df, u.SENSORS)
+            
         if self.args.fill_missing:
-            df = pp.missingfill(df)
-        if self.args.pre_rolling_mean_window > 1:
-            df = pp.rolling_mean(df, sensor_cols, window=self.args.pre_rolling_mean_window, min_periods=self.args.pre_rolling_mean_min_periods)
-        self.df = df.dropna()
+             df = pp.missingfill(df).dropna()
+        else:
+             df = df.dropna()
+
+        # 2. Split into Train (Others) and Test (Specific ESN)
+        testing_esn = self.args.testing_esn
+        print(f"Splitting data. Testing ESN: {testing_esn}")
         
-        # Check for prefixed variables
-        if self.operating_vars[0] not in self.df.columns and f"Sensed_{self.operating_vars[0]}" in self.df.columns:
-            self.operating_vars = [f"Sensed_{v}" for v in self.operating_vars]
-            self.rename_vars_map = {f"Sensed_{k}": v for k, v in self.rename_vars_map.items()}
+        test_mask = df["ESN"] == testing_esn
+        train_mask = df["ESN"].isin([x for x in [101, 102, 103, 104] if x != testing_esn])
+        
+        self.df_test = df[test_mask].reset_index(drop=True)
+        self.df_train = df[train_mask].reset_index(drop=True)
+        
+        self.X_test = self.df_test[self.operating_vars]
+        self.Y_test = self.df_test[self.degradation_vars]
+        
+        self.X_train = self.df_train[self.operating_vars]
+        self.Y_train = self.df_train[self.degradation_vars]
+        
+        # Prepare RUL for testing ESN (for optimization later)
+        self.hpt_rul = self.df_test["Cycles_to_HPT_SV"].reset_index(drop=True)
+        self.hpc_rul = self.df_test["Cycles_to_HPC_SV"].reset_index(drop=True)
+
+    def train_and_predict(self):
+        """Step 2: Train Model and Predict."""
+        print("Training models and predicting...")
+        
+        # MIMO Linear Regression (predicts all degradation vars from operating vars)
+        self.model = LinearRegression()
+        self.model.fit(self.X_train, self.Y_train)
+        
+        # Predict on Test Data
+        # Logic from snippet: Y_pred = model.predict(np.roll(X_test, model_i, axis=1)) 
+        # With model_i=0, np.roll is identity.
+        self.Y_pred = self.model.predict(self.X_test)
+        
+        # Convert to DataFrame for easier handling
+        self.Y_pred = pd.DataFrame(self.Y_pred, columns=self.degradation_vars, index=self.Y_test.index)
 
     def compute_residuals(self):
-        """Step 2: Fit baseline models and calculate residuals."""
-        print("Computing residuals...")
-        degradation_vars = list(self.rename_vars_map.keys())
+        """Step 3: Calculate and Process Residuals."""
+        print("Processing residuals...")
         
-        self.df_residuals = algo.fit_baseline_residuals(
-            self.df, 
-            self.operating_vars, 
-            degradation_vars, 
-            self.rename_vars_map,
-            healthy_window=self.args.healthy_window
-        )
-
-    def prepare_analysis_data(self):
-        """Step 3: Post-processing of residuals (smoothing)."""
-        print("Smoothing residuals...")
-        df_res = self.df_residuals.copy()
-        res_cols = list(self.rename_vars_map.values())
+        # Raw Residuals
+        res = self.Y_test - self.Y_pred
         
-        # Apply outlier removal on residuals
-        df_res = pp.remove_outliers(df_res, sensor_cols=res_cols, method='isoforest', threshold=0.3)
+        # Post-processing: Remove Outliers
+        res = pp.remove_outliers(res, u.SENSORS, threshold=self.args.res_outlier_threshold)
+        res = res.dropna()
         
-        # Smooth residuals
-        df_res[res_cols] = df_res.groupby('ESN')[res_cols].transform(
-            lambda x: x.rolling(window=self.args.post_window_size, min_periods=self.args.post_min_periods).median()
-        ).bfill()
+        # Rolling Median
+        window = self.args.rolling_window
+        step = window // self.args.rolling_step_div
+        res = res.rolling(window, step).median()
         
-        # Ensure RUL columns are present
-        for col in self.df_residuals.columns:
-            if 'Cycles_to' in col or 'to_next' in col:
-                df_res[col] = self.df_residuals[col]
-        
-        if 'snap_index' not in df_res.columns:
-            df_res['snap_index'] = range(len(df_res))
+        # Subtract Median of each column (Centering)
+        # Note: res is likely a DataFrame. The snippet iterates by index, but vectorization is better.
+        # "for i in range(0,7): m = res.iloc[:,i].median(); res.iloc[:,i] -= m"
+        for col in res.columns:
+            m = res[col].median()
+            res[col] -= m
             
-        self.df_final = df_res
+        self.residuals = res
 
-    def compute_health_index(self):
-        """Step 4: Calculate HI and fit mapping to RUL."""
-        print("Calculating Health Index and Score...")
-        target_col = self.rul_column
+    def optimize_and_calculate_hi(self):
+        """Step 4: Optimize Alpha and Calculate HI."""
+        print("Optimizing Alpha and calculating HI...")
         
-        # Use the same target RUL as reference for Alpha optimization
-        reference_col = self.rul_column
+        # Prepare Inputs
+        # Ensure alignment (residuals might have dropped rows due to rolling/dropna)
+        common_index = self.residuals.index
         
-        if reference_col not in self.df_final.columns:
-            print(f"Warning: Reference column {reference_col} missing. Skipping optimization.")
-            return
-
-        # 1. Calculate HI using Strategy (Correlation Optimization with Target RUL)
-        self.df_final = f.calculate_health_index(
-            self.df_final, 
-            'T3_res', 'T45_res', 
-            target_col=target_col,
-            reference_col=reference_col
+        # Align RULs
+        hpt_rul_aligned = self.hpt_rul.loc[common_index]
+        hpc_rul_aligned = self.hpc_rul.loc[common_index]
+        
+        # Get T3 and T45 residuals
+        t3_res = self.residuals["Sensed_T3"]
+        t45_res = self.residuals["Sensed_T45"]
+        
+        # Scaling RULs (Logic from snippet)
+        hpt_target = hpt_rul_aligned / 100.0
+        hpc_target = hpc_rul_aligned / 100.0 - 40.0
+        
+        # Optimization Objective
+        def objective(alpha, t3, t45, y_true):
+            y_pred = -alpha * t3 - t45
+            mse = np.mean((y_pred - y_true)**2)
+            return mse
+            
+        # Optimize HPT
+        print(f"Optimizing HPT (Initial alpha: {self.alpha_hpt})...")
+        res_hpt = minimize(
+            objective, 
+            x0=self.alpha_hpt, 
+            args=(t3_res, t45_res, hpt_target), 
+            method='BFGS'
         )
+        self.alpha_hpt = res_hpt.x[0]
+        print(f"Optimal Alpha HPT: {self.alpha_hpt}")
         
-        # 2. Fit Mapping HI -> RUL
-        hi_col = f'HI_{target_col}'
-        if hi_col in self.df_final.columns:
-            self.df_final, _ = f.fit_mapping(self.df_final, hi_col, target_col)
-            self._evaluate_score(target_col)
-
-    def _evaluate_score(self, target_col):
-        pred_col = f"{target_col}_linear_pred"
-        if pred_col in self.df_final.columns:
-            valid = self.df_final.dropna(subset=[target_col, pred_col])
-            if not valid.empty:
-                score = calculate_score(valid[target_col], valid[pred_col])
-                print(f"\n==========================================")
-                print(f">>> TWE SCORE ({target_col}): {score:.6f}")
-                print(f"==========================================\n")
+        # Optimize HPC
+        print(f"Optimizing HPC (Initial alpha: {self.alpha_hpc})...")
+        res_hpc = minimize(
+            objective, 
+            x0=self.alpha_hpc, 
+            args=(t3_res, t45_res, hpc_target), 
+            method='BFGS'
+        )
+        self.alpha_hpc = res_hpc.x[0]
+        print(f"Optimal Alpha HPC: {self.alpha_hpc}")
+        
+        # Calculate Final HI
+        def HI(t3, t45, alpha):
+            return -alpha * t3 - t45
+            
+        self.hi_hpt = HI(t3_res, t45_res, self.alpha_hpt)
+        self.hi_hpc = HI(t3_res, t45_res, self.alpha_hpc)
+        
+        # Store aligned RULs for plotting
+        self.hpt_rul_plot = hpt_target
+        self.hpc_rul_plot = hpc_target
 
     def generate_plots(self):
-        """Step 5: Visualization."""
+        """Step 5: Generate Plots."""
         print(f"Generating plots in: {self.output_folder}")
         
-        # Grid Plot
-        if 'residuals_grid' in self.args.plots:
-            self._plot_residuals_grid()
-            
-        # HI Plot
-        if 'health_index' in self.args.plots:
-            self._plot_health_index()
-
-    def _plot_residuals_grid(self):
+        # 1. Residuals Grid Plot (Korean Style)
         try:
-            engines = [101, 102, 103, 104]
-            fig, axes = plt.subplots(2, 4, figsize=(self.args.figsize_w, self.args.figsize_h), sharex=True)
-            for j, esn in enumerate(engines):
-                data_esn = self.df_final[self.df_final['ESN'] == esn].sort_values('Cycles_Since_New')
-                if not data_esn.empty:
-                    if 'T3_res' in data_esn.columns: axes[0, j].plot(data_esn['Cycles_Since_New'], data_esn['T3_res'], color='tab:blue')
-                    if 'T45_res' in data_esn.columns: axes[1, j].plot(data_esn['Cycles_Since_New'], data_esn['T45_res'], color='tab:red')
-                axes[0, j].set_title(f'ESN {esn}')
-                if j == 0: 
-                    axes[0, j].set_ylabel('T3 Residual')
-                    axes[1, j].set_ylabel('T45 Residual')
-                axes[0, j].grid(True, alpha=0.3); axes[1, j].grid(True, alpha=0.3)
+            fig, axs = plt.subplots(2, 3, figsize=(15, 8))
+            plot_vars = [v for v in self.degradation_vars if v in self.residuals.columns]
             
-            fig.suptitle(f'Sensor Residuals (T3, T45) - Baseline Window: {self.args.healthy_window}', fontsize=16)
-            plt.tight_layout()
-            fig.savefig(os.path.join(self.output_folder, f"W{self.args.healthy_window}_residuals_grid.png"), bbox_inches='tight', dpi=100)
+            # Use flattened iterator but handle if fewer vars than axes
+            for i, ax in enumerate(axs.flat):
+                if i < len(plot_vars):
+                    var = plot_vars[i]
+                    ax.plot(self.residuals[var], linewidth=1)
+                    ax.set_title(var)
+                    ax.set_ylabel("Residuals")
+                    ax.set_xlabel(f"{var}_res")
+                    ax.grid(True, alpha=0.3)
+                else:
+                    ax.axis('off') # Hide unused subplots
+            
+            fig.subplots_adjust(hspace=0.4, wspace=0.4)
+            fig.suptitle(f'Residuals for ESN {self.args.testing_esn}', fontsize=16)
+            fig.savefig(os.path.join(self.output_folder, "residuals_korean_style.png"), bbox_inches='tight')
             plt.close(fig)
         except Exception as e:
-            print(f"Error in grid plot: {e}")
+            print(f"Error plotting residuals: {e}")
+            traceback.print_exc()
 
-    def _plot_health_index(self):
+        # 2. HI vs RUL Plot
         try:
-            hi_col = f'HI_{self.rul_column}'
-            if hi_col in self.df_final.columns:
-                fig = up.plot_engine_level_hi(self.df_final, [hi_col], self.rul_column, self.target_rul)
-                if fig:
-                    fig.set_size_inches(self.args.figsize_w, self.args.figsize_h)
-                    fig.savefig(os.path.join(self.output_folder, f"W{self.args.healthy_window}_health_index.png"), bbox_inches='tight')
-                    plt.close(fig)
+            fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+            
+            # HPT
+            axs[0].plot(self.hi_hpt, color='tab:blue', label='Health Index (HPT)')
+            axs[0].set_title(f'HPT Health Index (Alpha={self.alpha_hpt:.4f})')
+            axs[0].grid(True, alpha=0.3)
+            
+            ax0_rul = axs[0].twinx()
+            ax0_rul.plot(self.hpt_rul_plot, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale (Scaled)')
+            
+            lines0, labels0 = axs[0].get_legend_handles_labels()
+            lines0r, labels0r = ax0_rul.get_legend_handles_labels()
+            axs[0].legend(lines0 + lines0r, labels0 + labels0r, loc='upper right')
+
+            # HPC
+            axs[1].plot(self.hi_hpc, color='tab:green', label='Health Index (HPC)')
+            axs[1].set_title(f'HPC Health Index (Alpha={self.alpha_hpc:.4f})')
+            axs[1].grid(True, alpha=0.3)
+            
+            ax1_rul = axs[1].twinx()
+            ax1_rul.plot(self.hpc_rul_plot, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale (Scaled)')
+            
+            lines1, labels1 = axs[1].get_legend_handles_labels()
+            lines1r, labels1r = ax1_rul.get_legend_handles_labels()
+            axs[1].legend(lines1 + lines1r, labels1 + labels1r, loc='upper right')
+
+            fig.tight_layout()
+            fig.savefig(os.path.join(self.output_folder, "HI_vs_RUL_optimized.png"), bbox_inches='tight')
+            plt.close(fig)
+            
         except Exception as e:
-            print(f"Error in HI plot: {e}")
-
-# ==============================================================================
-# HELPER FUNCTIONS
-# ==============================================================================
-
-def calculate_twe(y_true, y_pred, alpha=0.001, beta=1.0):
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
-    diff = y_pred - y_true
-    denom = 1 + alpha * y_true
-    w = np.where(diff >= 0, 2.0 / denom, 1.0 / denom)
-    return w * (diff**2) * beta
-
-def calculate_score(y_true, y_pred):
-    return np.mean(calculate_twe(y_true, y_pred))
+            print(f"Error plotting HI: {e}")
+            traceback.print_exc()
 
 # ==============================================================================
 # MAIN
 # ==============================================================================
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def main():
-    parser = argparse.ArgumentParser(description='Residual Analysis Refactored')
+    parser = argparse.ArgumentParser(description='Residual Analysis Specific Implementation')
+    
+    # Standard args (kept for compatibility with orchestration if needed, but mostly logic is hardcoded)
     parser.add_argument('--target-rul', type=str, default='HPT', choices=['HPC', 'HPT', 'WW'])
-    parser.add_argument('--healthy-window', type=int, default=100)
-    parser.add_argument('--pre-rolling-mean-window', type=int, default=100)
-    parser.add_argument('--pre-rolling-mean-min-periods', type=int, default=10)
-    parser.add_argument('--outlier-method', type=str, default='isoforest', choices=['zscore', 'iqr', 'isoforest'])
+    parser.add_argument('--debug-mode', type=str2bool, default=False)
+    
+    # Specific args for this logic
+    parser.add_argument('--testing-esn', type=int, default=102, help='ESN to use for testing/calibration')
+    parser.add_argument('--remove-outliers', type=str2bool, default=True)
+    parser.add_argument('--fill-missing', type=str2bool, default=True)
+    
+    parser.add_argument('--res-outlier-threshold', type=float, default=3.0)
+    parser.add_argument('--rolling-window', type=int, default=370)
+    parser.add_argument('--rolling-step-div', type=int, default=5, help='Divisor for rolling step (window//div)')
+    
+    # Dummy args to satisfy potential external callers (GUI) if they pass them
+    parser.add_argument('--healthy-window', type=int, default=0)
+    parser.add_argument('--pre-rolling-mean-window', type=int, default=0)
+    parser.add_argument('--pre-rolling-mean-min-periods', type=int, default=0)
+    parser.add_argument('--outlier-method', type=str, default='isoforest')
     parser.add_argument('--outlier-threshold', type=float, default=0.1)
     parser.add_argument('--post-window-size', type=int, default=50)
     parser.add_argument('--post-min-periods', type=int, default=5)
-    parser.add_argument('--plots', nargs='+', default=['residuals_grid', 'health_index'], choices=['residuals_grid', 'health_index'])
+    parser.add_argument('--plots', nargs='+', default=[])
     parser.add_argument('--figsize-w', type=int, default=20)
     parser.add_argument('--figsize-h', type=int, default=10)
-    parser.add_argument('--fill-missing', type=bool, default=True)
-    parser.add_argument('--remove-outliers', type=bool, default=True)
+    parser.add_argument('--alpha', type=float, default=0.001)
+    parser.add_argument('--beta', type=float, default=1.0)
     
     args = parser.parse_args()
 
     try:
         pipeline = ResidualAnalysisPipeline(args)
         pipeline.load_and_preprocess()
+        pipeline.train_and_predict()
         pipeline.compute_residuals()
-        pipeline.prepare_analysis_data()
-        pipeline.compute_health_index()
+        pipeline.optimize_and_calculate_hi()
         pipeline.generate_plots()
         print("\nPipeline execution finished successfully.")
     except Exception as e:

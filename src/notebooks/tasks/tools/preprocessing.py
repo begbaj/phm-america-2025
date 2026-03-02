@@ -164,13 +164,15 @@ def remove_outliers(
             ] = np.nan
 
     elif method == "isoforest":
+        # Interpret threshold as contamination if it's in a reasonable range (0, 0.5]
+        # Otherwise default to 'auto'
+        contamination = threshold if 0 < threshold <= 0.5 else "auto"
         for sensor in target_sensors:
             series_nonan = df_out[sensor].dropna()
             if series_nonan.empty:
                 continue
             data = series_nonan.values.reshape(-1, 1)
-            # Contamination 'auto' o basata sulla soglia se interpretata come percentuale
-            iso = IsolationForest(contamination="auto", random_state=42)
+            iso = IsolationForest(contamination=contamination, random_state=42)
             preds = iso.fit_predict(data)
             # preds == -1 sono gli outliers
             outlier_indices = series_nonan.index[preds == -1]

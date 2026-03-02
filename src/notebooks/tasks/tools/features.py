@@ -37,6 +37,37 @@ class CorrelationOptimizationStrategy(HealthIndexStrategy):
         res = minimize(objective, x0=1.0, method='Nelder-Mead')
         return res.x[0]
 
+class TWEOptimizationStrategy(HealthIndexStrategy):
+    def __init__(self, alpha_twe=0.001, beta_twe=1.0):
+        self.alpha_twe = alpha_twe
+        self.beta_twe = beta_twe
+
+    def compute_alpha(self, data: pd.DataFrame, t3_col: str, t45_col: str, reference_col: str) -> float:
+        valid_data = data.dropna(subset=[t3_col, t45_col, reference_col])
+        if valid_data.empty: return 1.0
+        
+        t3 = valid_data[t3_col].values
+        t45 = valid_data[t45_col].values
+        y_true = valid_data[reference_col].values
+
+        def objective(a):
+            hi = -a * t3 - t45
+            if np.std(hi) < 1e-9: return 1e9
+            
+            # Fit mapping internally to evaluate TWE
+            X = hi.reshape(-1, 1)
+            model = LinearRegression().fit(X, y_true)
+            y_pred = model.predict(X)
+            
+            # Compute TWE using the utility function
+            score = u.target_score(y_true, y_pred, self.alpha_twe, self.beta_twe)
+            return score
+
+        # Increase maxiter and xatol/fatol for more precise search
+        res = minimize(objective, x0=1.0, method='Nelder-Mead', 
+                       options={'maxiter': 1000, 'xatol': 1e-6, 'fatol': 1e-6})
+        return res.x[0]
+
 
 class FPerformanceParameter(Enum):
     """
@@ -484,12 +515,24 @@ def calculate_health_index(
 
     for esn in df["ESN"].unique():
         engine_mask = df["ESN"] == esn
-        best_alpha = strategy.compute_alpha(df[engine_mask], t3_col, t45_col, reference_col)
+        engine_data = df[engine_mask]
+        
+        # Debug residual values for this ESN
+        valid_t3 = engine_data[t3_col].notna().sum()
+        valid_t45 = engine_data[t45_col].notna().sum()
+        
+        best_alpha = strategy.compute_alpha(engine_data, t3_col, t45_col, reference_col)
         
         # Calcolo HI finale per il motore
-        df.loc[engine_mask, hi_col_name] = (
-            -best_alpha * df.loc[engine_mask, t3_col] - df.loc[engine_mask, t45_col]
-        )
+        # Use .values to avoid any index alignment issues
+        t3_vals = engine_data[t3_col].values
+        t45_vals = engine_data[t45_col].values
+        hi_values = -best_alpha * t3_vals - t45_vals
+        
+        df.loc[engine_mask, hi_col_name] = hi_values
+        
+        valid_hi = np.count_nonzero(~np.isnan(hi_values))
+        u.debug_print(f"DEBUG: ESN {esn}, Target {target_col}, alpha: {best_alpha:.4f}, Valid T3: {valid_t3}, Valid T45: {valid_t45}, Valid HI: {valid_hi}/{len(hi_values)}")
 
     return df
 
@@ -522,12 +565,14 @@ def fit_mapping(
                 "intercept": model.intercept_,
             }
 
-            # Predizione su tutti i dati del motore (anche quelli con NaN se X valido)
-            # Attenzione: predict richiede X non NaN.
-            # Applichiamo predict solo alle righe dove la feature esiste
-            valid_X_idx = df.loc[engine_mask, feature_col].dropna().index
-            if not valid_X_idx.empty:
-                X_full = df.loc[valid_X_idx, [feature_col]].values
-                df.loc[valid_X_idx, pred_col] = model.predict(X_full)
+            # Predizione su tutti i dati del motore
+            valid_mask = df[engine_mask][feature_col].notna()
+            if valid_mask.any():
+                X_full = df[engine_mask].loc[valid_mask, [feature_col]].values
+                # Use .values index to assign back correctly
+                valid_indices = df[engine_mask].loc[valid_mask].index
+                df.loc[valid_indices, pred_col] = model.predict(X_full)
+        else:
+            u.debug_print(f"DEBUG: fit_mapping for ESN {esn} failed: No overlap between {feature_col} and {target_col}")
 
     return df, engine_params

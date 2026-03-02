@@ -768,26 +768,38 @@ def fit_baseline_residuals(
             # Use entire dataset for baseline fitting
             train_baseline = esn_data
 
-        X_train = train_baseline[operating_vars].dropna()
-        if len(X_train) < 5:
+        # Drop any rows with NaNs in either operating or degradation variables for fitting
+        fit_data = train_baseline[operating_vars + degradation_vars].dropna()
+        
+        if len(fit_data) < 5:
+            print(f"Warning: Not enough valid data for ESN {esn} baseline fitting (found {len(fit_data)} rows).")
             continue
             
-        y_train = train_baseline.loc[X_train.index, degradation_vars]
+        X_train = fit_data[operating_vars]
+        y_train = fit_data[degradation_vars]
         
         try:
             model = LinearRegression()
             model.fit(X_train, y_train)
             
             # 2. Predict on all engine data
-            X_all = esn_data[operating_vars].dropna()
-            y_pred_all = model.predict(X_all)
-            y_actual_all = esn_data.loc[X_all.index, degradation_vars].values
+            # Still predict on all rows where operating variables are present
+            predict_data = esn_data[operating_vars].dropna()
+            if predict_data.empty:
+                continue
+                
+            y_pred_all = model.predict(predict_data)
+            y_actual_all = esn_data.loc[predict_data.index, degradation_vars].values
             
             residuals_values = y_actual_all - y_pred_all
-            residuals_df = pd.DataFrame(residuals_values, columns=degradation_vars, index=X_all.index)
+            residuals_df = pd.DataFrame(residuals_values, columns=degradation_vars, index=predict_data.index)
             residuals_df = residuals_df.rename(columns=rename_map)
             
             df_res.loc[residuals_df.index, res_cols] = residuals_df
+            
+            valid_residuals = residuals_df[res_cols[0]].notna().sum()
+            # print(f"DEBUG: ESN {esn} residuals computed for {valid_residuals}/{len(esn_data)} rows.")
+
             
         except Exception as e:
             print(f"Warning: Error in residual baseline for ESN {esn}: {e}")
