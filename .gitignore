@@ -133,3 +133,23 @@ venv.bak/
 venv/
 .~*
 ~*
+Data/features/training_feature_HPC_26011953_data.csv
+Data/features/training_feature_HPC_26011953_metadata.csv
+Data/features/training_feature_HPT_26011947_data.csv
+Data/features/training_feature_HPT_26011947_metadata.csv
+Data/features/training_feature_HPT_26011949_data.csv
+Data/features/training_feature_HPT_26011949_metadata.csv
+Data/features/training_feature_HPT_26011952_data.csv
+Data/features/training_feature_HPT_26011952_metadata.csv
+Data/features/training_feature_HPT_26011954_data.csv
+Data/features/training_feature_HPT_26011954_metadata.csv
+Data/features/training_feature_HPT_26011956_data.csv
+Data/features/training_feature_HPT_26011956_metadata.csv
+Data/snapshot_tables/averaged_final.csv
+Data/snapshot_tables/training.csv
+Data/snapshot_tables/averaged_final.csv
+Data/snapshot_tables/training.csv
+Data/
+
+# !ok_nuovo_notebook.ipynb
+src/notebooks/ok_nuovo_notebook.ipynb
