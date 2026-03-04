@@ -42,12 +42,15 @@ for esn in u.ESN:
 """
 SNAPSHOTS = range(1,9)
 FEATURES = ["mean", "std", "kurtosis", "skewness"]
-META_COLS = [
-    'cycle', 'esn', 'esn_index', 'fault_hpc_cycle', 'fault_hpt_cycle',
-    'fault_ww_cycle', 'global_index', 'hpc_cycle', 'hpc_cycle_index', 'hpt_cycle', 'hpt_cycle_index',
-    'snap', 'snap_index', 'to_next_hpc_cycle', 'to_next_hpt_cycle', 'to_next_ww_cycle', 'ww_cycle',
-    'ww_cycle_index'
-]
+# META_COLS = [
+#     'cycle', 'esn', 'esn_index', 'fault_hpc_cycle', 'fault_hpt_cycle',
+#     'fault_ww_cycle', 'global_index', 'hpc_cycle', 'hpc_cycle_index', 'hpt_cycle', 'hpt_cycle_index',
+#     'snap', 'snap_index', 'to_next_hpc_cycle', 'to_next_hpt_cycle', 'to_next_ww_cycle', 'ww_cycle',
+#     'ww_cycle_index'
+# ]
+
+META_COLS = ['Cycles_Since_New',
+    'Cycles_to_WW', 'Cycles_to_HPT_SV', 'Cycles_to_HPC_SV']
 
 
 def get_timestamp():

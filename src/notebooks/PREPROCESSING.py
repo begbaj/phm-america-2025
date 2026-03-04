@@ -30,6 +30,7 @@ from scipy.stats import skew, kurtosis
 from tools import utils as u, config as cfg, plotting as up, features as f, preprocessing as pp
 from tools.types.plotdata import PlotData
 from tools.types.enums import *
+import tools
 
 # %% [markdown]
 # # Snapshot Table Format
@@ -40,11 +41,11 @@ from tools.types.enums import *
 # - signal_value
 
 # %%
-train = u.load_training()()
-dfp, history, sensors = pp.preprocess_data(train)
+train = u.load_training()
+dfp = pp.remove_outliers(train, SENSORS)
+dfp = pp.missingfill(dfp).dropna()
 path = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="training.csv")
 dfp.to_csv(path, index=False)
-up.plot_pipeline_comparison(history, "Sensed_T45")
 
 # %% [markdown]
 # # Estrazione feature sulle performance del motore
@@ -52,12 +53,19 @@ up.plot_pipeline_comparison(history, "Sensed_T45")
 # %%
 # PROVA
 
+SENSORS = tools.types.enums.SENSORS
+
+# meta_cols = [
+#     'Cucles_Since_New', 'snap_index',
+#     'ww_cycle', 'hpc_cycle', 'hpt_cycle',
+#     'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
+#     'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
+#     'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+# ]
+
 meta_cols = [
-    'cycle', 'snap_index',
-    'ww_cycle', 'hpc_cycle', 'hpt_cycle',
-    'ww_cycle_index', 'hpc_cycle_index', 'hpt_cycle_index',
-    'to_next_ww_cycle', 'to_next_hpc_cycle', 'to_next_hpt_cycle',
-    'fault_ww_cycle', 'fault_hpc_cycle', 'fault_hpt_cycle'
+    'Cycles_Since_New',
+    'Cycles_to_WW', 'Cycles_to_HPT_SV', 'Cycles_to_HPC_SV'
 ]
 
 agg_logic = {}
@@ -65,10 +73,10 @@ agg_logic = {}
 test = dfp.copy()
 
 # Scegliamo solo ESN e il contatore di riga come chiavi.
-group_keys = ['esn', 'cycle']
+group_keys = ['ESN', 'Cycles_Since_New']
 
 # SUI SENSORI: facciamo la MEDIA (qui passiamo da 8 righe a 1 riga)
-for col in sensors:
+for col in SENSORS:
     if col in test.columns:
         agg_logic[col] = 'mean'
 
@@ -79,9 +87,8 @@ for col in meta_cols:
 
 # Rieseguiamo l'aggregazione usando queste nuove chiavi
 df_averaged = test.groupby(group_keys, as_index=False).agg(agg_logic)
-
-df_averaged = df_averaged.rename(columns={'snap_index': 'esn_index'})
-df_averaged = df_averaged.sort_values(['esn', 'esn_index']).dropna()
+# df_averaged = df_averaged.rename(columns={'snap_index': 'esn_index'})
+df_averaged = df_averaged.sort_values(['ESN', 'Cycles_Since_New']).dropna()
 
 # 6. SALVATAGGIO
 path_avg = u.pathfinder(cfg.DATA_BASE_PATH, "snapshot_tables", filename="averaged_final.csv")
@@ -95,16 +102,16 @@ print(f"Rapporto di compressione: {len(test)/len(df_averaged):.1f}x (dovrebbe es
 #features = [f.FThermalEfficiency.DELTA_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC, f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
 to_calc = df_averaged.copy()
 features = [] # [f.FThermalEfficiency.DELTA_PR_TH_HPC_2]
-target = 'HPC'
+target = 'HPT'
 statistical_features = [] # ['mean', 'rms']
-fulltarget = f'to_next_{target.lower()}_cycle'
+fulltarget = f'Cycles_to_{target}_SV'
 colname = f.get_all_performance_colnames()
 skip = 0
 
 if target == "HPC":
-    dff, val = f.pipeline_hpc(to_calc, features, colname, statistical_features, window=1, step=0, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+    dff, val = f.pipeline_hpc(to_calc, features, colname, statistical_features, window=100, step=25, stat_groupby=["ESN"], stat_sortby=["ESN", "Cycles_Since_New"], target=fulltarget)
 elif target == "HPT":
-    dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["esn"], stat_sortby=["esn", "esn_index"], target=fulltarget)
+    dff, val = f.pipeline_hpt(dfp, features, colname, statistical_features, window=100, step=25, stat_groupby=["ESN"], stat_sortby=["ESN", "Cycles_Since_New"], target=fulltarget)
 else:
     print("Non se po fa")
     skip = 1
@@ -127,6 +134,7 @@ if skip != 1:
     print(tot)
     run = u.get_timestamp()
 
+# %store tot
 
 
 # %%
@@ -139,9 +147,9 @@ dff[tot["feature"]].to_csv(path_feat, index=False)
 # # GRAFICI
 
 # %%
-filter_feature = ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2"] #"DP_TH_HPC_2"  # oppure None
+filter_feature = None # ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2"] #"DP_TH_HPC_2"  # oppure None
 max_features_to_show = 10           # Limite per non intasare la RAM
-esn_list = [101, 102, 103, 104]     # I motori che vuoi controllare
+esn_list = [101]     # I motori che vuoi controllare
 
 plots = up.plot_features(dff, esn_list, tot, target, fulltarget, filter_feature, max_features_to_show)
 for (fig, figname) in plots:
@@ -173,25 +181,26 @@ WINDOW_SIZE = 250 # Finestra più piccola per maggiore reattività
 
 # --- STEP 1: Feature Engineering con Finestra Piccola ---
 # Calcoliamo medie mobili su una finestra ridotta per i sensori grezzi
-sensor_cols = dff[tot["feature"]].columns # ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2"]
+#sensor_cols = dff[tot["feature"]].columns # 
+sensor_cols = ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2"]
 
 for col in sensor_cols:
-    dff[f'{col}_smooth_short'] = dff.groupby('esn')[col].transform(
+    dff[f'{col}_smooth_short'] = dff.groupby('ESN')[col].transform(
         lambda x: x.rolling(window=WINDOW_SIZE, min_periods=1).mean()
     )
 
 # Reset e Ciclo Relativo
-dff['is_reset'] = dff.groupby('esn')['to_next_hpc_cycle'].diff() > 0
-dff['life_id'] = dff.groupby('esn')['is_reset'].cumsum()
-dff['relative_cycle'] = dff.groupby(['esn', 'life_id']).cumcount()
+dff['is_reset'] = dff.groupby('ESN')['Cycles_to_HPT_SV'].diff() > 0
+dff['life_id'] = dff.groupby('ESN')['is_reset'].cumsum()
+dff['relative_cycle'] = dff.groupby(['ESN', 'life_id']).cumcount()
 
 # --- STEP 2: Preparazione Dati ---
 # Usiamo le nuove feature a finestra corta
 features = [f"{col}_smooth_short" for col in sensor_cols] + ["relative_cycle"]
-target = "to_next_hpc_cycle"
+target = "Cycles_to_HPT_SV"
 
-train_df = dff[dff["esn"] != 104].dropna()
-test_df = dff[dff["esn"] == 104].dropna()
+train_df = dff[dff["ESN"] != 104].dropna()
+test_df = dff[dff["ESN"] == 104].dropna()
 
 # --- STEP 3: Standardizzazione ---
 scaler = StandardScaler()
@@ -205,17 +214,20 @@ model = LinearRegression()
 model.fit(X_train, y_train)
 
 y_pred = np.maximum(0, model.predict(X_test))
+y_pred_final = pd.Series(y_pred).rolling(window=150, min_periods=1).mean()
 
 # --- STEP 5: Visualizzazione ---
 plt.figure(figsize=(15, 6))
 plt.plot(test_df.index, y_test.values, label='RUL Reale', color='blue', alpha=0.4)
-plt.plot(test_df.index, y_pred, label=f'RUL Predetta (Window={WINDOW_SIZE})', color='red', linewidth=1.5)
+plt.plot(test_df.index, y_pred_final, label=f'RUL Predetta', color='red', linewidth=1.5)
 
 # Evidenzia i reset (inizio nuove vite)
 for r in test_df[test_df['is_reset']].index:
     plt.axvline(x=r, color='green', linestyle='--', alpha=0.3)
 
-plt.title(f'Predizione RUL con Finestra di {WINDOW_SIZE} Campioni')
+plt.title(f'Predizione RUL HPT per ESN 104 \n Regressore Lineare')
+plt.xlabel('Indice Temporale')
+plt.ylabel('Cicli al prossimo HPT')
 plt.legend()
 plt.grid(True, alpha=0.2)
 plt.show()
@@ -229,21 +241,21 @@ from sklearn.preprocessing import StandardScaler
 
 # --- STEP 1: Definizione Feature e Target ---
 # Usiamo esattamente quello che hai chiesto
-features = ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2", "relative_cycle"]
-target = "to_next_hpt_cycle"
+# features = ["DP_TH_HPC_2_MEAN", "DP_TH_HPC_2_RMS", "DP_TH_HPC_2", "relative_cycle"]
+target = "Cycles_to_HPT_SV"
 
 # Creiamo l'identificativo dei chunk per non fare confusione tra le vite
 # Un chunk finisce e ne inizia un altro quando la RUL aumenta (reset)
-dff['is_reset'] = dff.groupby('esn')[target].diff() > 0
-dff['chunk_id'] = dff.groupby('esn')['is_reset'].cumsum()
+dff['is_reset'] = dff.groupby('ESN')[target].diff() > 0
+dff['chunk_id'] = dff.groupby('ESN')['is_reset'].cumsum()
 
 # Feature fondamentale: la posizione relativa nel chunk (ciclo attuale della vita)
-dff['relative_cycle'] = dff.groupby(['esn', 'chunk_id']).cumcount()
+dff['relative_cycle'] = dff.groupby(['ESN', 'chunk_id']).cumcount()
 features_final = features + ['relative_cycle']
 
 # --- STEP 2: Split Train e Test (Motore 104 fuori dal train) ---
-train_df = dff[dff["esn"] != 104].dropna(subset=[target] + features)
-test_df = dff[dff["esn"] == 104].dropna(subset=[target] + features)
+train_df = dff[dff["ESN"] != 104].dropna(subset=[target] + features)
+test_df = dff[dff["ESN"] == 104].dropna(subset=[target] + features)
 
 X_train_raw = train_df[features_final]
 y_train = train_df[target]
@@ -263,6 +275,8 @@ rf_model.fit(X_train, y_train)
 # --- STEP 5: Predizione ---
 y_pred = rf_model.predict(X_test)
 y_pred = np.maximum(0, y_pred) # La RUL non può essere negativa
+y_pred_final = pd.Series(y_pred).rolling(window=200, min_periods=1).mean()
+
 
 
 # %%
@@ -270,15 +284,15 @@ y_pred = np.maximum(0, y_pred) # La RUL non può essere negativa
 plt.figure(figsize=(15, 7))
 
 # Plot RUL Reale e Predetta
-plt.plot(test_df.index, y_test.values, label='RUL Reale (to_next_hpc_cycle)', color='blue', alpha=0.6, linewidth=2)
-plt.plot(test_df.index, y_pred, label='RUL Predetta (Random Forest)', color='red', linestyle='--', alpha=0.9)
+plt.plot(test_df.index, y_test.values, label='RUL Reale', color='blue', alpha=0.6, linewidth=2)
+plt.plot(test_df.index, y_pred_final, label='RUL Predetta', color='red', linestyle='--', alpha=0.9)
 
 # Evidenziamo graficamente i 5 chunk
 resets = test_df[test_df['is_reset']].index
 for i, r in enumerate(resets):
-    plt.axvline(x=r, color='green', linestyle=':', label='Reset / Nuovo Chunk' if i == 0 else "")
+    plt.axvline(x=r, color='green', linestyle=':')
 
-plt.title('Predizione RUL - Motore 104 - Random Forest')
+plt.title('Predizione RUL HPT per ESN 104 \n Random Forest')
 plt.xlabel('Indice Temporale')
 plt.ylabel('Cicli al prossimo HPT')
 plt.legend()
@@ -291,6 +305,13 @@ print("\nImportanza delle Feature nei Chunk:")
 print(importances)
 
 # %%
+target = "Cycles_to_HPT_SV"
+features_list = list(tot['feature']) # Solo le feature indicate da te
+cols_to_use = list(set(['ESN', target] + features_list))
+
+print(cols_to_use)
+
+# %%
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -301,9 +322,9 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import mean_absolute_error
 
 # --- 1. OTTIMIZZAZIONE MEMORIA E SELEZIONE ---
-target = "to_next_hpt_cycle"
+target = "Cycles_to_HPT_SV"
 features_list = list(tot['feature']) # Solo le feature indicate da te
-cols_to_use = list(set(['esn', target] + features_list))
+cols_to_use = list(set(['ESN', target] + features_list))
 
 # Lavoriamo su una copia ridotta con precisione float32
 df_work = dff[cols_to_use].copy()
@@ -312,16 +333,16 @@ for col in features_list:
 
 # --- 2. LOGICA DI CHUNK (Reset Manutenzione) ---
 # Identifichiamo i reset e calcoliamo il ciclo relativo (fondamentale per la logica temporale)
-df_work['is_reset'] = (df_work.groupby('esn')[target].diff() > 0).astype(np.int8)
-df_work['relative_cycle'] = df_work.groupby(['esn', df_work['is_reset'].cumsum()]).cumcount().astype(np.int32)
+df_work['is_reset'] = (df_work.groupby('ESN')[target].diff() > 0).astype(np.int8)
+df_work['relative_cycle'] = df_work.groupby(['ESN', df_work['is_reset'].cumsum()]).cumcount().astype(np.int32)
 
 # Feature finali: Solo quelle fornite + la posizione nel chunk (permette di "agganciare" la RUL)
 features_final = features_list + ['relative_cycle']
 
 # --- 3. PREPARAZIONE DATASET ---
 MAX_RUL = 14000 # Target Piecewise: risolve la "gara" iniziale dei grafici 2-5
-train_mask = df_work['esn'] != 104
-test_mask = df_work['esn'] == 104
+train_mask = df_work['ESN'] != 104
+test_mask = df_work['ESN'] == 104
 
 # Conversione in array NumPy per massimizzare la velocità
 X_train_raw = df_work.loc[train_mask, features_final].values
@@ -377,8 +398,8 @@ best_model = random_search.best_estimator_
 
 # --- 6. PREDIZIONE E POST-PROCESSING ---
 y_pred = best_model.predict(X_test_pca)
-# Smoothing finale per pulire la curva (Window di 20 cicli)
-y_pred_smooth = pd.Series(y_pred).rolling(window=20, min_periods=1, center=True).mean().values
+# Smoothing finale per pulire la curva
+y_pred_smooth = pd.Series(y_pred).rolling(window=100, min_periods=1, center=True).mean().values
 y_pred_smooth = np.maximum(0, y_pred_smooth)
 
 # --- 7. VISUALIZZAZIONE ---
@@ -386,7 +407,8 @@ plt.figure(figsize=(15, 6))
 plt.plot(y_test_real, label='RUL Reale', color='royalblue', alpha=0.5, linewidth=2)
 plt.plot(y_pred_smooth, label='RUL Predetta', color='crimson', linestyle='--')
 
-plt.title('RUL Ottimizzata - Motore 104 - PCA + XGB')
+plt.title('Prediczione RUL HPT per ESN 104 - PCA + XGB')
+plt.xlabel('Indice Temporale')
 plt.ylabel('Cicli al prossimo HPT')
 plt.legend()
 plt.grid(True, alpha=0.3)
@@ -425,23 +447,23 @@ BATCH_SIZE = 64
 LR = 0.0005
 EPOCHS = 400
 MAX_RUL = 12500    
-target_col = "to_next_hpc_cycle"
+target_col = "Cycles_to_HPC_SV"
 
 # Usiamo SOLO le feature originali indicate in tot['feature'] + il ciclo relativo
 features_list = list(tot['feature']) + ['relative_cycle']
 
 # --- 2. PREPARAZIONE DATI (Memory Efficient) ---
 # Creiamo il df di lavoro con le colonne corrette
-df_work = dff[['esn', target_col] + list(tot['feature'])].copy()
+df_work = dff[['ESN', target_col] + list(tot['feature'])].copy()
 
 # Logica Chunk
-df_work['is_reset'] = (df_work.groupby('esn')[target_col].diff() > 0).astype(int)
-df_work['chunk_id'] = df_work.groupby('esn')['is_reset'].cumsum()
-df_work['relative_cycle'] = df_work.groupby(['esn', 'chunk_id']).cumcount()
+df_work['is_reset'] = (df_work.groupby('ESN')[target_col].diff() > 0).astype(int)
+df_work['chunk_id'] = df_work.groupby('ESN')['is_reset'].cumsum()
+df_work['relative_cycle'] = df_work.groupby(['ESN', 'chunk_id']).cumcount()
 
 # Split train/test
-train_mask = df_work['esn'] != 104
-test_mask = df_work['esn'] == 104
+train_mask = df_work['ESN'] != 104
+test_mask = df_work['ESN'] == 104
 
 # Scaling e PCA
 scaler = StandardScaler()
@@ -476,8 +498,8 @@ def create_sequences_by_esn(data, targets, esn_values, window_size):
     return np.array(sequences), np.array(labels)
 
 # Creiamo le sequenze separando correttamente i motori
-X_train_seq, y_train_seq = create_sequences_by_esn(X_train_pca, y_train_all, df_work.loc[train_mask, 'esn'].values, WINDOW_SIZE)
-X_test_seq, y_test_seq = create_sequences_by_esn(X_test_pca, y_test_all, df_work.loc[test_mask, 'esn'].values, WINDOW_SIZE)
+X_train_seq, y_train_seq = create_sequences_by_esn(X_train_pca, y_train_all, df_work.loc[train_mask, 'ESN'].values, WINDOW_SIZE)
+X_test_seq, y_test_seq = create_sequences_by_esn(X_test_pca, y_test_all, df_work.loc[test_mask, 'ESN'].values, WINDOW_SIZE)
 
 class RULDataset(Dataset):
     def __init__(self, x, y):

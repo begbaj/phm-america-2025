@@ -31,27 +31,27 @@ class FPerformanceParameter(Enum):
 
 class FPressureRatio(FPerformanceParameter):
     """Rapporti di Pressione (PR)"""
-    FAN = ("PR Fan", "Pt2 / Pamb", "PR_FAN")
-    LPC = ("PR LPC (Bassa Pres.)", "P25 / Pt2", "PR_LPC")
-    HPC = ("PR HPC (Alta Pres.)", "Ps3 / P25", "PR_HPC")
-    COMPRESSOR_TOTAL = ("PR Compressore (Tot)", "Ps3 / Pt2", "PR_COMPRESSOR_TOTAL")
-    ENGINE_GLOBAL = ("PR Motore (Global)", "Ps3 / Pamb", "PR_ENGINE_GLOBAL")
+    FAN = ("PR Fan", "Sensed_Pt2 / Sensed_Pamb", "PR_FAN")
+    LPC = ("PR LPC (Bassa Pres.)", "Sensed_P25 / Sensed_Pt2", "PR_LPC")
+    HPC = ("PR HPC (Alta Pres.)", "Sensed_Ps3 / Sensed_P25", "PR_HPC")
+    COMPRESSOR_TOTAL = ("PR Compressore (Tot)", "Sensed_Ps3 / Sensed_Pt2", "PR_COMPRESSOR_TOTAL")
+    ENGINE_GLOBAL = ("PR Motore (Global)", "Sensed_Ps3 / Sensed_Pamb", "PR_ENGINE_GLOBAL")
 
 class FThermalEfficiency(FPerformanceParameter):
     """Efficienza Termica e Turbine"""
     # DELTA_PR_TH_HPC = ("ΔPR/ΔTH HPC", "(Ps3 / P25) / ((T25 - T3) / T25)", "DP_TH_HPC")
-    DELTA_PR_TH_HPC_2 = ("ΔPR/ΔTH HPC", "(Ps3 / P25) / (T3/T25)", "DP_TH_HPC_2")
-    DELTA_T_HPT = ("ΔT Relativo HPT", "(T3 - T45) / T3", "THE_DELTA_T_HPT")
-    DELTA_T_LPT = ("ΔT Relativo LPT", "(T45 - T5) / T45", "THE_DELTA_T_LPT")
-    DELTA_HPC = ("ΔT Relativo HPC", "(T25-T3)/T25", "THE_DELTA_HPC")
-    THERMAL_PROXY = ("Proxy Efficienza Termica", "(T5 - TAT) / TAT", "THE_THERMAL_PROXY")
-    SFC_PROXY = ("Proxy Consumo Specifico (SFC)", "WFuel / (T5 - TAT)", "THE_SFC_PROXY")
+    DELTA_PR_TH_HPC_2 = ("ΔPR/ΔTH HPC", "(Sensed_Ps3 / Sensed_P25) / (Sensed_T3/Sensed_T25)", "DP_TH_HPC_2")
+    DELTA_T_HPT = ("ΔT Relativo HPT", "(Sensed_T3 - Sensed_T45) / Sensed_T3", "THE_DELTA_T_HPT")
+    DELTA_T_LPT = ("ΔT Relativo LPT", "(Sensed_T45 - Sensed_T5) / Sensed_T45", "THE_DELTA_T_LPT")
+    DELTA_HPC = ("ΔT Relativo HPC", "(Sensed_T25-Sensed_T3)/Sensed_T25", "THE_DELTA_HPC")
+    THERMAL_PROXY = ("Proxy Efficienza Termica", "(Sensed_T5 - Sensed_TAT) / Sensed_TAT", "THE_THERMAL_PROXY")
+    SFC_PROXY = ("Proxy Consumo Specifico (SFC)", "Sensed_WFuel / (Sensed_T5 - Sensed_TAT)", "THE_SFC_PROXY")
 
 class FCorrectedSpeed(FPerformanceParameter):
     """Velocità Corrette"""
     # Note: pandas eval handles 'sqrt' automatically if engine='python' or using local_dict
-    FAN_SPEED = ("Fan Speed Corretta", "Fan_Speed / sqrt(TAT)", "CS_FAN_SPEED")
-    CORE_SPEED = ("Core Speed Corretta", "Core_Speed / sqrt(TAT)", "CS_CORE_SPEED")
+    FAN_SPEED = ("Fan Speed Corretta", "Sensed_Fan_Speed / sqrt(Sensed_TAT)", "CS_FAN_SPEED")
+    CORE_SPEED = ("Core Speed Corretta", "Sensed_Core_Speed / sqrt(Sensed_TAT)", "CS_CORE_SPEED")
 
 
 def get_all_performance_colnames():
@@ -112,7 +112,7 @@ def performance_features(df: pd.DataFrame, features: list[FPerformanceParameter]
 
 
 def calc_statistical_features(df: pd.DataFrame, features: list[str] = [], columns: list[str] = [], window_size: int = 0,
-                               step: int = 1, groupby: list[str] = ['esn'], sortby: list[str] = ['esn_index'], outcols: list[str] = []) -> pd.DataFrame:
+                               step: int = 1, groupby: list[str] = ['ESN'], sortby: list[str] = ['Cycles_Since_New'], outcols: list[str] = []) -> pd.DataFrame:
     """
     Applica features statistiche a un DataFrame, sia rolling che globali.
     
@@ -211,7 +211,7 @@ def calc_statistical_features(df: pd.DataFrame, features: list[str] = [], column
 
 
 
-def evaluate_correlation(df: pd.DataFrame, target: str, groupby: list[str] = ['esn'], cols: list[str] = []):
+def evaluate_correlation(df: pd.DataFrame, target: str, groupby: list[str] = ['ESN'], cols: list[str] = []):
     if cols == []:
         cols = df.select_dtypes(include=[np.number]).columns.tolist()
     for g in groupby:
@@ -257,31 +257,31 @@ def evaluate_correlation_per_snap(df: pd.DataFrame, target: str, top_n: int = 5)
     all_snap_results = []
     
     # Identifichiamo i vari snapshot presenti
-    unique_snaps = df['snap'].unique()
+    unique_snaps = df['Snapshot'].unique()
     
     for snap_val in unique_snaps:
-        snap_df = df[df['snap'] == snap_val].copy()
+        snap_df = df[df['Snapshot'] == snap_val].copy()
         
         if len(snap_df) < 5:
             continue
             
-        corr_results = evaluate_correlation(snap_df, target=target, groupby=['esn', 'snap'])
-        corr_results['snap'] = snap_val
+        corr_results = evaluate_correlation(snap_df, target=target, groupby=['ESN', 'Snapshot'])
+        corr_results['Snapshot'] = snap_val
         all_snap_results.append(corr_results)
     
     report_df = pd.concat(all_snap_results).reset_index(drop=True)
-    cols = ['snap', 'feature', 'spearman_corr', 'pearson_corr', 'tot_val', 'n_samples']
+    cols = ['Snapshot', 'feature', 'spearman_corr', 'pearson_corr', 'tot_val', 'n_samples']
     return report_df[cols]
 
-def pipeline_hpc(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpc_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
+def pipeline_hpc(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['ESN', 'Snapshot'], stat_sortby: list[str] = ['ESN', 'Cycles_Since_New'], target="Cycles_to_HPC_SV") -> tuple[pd.DataFrame, pd.DataFrame]:
     #dff = df.groupby(['esn', "esn_index"], as_index=False).mean()
     dff = performance_features(df, features)
-    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=step).dropna()
-    val = evaluate_correlation(dff, target=target, groupby=['esn'])
+    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["ESN"], window_size=window, step=step).dropna()
+    val = evaluate_correlation(dff, target=target, groupby=['ESN'])
     return (dff, val)
 
-def pipeline_hpt(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['esn', 'snap'], stat_sortby: list[str] = ['esn', 'snap_index'], target="to_next_hpt_cycle") -> tuple[pd.DataFrame, pd.DataFrame]:
+def pipeline_hpt(df: pd.DataFrame, features: list[FPerformanceParameter], cols, statistical_features: list[str] = ['mean', 'rms'], window: int = 100, step: int = 25, stat_groupby: list[str] = ['ESN', 'Snapshot'], stat_sortby: list[str] = ['ESN', 'Cycles_Since_New'], target="Cycles_to_HPT_SV") -> tuple[pd.DataFrame, pd.DataFrame]:
     dff = performance_features(df, features)
-    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["esn"], window_size=window, step=step).dropna()
+    dff = calc_statistical_features(dff, features=['mean', 'rms'], columns=cols, groupby=["ESN"], window_size=window, step=step).dropna()
     val = evaluate_correlation_per_snap(dff, target=target)
     return (dff, val)

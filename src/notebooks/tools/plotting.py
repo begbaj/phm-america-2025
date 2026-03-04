@@ -406,7 +406,7 @@ def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: s
 
     figs = []
     for esn in esn_list:
-        esn_data = dff[dff['esn'] == esn].sort_values('esn_index')
+        esn_data = dff[dff['ESN'] == esn].sort_values('Cycles_Since_New')
         if esn_data.empty: continue
 
         n_features = len(target_features)
@@ -425,7 +425,7 @@ def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: s
             
             # 1. Plot della Feature (Asse Sinistro)
             color_feat = 'tab:blue'
-            l1, = ax1.plot(esn_data['esn_index'], esn_data[feat_name], 'o', 
+            l1, = ax1.plot(esn_data['Cycles_Since_New'], esn_data[feat_name], 'o', 
                         color=color_feat, linewidth=1.5, label=f'Feature: {feat_name}')
             ax1.set_ylabel(feat_name, color=color_feat, fontweight='bold')
             ax1.set_xlabel('Cicli (Time)')
@@ -433,14 +433,14 @@ def plot_features(dff: DataFrame, esn_list: list[int], tot: DataFrame, target: s
             # 2. Plot del Target/RUL (Asse Destro)
             ax2 = ax1.twinx()
             color_rul = 'tab:green'
-            l2, = ax2.plot(esn_data['esn_index'], esn_data[fulltarget], 
+            l2, = ax2.plot(esn_data['Cycles_Since_New'], esn_data[fulltarget], 
                         color=color_rul, linestyle='--', alpha=0.7, label='Target (RUL)')
             ax2.set_ylabel('RUL', color=color_rul, fontweight='bold')
 
             # 3. Linee di Fault (HPC)
             fault_col = f'fault_{target.lower()}_cycle'
             if fault_col in esn_data.columns:
-                for f_idx in esn_data.loc[esn_data[fault_col] == 1, 'esn_index']:
+                for f_idx in esn_data.loc[esn_data[fault_col] == 1, 'Cycles_Since_New']:
                     ax1.axvline(x=f_idx, color='red', linestyle=':', alpha=0.8, label='Fault')
 
             ax1.set_title(f"Trend: {feat_name}")
@@ -464,20 +464,20 @@ def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, 
     figs = []
 
     for esn in esn_list:
-        esn_all_data = dff[dff['esn'] == esn]
+        esn_all_data = dff[dff['ESN'] == esn]
         if esn_all_data.empty:
             continue
 
         # Iteriamo su ogni fase (snap) disponibile per questo motore
-        for snap in sorted(esn_all_data['snap'].unique()):
-            group_data = esn_all_data[esn_all_data['snap'] == snap].sort_values('esn_index')
+        for snap in sorted(esn_all_data['Snapshot'].unique()):
+            group_data = esn_all_data[esn_all_data['Snapshot'] == snap].sort_values('Cycles_Since_New')
             
             # 1. Selezione Feature per questo snap specifico
             if filter_feature:
-                snap_best = tot[(tot['snap'] == snap) & (tot['feature'] == filter_feature)]
+                snap_best = tot[(tot['Snapshot'] == snap) & (tot['feature'] == filter_feature)]
             else:
                 # Prende le migliori N feature per questo snap basandosi sulla correlazione totale
-                snap_best = tot[tot['snap'] == snap].sort_values('tot_val', key=abs, ascending=False).head(max_features_per_snap)
+                snap_best = tot[tot['Snapshot'] == snap].sort_values('tot_val', key=abs, ascending=False).head(max_features_per_snap)
 
             target_features = snap_best['feature'].unique().tolist()
             n_features = len(target_features)
@@ -504,7 +504,7 @@ def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, 
                 
                 # ASSE SINISTRO: Feature reale (Line + Points per vedere la granularità dello snap)
                 color_feat = 'tab:blue'
-                l1, = ax1.plot(group_data['esn_index'], group_data[feat_name], 
+                l1, = ax1.plot(group_data['Cycles_Since_New'], group_data[feat_name], 
                                color=color_feat, linewidth=2, marker='o', markersize=4, 
                                alpha=0.7, label=f'Actual {feat_name}')
                 
@@ -516,7 +516,7 @@ def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, 
                 # ASSE DESTRO: Target/RUL
                 ax2 = ax1.twinx()
                 color_rul = 'tab:green'
-                l2, = ax2.plot(group_data['esn_index'], group_data[fulltarget], 
+                l2, = ax2.plot(group_data['Cycles_Since_New'], group_data[fulltarget], 
                                color=color_rul, linestyle='--', linewidth=2, label='RUL Trend')
                 
                 ax2.set_ylabel(f'To Next {target}', color=color_rul, fontweight='bold')
@@ -525,7 +525,7 @@ def plot_features_per_snap(dff: DataFrame, esn_list: list[int], tot: DataFrame, 
                 # LINEE DI FAULT (Verticali)
                 fault_col = f'fault_{target.lower()}_cycle'
                 if fault_col in group_data.columns:
-                    faults = group_data.loc[group_data[fault_col] == 1, 'esn_index']
+                    faults = group_data.loc[group_data[fault_col] == 1, 'Cycles_Since_New']
                     for f_idx in faults:
                         ax1.axvline(x=f_idx, color='red', linestyle=':', linewidth=2, alpha=0.8)
 
