@@ -1,0 +1,61 @@
+{
+    "title": "Preprocessing Pipeline",
+    "description": "Data cleaning, outlier removal, and signal smoothing.",
+    "groups": [
+        {
+            "title": "⚙️ Outlier Detection",
+            "params": [
+                {
+                    "id": "outlier_method",
+                    "label": "Method",
+                    "type": "select",
+                    "options": ["isoforest", "zscore", "iqr"],
+                    "default": "isoforest"
+                },
+                {
+                    "id": "outlier_threshold",
+                    "label": "Threshold",
+                    "type": "number",
+                    "step": 0.01,
+                    "default": 0.08
+                }
+            ]
+        },
+        {
+            "title": "🌊 Smoothing",
+            "params": [
+                {
+                    "id": "smoothing_method",
+                    "label": "Method",
+                    "type": "select",
+                    "options": ["rolling_mean", "exponential", "savitzky_golay"],
+                    "default": "rolling_mean"
+                },
+                {
+                    "id": "smoothing_window",
+                    "label": "Window Size",
+                    "type": "number",
+                    "default": 100
+                },
+                {
+                    "id": "smoothing_step",
+                    "label": "Step Size",
+                    "type": "number",
+                    "default": 25
+                }
+            ]
+        },
+        {
+            "title": "📋 Execution Steps",
+            "params": [
+                {
+                    "id": "steps",
+                    "label": "Steps to Run",
+                    "type": "multiselect",
+                    "options": ["preprocess", "aggregate", "save", "plot_agg", "plot_snap"],
+                    "default": ["preprocess", "aggregate", "save"]
+                }
+            ]
+        }
+    ]
+}

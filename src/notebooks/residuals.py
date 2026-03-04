@@ -15,72 +15,114 @@
 # ---
 
 # %%
-from numpy import sign
-from pyparsing import line
-from scipy.optimize import minimize
+import time
+from sklearn.neighbors import NearestNeighbors
+import tools
+from scipy import stats
+from scipy.optimize import differential_evolution
 from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import LinearRegression
-from sympy import O, deg
-import lightgbm as lgb
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pulp
-import scipy.optimize as optimize
-import scipy.stats as stats
+import lightgbm as lgbm
 
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
 # %load_ext autoreload
 # %autoreload 2
+
 from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 
 
 # %%
-def train_models(df, operating_vars, degradation_vars) -> dict[int, dict[str,LinearRegression]]:
+# CONSTANTS
+
+DATA_BASE_PATH = f"../../Data/"
+DATA_TESTING_PATH = f"{DATA_BASE_PATH}/PHM2025_test_data/"
+DATA_TRAINING_PATH = f"{DATA_BASE_PATH}/PHM2025_training_data/"
+DATA_VALIDATION_PATH = f"{DATA_BASE_PATH}/PHM2025_validation_data/"
+DATA_TRAINING_DATA = f"{DATA_TESTING_PATH}/training_data.csv"
+PLOT_PATH = f"./img/"
+
+OPERATING_VARS = [
+    "Sensed_Altitude",
+    "Sensed_Mach",
+    "Sensed_Pamb",
+    "Sensed_TAT",
+    "Sensed_VAFN",
+    "Sensed_VBV",
+    "Sensed_Fan_Speed",
+    "Sensed_Pt2",
+]
+
+SENSORS = tools.types.enums.SENSORS
+
+# considera solo le variabili presenti anche in test e val
+DEGRAD_VARS = [
+    s
+    for s in SENSORS
+    if s not in OPERATING_VARS and s != "Sensed_P25" and s != "Sensed_T5"
+]
+# scommentare se si vuole considerare anche i sensori non in test o valiation
+# DEGRAD_VARS = [s for s in u.SENSORS if s not in operating_vars]
+ALL_VARS = OPERATING_VARS + DEGRAD_VARS
+
+
+def DATA_TEST_DATA(num):
+    return f"{DATA_TESTING_PATH}/test_{num}.csv"
+
+
+def DATA_VALIDATION_DATA(num):
+    return f"{DATA_TESTING_PATH}/val_{num}.csv"
+
+
+# %%
+# FUNZIONI
+
+
+def train_models(
+    df, operating_vars, degradation_vars
+) -> dict[int, dict[str, LinearRegression]]:
     X_train = df[operating_vars]
     Y_train = df[degradation_vars]
     models = {}
-    for i in range(0,8):
+    for i in range(0, 8):
         X_temp = pd.DataFrame(np.roll(X_train, i, axis=1))
         models[i] = {}
         models[i]["model"] = train_model(X_temp, Y_train)
     return models
+
 
 def train_model(X_train, Y_train):
     model = LinearRegression()
     model.fit(X_train, Y_train)
     return model
 
+
+# Health Index
+
+
 def s_pred(s_o, model):
     return model.predict(s_o)
+
 
 def residual(s_d, s_o, model):
     return s_d - s_pred(s_o, model)
 
-def wind(y_p, y, a):
-    diff = y - y_p
-    num = np.where(diff >= 0, 2.0, 1.0)
-    if isinstance(y_p, pd.DataFrame) or isinstance(y_p, pd.Series):
-        y_p = y_p.values
-    return num / (1 + a * y_p)
-
-def TWE(y_p, y, a, b):
-    if isinstance(y_p, pd.DataFrame): y_p = y_p.values
-    weight = wind(y_p, y, a)
-    squared_error = (y - y_p) ** 2
-    return weight * squared_error * b
 
 def HI(T3_res, T45_res, alpha):
     return -alpha * T3_res - T45_res
+
 
 def minmax(df, column):
     col_min = df[column].min()
     col_max = df[column].max()
     return (df[column] - col_min) / (col_max - col_min)
-    
+
+
 def minmax_all(df):
     newdf = pd.DataFrame()
     for column in df.columns:
@@ -89,1054 +131,897 @@ def minmax_all(df):
         newdf[column] = (df[column] - col_min) / (col_max - col_min)
     return newdf
 
+
 def median_norm(df):
-    for i in range(0,7):
-        m = df.iloc[:,i].median()
-        df.iloc[:,i] -= m
+    for i in range(0, 7):
+        m = df.iloc[:, i].median()
+        df.iloc[:, i] -= m
     return df
 
+
 def objective(alpha, T3, T45, RUL):
-    hi = -alpha*T3 - T45
+    hi = -alpha * T3 - T45
     RUL = RUL.dropna()
     hi = hi.dropna()
-    corr = stats.pearsonr(RUL,hi)
+    corr = stats.pearsonr(RUL, hi)
     # return np.sqrt(np.mean((hi - RUL)**2)) + 1
-    return - corr[0]
+    return -corr[0]
+
 
 def objective_beta(params, T3, T45, RUL):
     alpha, beta = params
-    hi = -alpha*T3 - beta*T45
+    hi = -alpha * T3 - beta * T45
     RUL = RUL.dropna()
     hi = hi.dropna()
-    corr = stats.pearsonr(RUL,hi)
+    corr = stats.pearsonr(RUL, hi)
     # return np.sqrt(np.mean((hi - RUL)**2)) + 1
-    return - corr[0]
-
-def HIE(params, vars):
-    #return np.sum([-params[i]*vars.iloc[:,i] for i in range(0, 8)])
-    return vars.dot(-np.array(params))
-
-    
-def objective_experimental(params, vars, RUL):
-    hi = HIE(params, vars)
-    RUL = RUL.dropna()
-    corr = stats.pearsonr(RUL,hi)
     return -corr[0]
 
-def get_rolling_slope_intercept(series, window):
+
+def HIE(params, vars):
+    # return np.sum([-params[i]*vars.iloc[:,i] for i in range(0, 8)])
+    return vars.dot(-np.array(params))
+
+
+# TWE
+
+
+def wind(y_p, y, a):
+    diff = y - y_p
+    num = np.where(diff >= 0, 2.0, 1.0)
+    if isinstance(y_p, pd.DataFrame) or isinstance(y_p, pd.Series):
+        y_p = y_p.values
+    return num / (1 + a * y_p)
+
+
+def time_weighted_error(y_true, y_pred, alpha=0.02, beta=1):
+    """Returns the weighted squared error for an array of predictions."""
+
+    error = y_pred - y_true
+
+    weight = np.where(error >= 0, 2 / (1 + alpha * y_true), 1 / (1 + alpha * y_true))
+    return weight * (error**2) * beta
+
+
+def TWE(y_p, y, a=0.02, b=1):
+    # if isinstance(y_p, pd.DataFrame): y_p = y_p.values
+    # weight = wind(y_p, y, a)
+    # squared_error = (y - y_p) ** 2
+    # return weight * squared_error * b
+    return time_weighted_error(y_p, y, a, b)
+
+
+# TARGET FUNCTIONS
+
+
+def normalize(col):
+    col_min, col_max = col.min(), col.max()
+    col = (col - col_min) / (col_max - col_min)
+    col = col.to_frame()
+    return col
+
+
+def get_slope(y):
+    """Calcola la pendenza della retta di regressione per una finestra y"""
+    x = np.arange(len(y))
+    # Polyfit di grado 1 restituisce [pendenza, intercetta]
+    slope = np.polyfit(x, y, 1)[0]
+    return slope
+
+
+# %% [markdown]
+# # CONFIGURAZIONE
+
+
+# %% [markdown]
+# ## Caricamento dati
+# %%
+# TRAINING
+df = u.load_training()
+df = pp.remove_outliers(df, SENSORS)
+df = pp.missingfill(df).dropna()
+
+# VALIDATION
+no_concat = True
+dfv = u.load_validation(range(0, 48), no_concat=no_concat)
+if no_concat:
+    for i, f in enumerate(dfv):
+        dfv[i] = pp.remove_outliers(f, SENSORS)
+        dfv[i] = pp.missingfill(f, align_cols=["Snapshot", "Cycles"]).dropna()
+else:
+    dfv = pp.remove_outliers(dfv, SENSORS)
+    dfv = pp.missingfill(dfv, align_cols=["Snapshot", "Cycles"]).dropna()
+
+# TESTING
+no_concat = True
+dft = u.load_testing(range(0, 52), no_concat=no_concat)
+if no_concat:
+    for i, f in enumerate(dft):
+        dft[i] = pp.remove_outliers(f, SENSORS)
+        dft[i] = pp.missingfill(f, align_cols=["Snapshot", "Cycles"]).dropna()
+else:
+    dft = pp.remove_outliers(dft, SENSORS)
+    dft = pp.missingfill(dft, align_cols=["Snapshot", "Cycles"]).dropna()
+
+# %% [markdown]
+# # Regressione Lineare 1 - modello andamento nominale
+# %%
+
+# Quale motore nel training set verrà utilizzato come
+# validation (si usa tecnica Leave-One-Out)
+TESTING_ESN = 102
+
+# Si vuole comunque utilizzare questo motore training?
+INCLUDE_TEST = True
+
+# REGRESSORE LINEARE ANDAMENTO NOMINALE
+# indica quanti cicli devono essere considerati healthy nel training
+cycles_healthy = 7
+# se utilizzare il metodo di data augmentation oppure no
+augmented_data = False
+# se si, quanti dati aggiungere per ogni motore
+augmented_count = 100
+# se utilizzare SMOTE oppure no
+SMOTE = False
+
+# si vuole utilizzare la tecnica Ensamble?
+# questa tecnica effettuerà il training per ogni motore
+# e poi quando si utilizzarà il regressore verà fatta
+# una media dei valori di output di ogni regressore
+ENSAMBLE = True
+
+# se ENSAMBLE è attivo, questo permette di far utilizzare
+# il regressore dedicato al motore, se esiste, altrimenti
+# esegue ensamble
+SEPARATE_MODELS = True
+
+
+# Preparazione dati training
+if INCLUDE_TEST:
+    train_data = df.copy()
+else:
+    train_data = df[df["ESN"] != TESTING_ESN].copy()
+
+test_data = df[df["ESN"] == TESTING_ESN].copy()
+
+if cycles_healthy > 0:
+    train_data = (
+        train_data.groupby("ESN").head(cycles_healthy * 8).reset_index(drop=True).copy()
+    )
+else:
+    train_data = train_data.sort_values(["ESN", "Cycles_Since_New", "Snapshot"])
+
+if SMOTE:
+    newdf = []
+    for esn in train_data["ESN"].unique():
+        cur = train_data[train_data["ESN"] == esn]
+        nbrs = NearestNeighbors(n_neighbors=min(5, len(cur))).fit(cur[ALL_VARS])
+        dist, idx = nbrs.kneighbors(cur[ALL_VARS])
+        for i in range(augmented_count):
+            neighbor_offsets = np.random.randint(1, idx.shape[1], size=len(cur))
+            neighbor_indices = idx[np.arange(len(cur)), neighbor_offsets]
+            # SMOTE
+            diff = (
+                train_data.iloc[neighbor_indices][ALL_VARS].values
+                - cur[ALL_VARS].values
+            )
+            new_vals = cur[ALL_VARS].values + diff * np.random.rand(len(cur), 1)
+
+            aug_df = cur.copy()
+            aug_df[ALL_VARS] = new_vals
+            aug_df["ESN"] = f"aug_{i}_{esn}"
+
+            newdf.append(aug_df)
+    print("total data", len(newdf))
+
+    train_data = pd.concat([train_data] + newdf, ignore_index=True)
+    del newdf, aug_df, nbrs, idx, diff, new_vals
+
+if ENSAMBLE:
+    # con ESNAMBLE creiamo un modello per ogni ESN
+    # e poi, con la funziona residual, otterremo la media
+    # di tutti i valori predetti
+    models = {}
+    for esn in train_data["ESN"].unique():
+        start = time.time()
+        print(f"esn {esn}: ", end="")
+        mask = train_data["ESN"] == esn
+        X_train = train_data.loc[mask, OPERATING_VARS]
+        Y_train = train_data.loc[mask, DEGRAD_VARS]
+        model = train_model(X_train, Y_train)
+        end = time.time()
+        print(end - start)
+        models[str(esn)] = model
+    del model
+
+else:
+    # senza, invece, trainiamo un unico modello su tutti
+    # i valori del dataset
+    models = {}
+    if not INCLUDE_TEST:
+        mask = train_data["ESN"] != TESTING_ESN
+        X_train = train_data.loc[mask, OPERATING_VARS]
+        Y_train = train_data.loc[mask, DEGRAD_VARS]
+    else:
+        X_train = train_data[OPERATING_VARS]
+        Y_train = train_data[DEGRAD_VARS]
+    model = train_model(X_train, Y_train)
+    models["all"] = model
+
+
+def ensamble(data):
+    predictions = []
+    for model in models.values():
+      predictions.append(model.predict(data))
+    return np.mean(predictions, axis=0) # mean lo applichiamo indistintamente, nel secondo caso la media è pari al valore stesso
+
+def residual_regressor(data, esn=None):
+  if not SEPARATE_MODELS:
+    return ensamble(data)
+  else:
+    if esn:
+      try:
+        return models[str(esn)].predict(data)
+      except KeyError:
+        print("Non ci sono modelli addestrati per questo motore, usiamo ensamble generico")
+        return ensamble(data)
+    else:
+      print("Dagli un ESN porcone")
+
+
+# %% [markdown]
+# ### calcolo residui
+# crea funzione `residuals(df)` per ottenere i residui utilizzando il regressore
+# %%
+def _residuals(df):
+    res_list = []
+    for esn in df["ESN"].unique():
+        mask = df["ESN"] == esn
+        X_train = df.loc[mask, OPERATING_VARS]
+        Y_train = df.loc[mask, DEGRAD_VARS]
+        if SEPARATE_MODELS:
+            Y_pred = residual_regressor(X_train, esn)
+        else:
+            Y_pred = residual_regressor(X_train)
+        if Y_pred is None:
+            return
+        twe = np.mean(TWE(Y_pred, Y_train))
+        res_temp = Y_train - Y_pred
+        res_temp = pp.remove_outliers(res_temp, threshold=3)
+        res_temp.rolling(window=10, min_periods=1).median()
+        res_temp = res_temp.ffill()
+        res_temp = res_temp.bfill()
+        res_temp["ESN"] = esn
+        try:
+            res_temp["Cycles"] = df.loc[mask, "Cycles_Since_New"]
+        except:
+            res_temp["Cycles"] = df.loc[mask, "Cycles"]
+        res_list.append(res_temp)
+        print(f"TWE for {esn}: {twe}")
+    return pd.concat(res_list)
+
+def residuals(df):
+    if isinstance(df, list):
+        res_list = []
+        for i, d in enumerate(df):
+            res_list.append(_residuals(d))
+    else:
+        res_list = [_residuals(df)]
+    return pd.concat(res_list)
+
+print("training dataset")
+res_train = residuals(train_data)
+print("leave-one-out testing esn")
+res_test = residuals(test_data)
+
+print("DFT - testing dataframe")
+res_dft = residuals(dft)
+print("DFV - validation dataset")
+res_dfv = residuals(dfv)
+
+# %% [markdown]
+# # PLOTTING TRAINING
+# %%
+
+# nella visualizzazione, raggruppare i cicli per gruppi?
+GROUP_CYCLES = True
+# rimuovere outliers durante il plot?
+REMOVE_OUTLIERS = True
+# il metodo usato è "z-score"
+OUTLIERS_THRESHOLD = 3
+
+
+def plot(data, window, min):
+    fig, axs = plt.subplots(2, 3, figsize=(15, 8))
+    fig.suptitle(f"Residuals Comparison (Window: {window})", fontsize=16)
+    axs = axs.flatten()
+    for esn in data["ESN"].unique():
+        if "aug" in str(esn):
+            continue
+        res_temp = data[data["ESN"] == esn]
+        if GROUP_CYCLES:
+            res_temp = res_temp.groupby("Cycles").mean()
+        if REMOVE_OUTLIERS:
+            res_temp = pp.remove_outliers(res_temp, threshold=OUTLIERS_THRESHOLD)
+            res_temp = res_temp.ffill()
+            res_temp = res_temp.bfill()
+        for i, ax in enumerate(axs):
+            if i < len(DEGRAD_VARS):  # Safety check
+                d_var = DEGRAD_VARS[i]
+                t = res_temp[d_var]
+                degrad = (
+                    t.rolling(window=window, min_periods=min)
+                    .mean()
+                    .reset_index(drop=True)
+                )
+                ax.plot(degrad, linewidth=0.6, alpha=0.7, label=str(esn))
+                ax.set_title(d_var)
+                ax.grid(True, alpha=0.3)
+
+    axs[0].legend(fontsize="small", loc="upper right")
+    plt.tight_layout()
+    plt.show()
+
+
+plot(res_train, 1, 1)
+plot(res_test, 1, 1)
+# plot(residuals(dfv), 10, 1)
+# plot(residuals(dft), 10, 1)
+
+
+# %% [markdown]
+# # HPT e HPC
+# Ricerca del valore del coefficiente $\alpha$ in base alla correlazione
+# Se USE_ALL_VARS è attivo, i coefficienti sono $\alpha$ e $\beta$, altrimenti solo $\alpha$.
+# $\alpha$ è applicato a $\text{Sensed\_T3}$, mentre, se esiste, $\beta$ verrà applicato a $\text{Sensed\_T45}$
+# %%
+
+# se si vuole evitare la ricerca e usare parametri default
+DO_NOT_TRAIN_COEFS = True
+
+USE_ALL_VARS = False
+
+# Parametri di configurazione di differential_evolution()
+# quante volte deve iterare il processo di ricerca (ovvero dopo MAXITER spostamenti dei puntini,
+# il valore che più basso tra tutti i puntini sarà quello selezionato)
+MAXITER = 100
+# population size (l'algoritmo spawna questo numero di punti in giro
+# per la funzione e cerca il valore che minimizza la funzione obiettivo)
+POPSIZE = 500
+# Tolleranza
+TOL = 0.001
+
+# True: usa solo i motori indicati come train, False prende anche TESTING_ESN
+USE_ONLY_TRAIN = False
+
+# Preprocessare i dati?
+USE_CLEAN_DATA = True
+OUTLIERS_THRESHOLD = 3
+
+# Ogni motore avrà i proprio coefficienti?
+# se True, allora ogni ESN avrà la sua coppia $$\alpha_{\text{hpt}}$$ e $$\alpha_{\text{hpc}}
+SEPARATE_COEFS = True
+
+if USE_ONLY_TRAIN:
+    esn_data = df.copy().loc[df["ESN"] != TESTING_ESN]
+else:
+    esn_data = df.copy()
+
+res = residuals(esn_data)
+esn_data[DEGRAD_VARS] = res[DEGRAD_VARS]
+X_train = esn_data.copy()
+
+if USE_CLEAN_DATA:
+    X_train = X_train.groupby(["ESN", "Cycles_Since_New"], as_index=False).median()
+    X_train = pp.remove_outliers(X_train, threshold=OUTLIERS_THRESHOLD)
+    X_train = X_train.ffill()
+    X_train = X_train.bfill().dropna()
+
+coef_data = X_train.copy()
+
+# ESECUZIONE
+if not DO_NOT_TRAIN_COEFS:
+    target = None
+    target_vars = []
+    if not USE_ALL_VARS:
+        def _target_1(a, vars, RUL):
+            vars.dropna()
+            hi = HI(vars["Sensed_T3"], vars["Sensed_T45"], a)
+            if max(hi) == min(hi):
+                return 1.0
+            RUL = RUL.dropna()
+            corr = stats.pearsonr(RUL, hi)
+            return -corr[0]
+
+        target = _target_1
+        target_vars = ["Sensed_T45", "Sensed_T3"]
+        bounds = [(-1000, 1000)]
+    else:
+        def _target_2(params, vars, RUL):
+            hi = HIE(params, vars)
+            hi_min, hi_max = hi.min(), hi.max()
+            if hi_max == hi_min:
+                return 1.0
+            hi_norm = (hi - hi_min) / (hi_max - hi_min)
+            mse = np.mean((hi_norm - RUL) ** 2)
+            return mse
+
+        target = _target_2
+        target_vars = DEGRAD_VARS
+        bounds = [(-1000, 1000)] * 6
+
+    chpt = {}
+    chpc = {}
+
+    for esn in X_train["ESN"].unique():
+        print(esn)
+        tv = X_train.loc[X_train["ESN"] == esn, target_vars]
+        rul = X_train.loc[X_train["ESN"] == esn, "Cycles_to_HPT_SV"]
+        result_hpt = differential_evolution(
+            target,
+            bounds=bounds,
+            args=(tv, rul),
+            strategy="best1bin",
+            maxiter=MAXITER,  # generazioni
+            popsize=POPSIZE,
+            workers=-1,
+            tol=TOL,  # Tolleranza
+        )
+
+        chpt[str(esn)] = result_hpt.x
+
+        rul = X_train.loc[X_train["ESN"] == esn, "Cycles_to_HPC_SV"]
+        result_hpc = differential_evolution(
+            target,
+            bounds=bounds,
+            args=(tv, rul),
+            strategy="best1bin",
+            maxiter=MAXITER,  # generazioni
+            popsize=POPSIZE,
+            workers=-1,
+            tol=TOL,  # Tolleranza
+        )
+        chpc[str(esn)] = result_hpc.x
+
+    if not SEPARATE_COEFS:
+        chpt = np.median(np.array(chpt.values()))
+        chpc = np.median(np.array(chpc.values()))
+
+    print("\nCOEFFICIENTI MEDI FINALI (Training Set):")
+    print(f"HPT: {chpt.values}")
+    print(f"HPC: {chpc.values}")
+
+else:
+    chpt = {
+        "101": -2.23102809,
+        "102": -2.23102809,
+        "103": -2.23102809,
+        "104": -2.23102809,
+    }
+    chpc = {"101": 4.25050266, "102": 4.25050266, "103": 4.25050266, "104": 4.25050266}
+
+# %%
+# PLOTTING SU DATI DI TRAINING
+
+# alias per cambiare facilmente dataset
+DATA = coef_data.copy()
+
+hpt_limits, hpc_limits, ww_limits = [], [], []
+
+
+def calc_hi(sd):
+    if USE_ALL_VARS:
+        hi_hpt = HIE(ahpt, sd[target_vars])
+        hi_hpc = HIE(ahpc, sd[target_vars])
+    else:
+        hi_hpt = HI(sd["Sensed_T3"], sd["Sensed_T45"], ahpt)
+        hi_hpc = HI(sd["Sensed_T3"], sd["Sensed_T45"], ahpc)
+    return hi_hpt, hi_hpc
+
+
+for esn in DATA["ESN"].unique():
+    sd = DATA[DATA["ESN"] == esn].copy()
+
+    if SEPARATE_COEFS:
+        if isinstance(chpt, dict) and isinstance(chpc, dict):
+            ahpt = chpt[str(esn)]
+            ahpc = chpc[str(esn)]
+        else:
+            print("Zi che combini?")
+    else:
+        ahpt = chpt
+        ahpc = chpc
+
+    hi_hpt, hi_hpc = calc_hi(sd)
+
+    fig, axs = plt.subplots(1, 2, figsize=(30, 6))
+    fig.suptitle(f"Training: ESN - {esn}", fontsize=16)
+    axs[0].plot(hi_hpt, color="tab:blue", label="Health Index (HPT)")
+    axs[1].plot(hi_hpc, color="tab:green", label="Health Index (HPC)")
+    fig.tight_layout()
+    fig.show()
+
+# %% [markdown]
+# ### Applicazione del LightGBM per HPT per terzo ciclo di manutenzione + correzione il gap
+
+# %%
+# training lightgbm
+SLOPE_WINDOW = 10
+
+X_hpc_list, y_hpc_list = [], []
+
+def rolling_slope_intercept(series, window):
     slopes = []
     intercepts = []
+    series = np.asarray(series).flatten()
     for i in range(len(series)):
         if i < window:
             slopes.append(0)
             intercepts.append(0)
         else:
-            y = series.iloc[i-window:i].values
+            y = series[i - window : i]
             x = np.arange(window)
             # Fit polinomiale di grado 1 (retta) -> ritorna [slope, intercept]
             poly = np.polyfit(x, y, 1)
-            slopes.append(poly[0])
-            intercepts.append(poly[1])
+            slopes.append(float(poly[0]))
+            intercepts.append(float(poly[1]))
     return np.array(slopes), np.array(intercepts)
 
+for esn in DATA["ESN"].unique():
 
-# %%
-model_i = 0
-testing_esn = 102
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-# degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
+    if not INCLUDE_TEST and esn == TESTING_ESN:
+        continue
 
+    esn_data = DATA[DATA["ESN"] == esn].copy()
 
-# %%
-# caricamento e preprocessamento iniziale
-df = u.load_training()()
-df = pp.remove_outliers(df, u.SENSORS)
-# df = pp.missingfill(df).dropna()
-df = df.ffill()
-df = df.bfill()
+    hi_hpt, hi_hpc = calc_hi(esn_data)
 
-# Per fare il training direttamente con gli snapshot di un ciclo collassati
-# managed_cols = set(degradation_vars) | set(operating_vars)
-# other_cols = [col for col in df.columns if col not in managed_cols]
-# agg_logic = {col: 'median' for col in degradation_vars}
-# agg_logic.update({col: 'median' for col in operating_vars})
-# agg_logic.update({col: 'first' for col in other_cols})
+    feat_slope_hpc, feat_intercept_hpc = rolling_slope_intercept(
+        hi_hpc, SLOPE_WINDOW
+    )
 
-plt.figure(figsize=(25, 12))
-df = df.groupby(["ESN", "Cycles_Since_New"]).median().reset_index().dropna()
-for i, testing_esn in enumerate([101,102,103,104]):
-    test_data = df[df["ESN"] == testing_esn].reset_index()
-    X_test = test_data[operating_vars]
-    Y_test = test_data[degradation_vars]
+    t = (esn_data["Cumulative_HPC_SVs"] == 2).astype(int)
 
-    train_data = df[df["ESN"] != testing_esn].reset_index()
-    X_train = train_data[operating_vars]
-    Y_train = train_data[degradation_vars]
+    df_features = pd.DataFrame(
+        {
+            "HI": hi_hpc,
+            "Slope": feat_slope_hpc,
+            "Cycles_Accumulated": np.arange(len(hi_hpc)),  # Cicli passati
+            "HI_Rolling_Mean": pd.Series(hi_hpc).rolling(50).mean().bfill(),
+        }
+    )
 
-    # training modelli con shift
-    # models = train_models(df, operating_vars, degradation_vars)
-    # selezione modello
-    # model = models[model_i]['model']
-    # # %store model
+    valid_idx = df_features.dropna().index
+    X_hpc_list.append(df_features.loc[valid_idx])
+    y_hpc_list.append(t.loc[valid_idx])
 
-    # training modello unico
-    model = train_model(X_train, Y_train)
-    # %store model
+X_train_hpc = pd.concat(X_hpc_list, ignore_index=True)
+y_train_hpc = np.concatenate(y_hpc_list)
 
-
-    # predict dei valori
-    Y_pred = model.predict(np.roll(X_test, model_i, axis=1))
-    # Y_pred = model.predict(X_test)
-    # residui
-    res = Y_test - Y_pred
-
-
-    # integrazione residui sul dataset originale
-    # res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-
-    ## QUESTO è il plot quello che tipo deve sembrare quello dei koreani
-    # fig, axs = plt.subplots(2,3, figsize=(15,8))
-    # for i, ax in enumerate(axs.flat):
-    #     if isinstance(ax, plt.Axes):
-    #         ax.plot(res.iloc[:,i], linewidth=1)
-    #         ax.set_title(degradation_vars[i])
-    #         ax.set_ylabel("Residuals")
-    #         ax.set_xlabel(f"{res.iloc[:,i].index.name}_res")
-    #         ax.grid()
-    # fig.subplots_adjust(hspace=0.4, wspace=0.4)
-    # fig.show()
-    ## finisce qua
-
-    # finestra smoothing dei residui
-    window = 30
-    step = 1
-
-    res[degradation_vars] = res[degradation_vars].rolling(window, step).median()
-    res = median_norm(res)
-    #for var in degradation_vars:
-        #res[var] = minmax(res, var)
-    res = res.dropna()
-    # %store res
-
-    hpt_rul = res["Cycles_to_HPT_SV"].reset_index(drop=True)
-    hpc_rul = res["Cycles_to_HPC_SV"].reset_index(drop=True)
-    ww_rul = res["Cycles_to_WW"].reset_index(drop=True)
-    T3_res = res["Sensed_T3"]
-    T45_res = res["Sensed_T45"]
-
-    plt.subplot(2, 4, 1+i)
-    plt.plot(T3_res)
-    plt.subplot(2, 4, 5+i)
-    plt.plot(T45_res)
-
-plt.tight_layout()
-plt.show()
-len(degradation_vars)
-
-# %% [markdown]
-# # Ricerca di a_hpt e a_hpc LOCALI
-
-# %%
-a_hpt = 1000
-a_hpc = -1000
-
-## Vincoli sulle variabili
-bounds = [
-    (None, None),
-    (0, None)
-]
-
-result_hpt = minimize(
-    objective, 
-    x0=a_hpt, 
-    args=(T3_res, T45_res, hpt_rul),
-    method='Nelder-Mead'
+print("Training LGBM Classifier per identificazione Terzo Ciclo...")
+lgbm_classifier_hpc = lgbm.LGBMClassifier(
+    n_estimators=2000, learning_rate=0.03, objective="binary", importance_type="gain"
 )
 
-result_hpc = minimize(
-    objective, 
-    x0=a_hpc, 
-    args=(T3_res, T45_res, hpc_rul),
-    method='Nelder-Mead'
-)
-
-a_hpt = result_hpt.x[0]
-a_hpc = result_hpc.x[0]
-
-print(f"alpha_hpt:{a_hpt}")
-print(f"alpha_hpt:{a_hpc}")
-
-# %% [markdown]
-# # Ricerca di a_hpt/b_hpt e a_hpc/b_hpc GLOBALI
-
-# %%
-from scipy.optimize import differential_evolution
-
-bounds = [
-    (-1000, 1000),  # Alpha
-    (-1000, 1000),  # Beta
-]
-
-result_hpt = differential_evolution(
-    objective_beta,      
-    bounds=bounds,           
-    args=(T3_res, T45_res, hpt_rul), 
-    strategy='best1bin',     
-    maxiter=200,                # generazioni
-    popsize=500,                
-    workers=-1,
-    tol=0,                      # Tolleranza 
-)
-
-result_hpc = differential_evolution(
-    objective_beta,      
-    bounds=bounds,           
-    args=(T3_res, T45_res, hpc_rul), 
-    strategy='best1bin',     
-    maxiter=200,                # generazioni 
-    popsize=500,              
-    workers=-1,
-    tol=0,                      # Tolleranza
-)
-
-a_hpt, b_hpt = result_hpt.x
-print(f"MIGLIOR RISULTATO TROVATO:")
-print(f"Alpha: {a_hpt}")
-print(f"Beta: {b_hpt}")
-
-a_hpc, b_hpc = result_hpc.x
-print(f"MIGLIOR RISULTATO TROVATO:")
-print(f"Alpha: {a_hpc}")
-print(f"Beta: {b_hpc}")
-
-# %% [markdown]
-# # Ricerca di a,b,c,d,e,f,g globali combinazione lineare di tutti i sensori
-
-# %%
-from scipy.optimize import differential_evolution
-
-bounds = [
-    (-1000, 1000),  # a
-    (-1000, 1000),  # b
-    (-1000, 1000),  # c
-    (-1000, 1000),  # d
-    (-1000, 1000),  # e
-    (-1000, 1000),  # f
-]
-
-
-
-result_hpt = differential_evolution(
-    objective_experimental,      
-    bounds=bounds,           
-    args=(res[degradation_vars], hpt_rul), 
-    strategy='best1bin',     
-    maxiter=100,                # generazioni
-    popsize=100,                
-    workers=-1,
-    tol=0,                      # Tolleranza 
-)
-
-result_hpc = differential_evolution(
-    objective_experimental,      
-    bounds=bounds,           
-    args=(res[degradation_vars], hpc_rul), 
-    strategy='best1bin',     
-    maxiter=100,                # generazioni 
-    popsize=100,              
-    workers=-1,
-    tol=0,                      # Tolleranza
-)
-
-result_ww = differential_evolution(
-    objective_experimental,      
-    bounds=bounds,           
-    args=(res[degradation_vars], ww_rul), 
-    strategy='best1bin',     
-    maxiter=100,                # generazioni 
-    popsize=100,              
-    workers=-1,
-    tol=0,                      # Tolleranza
-)
-
-# %store result_hpt
-# %store result_hpc
-# %store result_ww
-
-coefs_hpt = result_hpt.x
-print(f"MIGLIOR RISULTATO TROVATO:")
-for c in coefs_hpt:
-    print(f"{c}")
-
-
-coefs_hpc = result_hpc.x
-print(f"MIGLIOR RISULTATO TROVATO:")
-for c in coefs_hpc:
-    print(f"{c}")
-
-coefs_ww = result_ww.x
-print(f"MIGLIOR RISULTATO TROVATO:")
-for c in coefs_ww:
-    print(f"{c}")
-
-# %store coefs_hpt
-# %store coefs_hpc
-# %store coefs_ww
+lgbm_classifier_hpc.fit(X_train_hpc, y_train_hpc)
 
 
 # %%
-# oppure avviare semplicemente questo blocco
+# TRAINING DEL REGRESSORE LINEARE PER LA CORREZIONE DEL GAP
 
-coefs_hpt = (102.54752751902083,
-            -12.215920703632944,
-            -13.937522163047133,
-            -4.187395005088061,
-            50.41175875590375,
-            47.642362206135715,
-            -925.3978926377761,
-            -13.188043715234654)
+X_hpc_list, y_hpc_list = [], []
 
-coefs_hpc = (363.09492555179804,
-            2.0186697716587463,
-            13.743038965485157,
-            11.855221907006188,
-            69.72211072964963,
-            0.42476560122623985,
-            -989.8022299435106,
-            28.63715373059266)
+# Preprocessing per TRAINING del modello
+if not INCLUDE_TEST:
+    esn_excluded = TESTING_ESN
+for esn in DATA["ESN"].unique():
+    if esn == esn_excluded:
+        continue
+    esn_data = DATA[DATA["ESN"] == esn].reset_index().copy()
 
-coefs_ww = ( 850.7167357577274,
-            -15.072134101084401,
-            -24.57278901752793,
-            102.1439502693563,
-            -119.99243468799672,
-            11.396869998772502,
-            -917.4479008347435,
-            -24.27692144851878)
+    mask = esn_data["Cumulative_HPC_SVs"] == 2
 
-# %%
-# PLOTTING RISULTATO
-hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-hi_ww  = HIE(coefs_ww, res[degradation_vars])
+    # Calcolo degli health index
+    hi_hpt, hi_hpc = calc_hi(esn_data)
 
-fig, axs = plt.subplots(1, 3, figsize=(30, 6))
-axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-ax0_rul = axs[0].twinx()
-ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-ax1_rul = axs[1].twinx()
-ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-axs[2].plot(hi_ww, color='tab:green', label='Health Index (HPC)')
-ax2_rul = axs[2].twinx()
-ax2_rul.plot(ww_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-fig.tight_layout()
-fig.show()
+    # Calcolo errore gap
+    gap_true_hpc = esn_data["Cycles_to_HPC_SV"] - hi_hpc
+
+    window_size = 10
+
+    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(
+        hi_hpc, window_size
+    )
+
+    indices = np.where(mask)[0]
+
+    # Accumulo dati HPC
+    X_hpc_list.append(
+        pd.DataFrame(
+            {
+                "HI": np.asarray(hi_hpc).flatten(),
+                "Slope": feat_slope_hpc,
+                "Cycles_Accumulated": np.arange(len(hi_hpc)),
+                "Intercept": feat_intercept_hpc,
+            }
+        )
+        .iloc[indices]
+        .dropna()
+    )
+    y_hpc_list.append(gap_true_hpc[indices])
+
+X_train_hpc = pd.concat(X_hpc_list, ignore_index=True)
+y_train_hpc = np.concatenate(y_hpc_list)
+
+gap_regr_hpc = LinearRegression()
+
+# TRAINING del regressore lineare
+gap_regr_hpc.fit(X_train_hpc, y_train_hpc)
 
 
-# %% [markdown]
-# # Plotting dei primi due metodi
-
-# %%
-#hi_hpt = HI(T3_res, T45_res, a_hpt)
-#hi_hpt = -a_hpt*T3_res - b_hpt*T45_res
-hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-#hi_hpc = HI(T3_res, T45_res, a_hpc)
-#hi_hpc = -a_hpc*T3_res - b_hpc*T45_res
-hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-# error_hpt = np.sum(hi_hpt - hpt_rul)
-# error_hpc = np.sum(hi_hpc - hpc_rul)
-
-fig, axs = plt.subplots(1, 2, figsize=(16, 6))
-axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-ax0_rul = axs[0].twinx()
-ax0_rul.plot(hpt_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-ax1_rul = axs[1].twinx()
-ax1_rul.plot(hpc_rul, color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-fig.tight_layout()
-fig.show()
 
 
 # %%
-# col = 1
-# plt.figure()
-# plt.plot(test_data["Cycles_Since_New"],Y_pred[:,col], linewidth=0.5, label="Predicted")
-# plt.plot(test_data["Cycles_Since_New"],Y_test.iloc[:,col], linewidth=0.5, label="Observed")
-# plt.show()
-
-# a = 0.01
-# t3_res = np.array(df["T3_res"])
-# t45_res = np.array(df["T45_res"])
-# hi_target = -a * t3_res - t45_res
-# print(df)
-# plt.figure()
-# plt.plot(df["Cycles_since_new"], hi_target)
-# plt.show() 
-
-# %% [markdown]
-# ### Classificazione dell'errore con LightGBM per HPC, HPT e WW
-
-# %%
-hi_hpc = HIE(coefs_hpc, res[degradation_vars]) 
-hi_hpt = HIE(coefs_hpt, res[degradation_vars]) 
-hi_ww = HIE(coefs_ww, res[degradation_vars]) 
-
-regr_hpc = LinearRegression()
-regr_hpt = LinearRegression()
-regr_ww = LinearRegression()
-
-X_base_hpc = hi_hpc.values.reshape(-1,1)
-X_base_hpt = hi_hpt.values.reshape(-1,1)
-X_base_ww = hi_ww.values.reshape(-1,1)
-
-regr_hpc.fit(X_base_hpc, hpc_rul)
-regr_hpt.fit(X_base_hpt, hpt_rul)
-regr_ww.fit(X_base_ww, ww_rul)
-
-pred_rul_hpc = regr_hpc.predict(X_base_hpc)
-pred_rul_hpt = regr_hpc.predict(X_base_hpt)
-pred_rul_ww = regr_hpc.predict(X_base_ww)
-
-gap_true_hpc = hpc_rul - pred_rul_hpc
-gap_true_hpt = hpt_rul - pred_rul_hpt
-gap_true_ww = ww_rul - pred_rul_ww
-
-window_size = 300
-
-feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-
-X_lgbm_hpc = pd.DataFrame({
-    'HI': hi_hpc.values,                # Valore attuale HI
-    'Slope': feat_slope_hpc,            # Pendenza locale
-    'Intercept': feat_intercept_hpc     # Intercetta locale
-})
-
-X_lgbm_hpt = pd.DataFrame({
-    'HI': hi_hpt.values,                # Valore attuale HI
-    'Slope': feat_slope_hpt,            # Pendenza locale
-    'Intercept': feat_intercept_hpt     # Intercetta locale
-})
-
-X_lgbm_ww = pd.DataFrame({
-    'HI': hi_ww.values,                 # Valore attuale HI
-    'Slope': feat_slope_ww,             # Pendenza locale
-    'Intercept': feat_intercept_ww      # Intercetta locale
-})
-
-
-mask = X_lgbm_hpc['Slope'] != 0
-X_lgbm_hpc = X_lgbm_hpc[mask]
-gap_true_hpc = gap_true_hpc[mask]
-base_pred_hpc = pred_rul_hpc[mask]
-rul_target_hpc = hpc_rul[mask]
-
-mask = X_lgbm_hpt['Slope'] != 0
-X_lgbm_hpt = X_lgbm_hpc[mask]
-gap_true_hpt = gap_true_hpt[mask]
-base_pred_hpt = pred_rul_hpt[mask]
-rul_target_hpt = hpt_rul[mask]
-
-mask = X_lgbm_ww['Slope'] != 0
-X_lgbm_ww = X_lgbm_ww[mask]
-gap_true_ww = gap_true_ww[mask]
-base_pred_ww = pred_rul_ww[mask]
-rul_target_ww = ww_rul[mask]
-
-
-lgbm_hpc = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_hpc.fit(X_lgbm_hpc, gap_true_hpc)
-# %store lgbm_hpc
-
-lgbm_hpt = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_hpt.fit(X_lgbm_hpt, gap_true_hpt)
-# %store lgbm_hpt
-
-lgbm_ww = lgb.LGBMRegressor(n_estimators=2000, learning_rate=0.05)
-lgbm_ww.fit(X_lgbm_ww, gap_true_ww)
-# %store lgbm_ww
-
-# %%
-# HPC
-pred_gap = lgbm_hpc.predict(X_lgbm_hpc)
-pred_rul = base_pred_hpc + pred_gap
-
-plt.figure(figsize=(10, 6))
-plt.scatter(gap_true_hpc, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
-min_val = min(gap_true_hpc.min(), pred_gap.min())
-max_val = max(gap_true_hpc.max(), pred_gap.max())
-plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
-
-plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
-plt.xlabel('True Gap Difference')
-plt.ylabel('Predicted Gap Difference')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-plt.figure(figsize=(15, 6))
-
-plt.plot(rul_target_hpc.index, rul_target_hpc, 'k--', linewidth=2, label='True RUL')
-plt.plot(rul_target_hpc.index, base_pred_hpc, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
-plt.plot(rul_target_hpc.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
-
-plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
-plt.xlabel('Cycles')
-plt.ylabel('RUL')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# HPT
-pred_gap = lgbm_hpt.predict(X_lgbm_hpt)
-pred_rul = base_pred_hpt + pred_gap
-
-plt.figure(figsize=(10, 6))
-plt.scatter(gap_true_hpt, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
-min_val = min(gap_true_hpt.min(), pred_gap.min())
-max_val = max(gap_true_hpt.max(), pred_gap.max())
-plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
-
-plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
-plt.xlabel('True Gap Difference')
-plt.ylabel('Predicted Gap Difference')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-plt.figure(figsize=(15, 6))
-
-plt.plot(rul_target_hpt.index, rul_target_hpt, 'k--', linewidth=2, label='True RUL')
-plt.plot(rul_target_hpt.index, base_pred_hpt, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
-plt.plot(rul_target_hpt.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
-
-plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
-plt.xlabel('Cycles')
-plt.ylabel('RUL')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-# WW
-pred_gap = lgbm_ww.predict(X_lgbm_ww)
-pred_rul = base_pred_ww + pred_gap
-
-plt.figure(figsize=(10, 6))
-plt.scatter(gap_true_ww, pred_gap, alpha=0.6, s=15, color='blue', label='Predicted vs True')
-min_val = min(gap_true_ww.min(), pred_gap.min())
-max_val = max(gap_true_ww.max(), pred_gap.max())
-plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='-', label='Perfect Prediction')
-
-plt.title(f'Figure 5 Replication: Gap Prediction Accuracy\n(Correlation between Slope/Intercept and Prediction Error)')
-plt.xlabel('True Gap Difference')
-plt.ylabel('Predicted Gap Difference')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-plt.figure(figsize=(30, 6))
-
-plt.plot(rul_target_ww.index, rul_target_ww, 'k--', linewidth=2, label='True RUL')
-plt.plot(rul_target_ww.index, base_pred_ww, color='tab:red', alpha=0.6, linestyle='-.', label='Linear Prediction (Base)')
-plt.plot(rul_target_ww.index, pred_rul, color='tab:green', linewidth=2, label='LightGBM Corrected Prediction')
-
-plt.title(f'Impact of LightGBM Correction on RUL Prediction (ESN {testing_esn})')
-plt.xlabel('Cycles')
-plt.ylabel('RUL')
-plt.legend()
-plt.grid(True)
-plt.show()
-
-
-# %% [markdown]
-# # Testing
-
-# %%
-def time_weighted_error(y_true, y_pred, alpha=0.02, beta=1):
-  """Returns the weighted squared error for an array of predictions."""
-
-  error = y_pred-y_true
-
-  weight = np.where(
-  error >= 0,
-  2 / (1 + alpha * y_true),
-  1 / (1 + alpha * y_true)
-  )
-  return weight * (error ** 2)*beta
-
-def score_submitted_result(df_true, df_pred):
-  '''Calculate the score for a single team's submission'''
-
-  # Extract the targets
-  true_WW = df_true.Cycles_to_WW.values
-  true_HPC = df_true.Cycles_to_HPC_SV.values
-  true_HPT = df_true.Cycles_to_HPT_SV.values
-
-  pred_WW = df_pred.Cycles_to_WW.values
-  pred_HPC = df_pred.Cycles_to_HPC_SV.values
-  pred_HPT = df_pred.Cycles_to_HPT_SV.values
-
-  # WW score
-  alpha = 0.01
-  beta = 1/float(max(true_WW))
-  score_WW = time_weighted_error(true_WW, pred_WW, alpha, beta)
-  # Take the mean of the array
-  score_WW = np.mean(score_WW)
-
-  # HPC score
-  alpha = 0.01
-  beta = 2/float(max(true_HPC))
-  score_HPC = time_weighted_error(true_HPC, pred_HPC, alpha, beta)
-  # Take the mean of the array
-  score_HPC = np.mean(score_HPC)
-
-  # HTC score
-  alpha = 0.01
-  beta = 2/float(max(true_HPT))
-  score_HPT = time_weighted_error(true_HPT, pred_HPT, alpha, beta)
-  # Take the mean of the array
-  score_HPT = np.mean(score_HPT)
-
-  # Average score
-  score = np.mean([score_WW, score_HPC, score_HPT])
-
-  return score
-
-
-# %%
-# coefs_hpt
-# coefs_hpc
-# coefs_ww
-
-model_i = 0
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars and s != "Sensed_P25" and s != "Sensed_T5"]
-
-df = u.load_testing(10)
-# df = u.load_training()()
-print(df.shape)
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-df = df.ffill()
-df = df.bfill()
-# model = models[model_i]['model']
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index()
-    test_data = test_data.groupby(["Cycles"]).median().reset_index()
-
-    # for var in operating_vars + degradation_vars:
-    #     test_data[var] = minmax(test_data, var)
-
-    rolling_size = 30
-    step = 2
-    X_test = test_data[operating_vars]#.rolling(rolling_size, step=step).median().dropna()
-    Y_test = test_data[degradation_vars]#.rolling(rolling_size, step=step).median().dropna()
-    Y_pred = model.predict(X_test)
-
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-
-    engines[eng]["X_test"] = X_test.copy()
-    engines[eng]["Y_test"] = Y_test.copy()
-    engines[eng]["Y_pred"] = Y_pred.copy()
-    engines[eng]["res"] = res.copy()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww  = HIE(coefs_ww, res[degradation_vars])
-
-    engines[eng]["hi_hpt"] = hi_hpt
-    engines[eng]["hi_hpc"] = hi_hpc
-    engines[eng]["hi_ww"] = hi_ww
-
-    window_size = 30
-    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    X_lgbm_hpc = pd.DataFrame({
-        'HI': hi_hpc.values,                # Valore attuale HI
-        'Slope': feat_slope_hpc,            # Pendenza locale
-        'Intercept': feat_intercept_hpc     # Intercetta locale
-    })
-    print(X_lgbm_hpc)
-    # gap_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    gap_hpc = lgbm_hpc.predict(X_lgbm_hpc)
-    print(gap_hpc)
-    pred_hpc = regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    rul_hpc = gap_hpc + pred_hpc.flatten()
-
-    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-    X_lgbm_hpt = pd.DataFrame({
-        'HI': hi_hpt.values,                # Valore attuale HI
-        'Slope': feat_slope_hpt,            # Pendenza locale
-        'Intercept': feat_intercept_hpt     # Intercetta locale
-    })
-    # gap_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    gap_hpt = lgbm_hpt.predict(X_lgbm_hpt)
-    pred_hpt = regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    rul_hpt = gap_hpt + pred_hpt.flatten()
-
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values,                 # Valore attuale HI
-        'Slope': feat_slope_ww,             # Pendenza locale
-        'Intercept': feat_intercept_ww      # Intercetta locale
-    })
-    # gap_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
-    gap_ww = lgbm_ww.predict(X_lgbm_ww)
-    pred_ww = regr_ww.predict(hi_ww.values.reshape(-1,1))
-    rul_ww = gap_ww + pred_ww.flatten()
-
-    window_size = 1
-    rul_hpc = np.lib.stride_tricks.sliding_window_view(rul_hpc, window_shape=window_size).mean(axis=1)
-    rul_hpt = np.lib.stride_tricks.sliding_window_view(rul_hpt, window_shape=window_size).mean(axis=1)
-    rul_ww = np.lib.stride_tricks.sliding_window_view(rul_ww, window_shape=20).mean(axis=1)
-
-    plt.subplots(1,3, figsize=(25,8))
-    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
-    plt.subplot(1,3,1)
-    plt.plot(rul_hpc, label='LGBM Corrected Pred HPC', color='orange')
-    plt.legend()
-    plt.subplot(1,3,2)
-    plt.plot(rul_hpt, label='LGBM Corrected Pred HPT', color='orange')
-    plt.subplot(1,3,3)
-    plt.plot(rul_ww, label='LGBM Corrected Pred WW', color='orange')
+# TEST DI CLASSIFICATORE E REGRESSORE SUI DATI DI TRAINING
+
+if not INCLUDE_TEST:
+    esn_excluded = TESTING_ESN
+for esn in DATA["ESN"].unique():
+    if esn == esn_excluded:
+        continue
+    esn_data = DATA[DATA["ESN"] == esn].reset_index().copy()
+
+    # Calcolo degli health index
+    hi_hpt, hi_hpc = calc_hi(esn_data)
+
+    final_output_hpc = hi_hpc.copy()
+
+    feat_slope_hpc, feat_intercept_hpc = rolling_slope_intercept(
+        hi_hpc, window_size
+    )
+
+    X_test_esn = pd.DataFrame(
+        {
+            "HI": hi_hpc,
+            "Slope": feat_slope_hpc,
+            "Cycles_Accumulated": np.arange(len(hi_hpc)),  # Cicli passati
+            "HI_Rolling_Mean": pd.Series(hi_hpc).rolling(50).mean().bfill(),
+        }
+    )
+
+    X_test_esn = X_test_esn.ffill().bfill().fillna(0)
+
+    # PREDIZIONE
+    pred_class = lgbm_classifier_hpc.predict(X_test_esn)
+
+    mask_real = esn_data["Cumulative_HPC_SVs"] == 2
+    mask_pred = pred_class == 1
+
+    if mask_pred.any():
+        X_reg_input = pd.DataFrame(
+            {
+                "HI": hi_hpc,
+                "Slope": feat_slope_hpc,
+                "Cycles_Accumulated": np.arange(len(hi_hpc)),
+                "Intercept": feat_intercept_hpc,
+            }
+        ).loc[mask_pred]
+        pred_gap = gap_regr_hpc.predict(X_reg_input)
+        final_output_hpc[mask_pred] = hi_hpc[mask_pred] + pred_gap.flatten()
+        final_output_hpc = (
+            pd.Series(final_output_hpc).rolling(window=50, min_periods=1).mean()
+        )
+
+    # Plot
+    fig, ax1 = plt.subplots(figsize=(20, 6))
+    ax1.plot(
+        esn_data["Cycles_to_HPC_SV"],
+        color="tab:orange",
+        linestyle="--",
+        label="HPC RUL",
+        alpha=0.8,
+    )
+    ax2 = ax1.twinx()
+    ax2.plot(final_output_hpc, color="tab:red", label="HI corrertto", linewidth=2)
+    ax2.fill_between(
+        range(len(pred_class)),
+        0,
+        1,
+        where=mask_pred,
+        color="red",
+        alpha=0.05,
+        label="Predizione: Terzo Ciclo",
+    )
+    ax2.fill_between(
+        range(len(mask_real)),
+        0,
+        0.05,
+        where=mask_real,
+        color="green",
+        alpha=0.5,
+        label="Ground Truth (SV=2)",
+    )
+    ax1.set_ylabel("Value")
+    ax1.set_xlabel("Cycles")
+    plt.title(f"Training ESN {esn} - LightGBM + gap correction")
+    ax1.legend(loc="upper left")
+    ax1.grid(True, alpha=0.2)
     plt.show()
 
-# %store engines
 
-
-# %%
-# "DEBUGGING"
-# Previsioni solo con regressione lineare
-model_i = 0
-model = models[model_i]['model']
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
-
-
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-
-# Per lavorare con i dati a livello di ciclo
-managed_cols = set(degradation_vars) | set(operating_vars)
-other_cols = [col for col in df.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
-agg_logic.update({col: 'median' for col in operating_vars})
-agg_logic.update({col: 'first' for col in other_cols})
-
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index().copy()
-    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
-    rolling_size = 300
-    step = 1
-    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_pred = model.predict(X_test)
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-    window = 370
-    step = 1
-    res = res.rolling(window, step).mean()
-    res = median_norm(res)
-    res = res.dropna()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww = HIE(coefs_ww, res[degradation_vars])
-
-
-    fig, axs = plt.subplots(1, 3, figsize=(16, 6))
-    axs[0].plot(hi_hpt, color='tab:blue', label='Health Index (HPT)')
-    ax0_rul = axs[0].twinx()
-    ax0_rul.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    axs[1].plot(hi_hpc, color='tab:green', label='Health Index (HPC)')
-    ax1_rul = axs[1].twinx()
-    ax1_rul.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    axs[2].plot(hi_ww, color='tab:green', label='Health Index (WW)')
-    ax2_rul = axs[2].twinx()
-    ax2_rul.plot(test_data["Cycles_to_WW"].reset_index(drop=True), color='tab:orange', linewidth=2, linestyle='--', label='RUL Reale')
-    fig.tight_layout()
-    fig.show()
+# %% [markdown]
+# # WW
+# per il ww bisogna fare una cosa diversa. Intanto bisogna "normalizzare" la salita, ovvero eliminare gli effetti delle manutenzioni hpc e hpt sui residui di T45_res
 
 # %%
-# Prova di Agni
-
-model_i = 0
-model = models[model_i]['model']
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+# fancy, sofitsticato
+from math import e
 
 
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
+def remove_effect(df, col):
+    df = df.sort_values([col, "Cycles_Since_New", "Snapshot"])
+    df = pp.remove_outliers(df, threshold=2.6, sensor_cols=["Sensed_T45"])
+    df = df.groupby(["Cycles_Since_New"], as_index=False).median()
+    grp_stats = df.groupby(col)["Sensed_T45"].agg(["first", "last"])
+    grp_stats = grp_stats.sort_index()
+    grp_stats["prev_last"] = grp_stats["last"].shift(1)
+    grp_stats["jump"] = grp_stats["first"] - grp_stats["prev_last"]
+    grp_stats["jump"] = grp_stats["jump"].fillna(0)
+    grp_stats["cumulative_offset"] = grp_stats["jump"].cumsum()
+    offset_map = grp_stats["cumulative_offset"].to_dict()
+    df["Sensed_T45"] = df["Sensed_T45"] - df[col].map(offset_map)
+    return df
 
-
-# Per lavorare con i dati a livello di ciclo
-managed_cols = set(degradation_vars) | set(operating_vars)
-other_cols = [col for col in df.columns if col not in managed_cols]
-agg_logic = {col: 'median' for col in degradation_vars}
-agg_logic.update({col: 'median' for col in operating_vars})
-agg_logic.update({col: 'first' for col in other_cols})
-
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index().copy()
-    # test_data = test_data.groupby('Cycles_Since_New', as_index=False).agg(agg_logic).reset_index(drop=True)
-    # test_data = test_data.groupby(["ESN", "Snapshot"]).median().reset_index()
-    rolling_size = 370
-    step = 1
-    X_test = test_data[operating_vars] .rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_pred = model.predict(X_test)
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS, threshold=3)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-    window = 250
-    step = 1
-    res = res.rolling(window, step).mean()
-    res = median_norm(res)
-    res = res.dropna()
-
-    engines[eng]["X_test"] = X_test.copy()
-    engines[eng]["Y_test"] = Y_test.copy()
-    engines[eng]["Y_pred"] = Y_pred.copy()
-    engines[eng]["res"] = res.copy()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww  = HIE(coefs_ww, res[degradation_vars])
-
-    engines[eng]["hi_hpt"] = hi_hpt
-    engines[eng]["hi_hpc"] = hi_hpc
-    engines[eng]["hi_ww"] = hi_ww
-
-    X_base_hpc = hi_hpc.values.reshape(-1,1)
-    X_base_hpt = hi_hpt.values.reshape(-1,1)
-    X_base_ww = hi_ww.values.reshape(-1,1)
-
-    # gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-
-    # HPC 
-    base_pred_hpc = regr_hpc.predict(X_base_hpc)
-    window_size = 800
-    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    X_lgbm_hpc = pd.DataFrame({
-        'HI': hi_hpc.values,                # Valore attuale HI
-        'Slope': feat_slope_hpc,            # Pendenza locale
-        'Intercept': feat_intercept_hpc     # Intercetta locale
-    })
-    # mask = X_lgbm_hpc['Slope'] != 0
-    # X_lgbm_hpc = X_lgbm_hpc[mask]
-    # base_pred_hpc = base_pred_hpc[mask]
-    gap_pred_hpc = lgbm_hpc.predict(X_lgbm_hpc)
-    pred_rul_hpc = base_pred_hpc + gap_pred_hpc
-    pred_rul_hpc = pd.Series(pred_rul_hpc).rolling(window=window, min_periods=1).mean()
+def get_events(df, soglia=10):
+    hi_hpt, hi_hpc = calc_hi(df)
+    cond_1 = hi_hpt.diff(1) > soglia  # Differenza col punto i-1
+    cond_2 = hi_hpt.diff(2) > soglia  # Differenza col punto i-2
+    cond_3 = hi_hpt.diff(3) > soglia  # Differenza col punto i-3
+    eventi_hpt = hi_hpt[cond_1 & cond_2 & cond_3]
     
-    # HPT 
-    base_pred_hpt = regr_hpt.predict(X_base_hpt)
-    window_size = 800
-    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-    X_lgbm_hpt = pd.DataFrame({
-        'HI': hi_hpt.values,                # Valore attuale HI
-        'Slope': feat_slope_hpt,            # Pendenza locale
-        'Intercept': feat_intercept_hpt     # Intercetta locale
-    })
-    # mask = X_lgbm_hpt['Slope'] != 0
-    # X_lgbm_hpt = X_lgbm_hpt[mask]
-    # base_pred_hpt = base_pred_hpt[mask]
-    gap_pred_hpt = lgbm_hpt.predict(X_lgbm_hpt)
-    pred_rul_hpt = base_pred_hpt + gap_pred_hpt
-    pred_rul_hpt = pd.Series(pred_rul_hpt).rolling(window=window, min_periods=1).mean()
+    cond_1_c = hi_hpc.diff(1) > soglia
+    cond_2_c = hi_hpc.diff(2) > soglia
+    cond_3_c = hi_hpc.diff(3) > soglia
+    eventi_hpc = hi_hpc[cond_1_c & cond_2_c & cond_3_c]
+
+    return eventi_hpt, eventi_hpc
 
 
-    # WW 
-    base_pred_ww = regr_ww.predict(X_base_ww)
-    window_size = 800
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values,                # Valore attuale HI
-        'Slope': feat_slope_ww,            # Pendenza locale
-        'Intercept': feat_intercept_ww     # Intercetta locale
-    })
-    # mask = X_lgbm_ww['Slope'] != 0
-    # X_lgbm_ww = X_lgbm_ww[mask]
-    # base_pred_ww = base_pred_ww[mask]
-    gap_pred_ww = lgbm_ww.predict(X_lgbm_ww)
-    pred_rul_ww = base_pred_ww + gap_pred_ww
-    pred_rul_ww = pd.Series(pred_rul_ww).rolling(window=window, min_periods=1).mean()
 
+# nudo e crudo
+def remove_effect_hard_core(df):
+    df = df.sort_values(["Cycles_Since_New", "Snapshot"]).copy()
+    df = pp.remove_outliers(df, threshold=2.6, sensor_cols=["Sensed_T45"])
+    df = df.rolling(window=5, min_periods=1).median().reset_index(drop=True)
+    ehpt, ehpc = get_events(df)
+    df["Event_Group"] = 0
+    df.loc[ehpt.index, "Event_Group"] = 1
+    df["Event_Group"] = df["Event_Group"].cumsum()
+    grp_stats = df.groupby("Event_Group")["Sensed_T45"].agg(["first", "last"])
+    grp_stats["prev_last"] = grp_stats["last"].shift(1)
+    grp_stats["jump"] = grp_stats["first"] - grp_stats["prev_last"]
+    grp_stats["jump"] = grp_stats["jump"].fillna(0)
+    grp_stats["cumulative_offset"] = grp_stats["jump"].cumsum()
+    offset_map = grp_stats["cumulative_offset"].to_dict()
+    df["Sensed_T45"] = df["Sensed_T45"] - df["Event_Group"].map(offset_map)
+    df = df.drop(columns=["Event_Group"])
+    return df
 
-    plt.subplots(1,3, figsize=(18,6))
-    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
-    plt.subplot(1,3,1)
-    plt.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), label='True RUL HPC')
-    plt.plot(pred_rul_hpc, label='LGBM Corrected Pred HPC')
+def plot_ww_slope(wwdf, res):
+    if all(wwdf.ESN.unique() != [101,102,103,104]):
+        not_training = True
+    else:
+        not_training = False
+
+    wwdf[DEGRAD_VARS] = res[DEGRAD_VARS]
+    wwdf = wwdf.rename(columns={"Cycles": "Cycles_Since_New"})
+
+    if not_training:
+        wwdf = remove_effect_hard_core(wwdf)
+    if not not_training:
+        wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
+        wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+
+    wwdf = wwdf.dropna()
+
+    X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
+    Y = wwdf["Sensed_T45"].values  # Target
+
+    reg = LinearRegression().fit(X, Y)
+    slope = reg.coef_[0]
+
+    sv = {}
+    counter = []
+    reference_r = None 
+    floor = None
+    last_cum = 0
+    window = 11
+
+    # ho scelto 542 perchè è il numero di nepero moltiplicato per 200. Si a caso e funziona anche
+    factor = (e**2)*80 # poi sto provando altri valori
+
+    if not_training:
+        for i, (idx, val_t45)in enumerate(wwdf["Sensed_T45"].items()):
+
+            if reference_r is None:
+                reference_r = val_t45
+                floor = val_t45
+                counter.append(val_t45)
+                continue
+
+            counter.append(val_t45)
+            if len(counter) < window:
+                continue
+
+            mc = np.mean(counter[-window:]) - floor
+            msp = reference_r - floor
+                
+            if (mc - msp) > slope * factor:
+                sv[idx] = val_t45               
+                reference_r = val_t45           
+                floor = val_t45
+    else:
+        for i, (idx, row) in enumerate(wwdf[["Sensed_T45", "Cumulative_WWs"]].iterrows()):
+            val_t45 = row["Sensed_T45"]
+            val_cum = row["Cumulative_WWs"]
+
+            if reference_r is None:
+                reference_r = val_t45
+                floor = val_t45
+                counter.append(val_t45)
+                continue
+
+            counter.append(val_t45)
+            if len(counter) < window:
+                continue
+
+            mc = np.mean(counter[-window:]) - floor
+            msp = reference_r - floor
+
+            if val_cum > last_cum:
+                last_cum = val_cum
+                reference_r = val_t45
+                floor = val_t45 
+                
+            if (mc - msp) > slope * factor: 
+                sv[idx] = val_t45               
+                reference_r = val_t45           
+                floor = val_t45
+
+    print(len(sv))
+    if not not_training:
+        print(len(wwdf["Cumulative_WWs"].unique()))
+
+    plt.figure(figsize=(14, 6))
+
+    sv_cycles = wwdf.loc[list(sv.keys()), "Cycles_Since_New"]
+
+    plt.vlines(x=sv_cycles, ymin=wwdf["Sensed_T45"].min(), ymax=wwdf["Sensed_T45"].max(), colors='green', linestyles='dashed', alpha=0.7, label="Detected SV", zorder=1)
+
+    if not not_training:
+        ww_boundaries = wwdf["Cycles_Since_New"].groupby(wwdf["Cumulative_WWs"]).last()
+        plt.vlines(x=ww_boundaries, ymin=wwdf["Sensed_T45"].min(), ymax=wwdf["Sensed_T45"].max(), colors='gray', linestyles='dashed', alpha=0.5, label="WW Boundary", zorder=1)
+
+    plt.plot(wwdf["Cycles_Since_New"], wwdf["Sensed_T45"], color="blue", alpha=0.8, label="Data", zorder=2)
+    plt.plot(wwdf["Cycles_Since_New"], reg.predict(X), color="red", linewidth=2, label=f"Slope: {slope:.5f}", zorder=2)
+
+    plt.title(f"WW Prediction {esn}")
+    plt.xlabel("Cycles Since New")
+    plt.ylabel("Sensed T45")
     plt.legend()
-    plt.subplot(1,3,2)
-    plt.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), label='True RUL HPT')
-    plt.plot(pred_rul_hpt, label='LGBM Corrected Pred HPT')
-    plt.legend()
-    plt.subplot(1,3,3)
-    plt.plot(test_data["Cycles_to_WW"].reset_index(drop=True), label='True RUL WW')
-    plt.plot(pred_rul_ww, label='LGBM Corrected Pred WW')
-    plt.legend()
-    plt.show()
+    plt.tight_layout()
 
-    engines[eng]["X_lgbm_hpc"] = X_lgbm_hpc
-    #engines[eng]["gap_true_hpc"] = gap_true_hpc
-    engines[eng]["base_pred_hpc"] = base_pred_hpc
-    engines[eng]["X_lgbm_hpt"] = X_lgbm_hpt
-    #engines[eng]["gap_true_hpt"] = gap_true_hpt
-    engines[eng]["base_pred_hpt"] = base_pred_hpt
-    engines[eng]["X_lgbm_ww"] = X_lgbm_ww
-    #engines[eng]["gap_true_ww"] = gap_true_ww
-    engines[eng]["base_pred_ww"] = base_pred_ww
-# %store engines
+for esn in df["ESN"].unique():
+    plot_ww_slope(df[df["ESN"] == esn], residuals(df[df["ESN"] == esn]))
+
 
 # %%
-# coefs_hpt
-# coefs_hpc
-# coefs_ww
 
-model_i = 0
-operating_vars = ['Sensed_Altitude', 'Sensed_Mach', 'Sensed_Pamb', 'Sensed_TAT', 'Sensed_VAFN', 'Sensed_VBV', 'Sensed_Fan_Speed', 'Sensed_Pt2']
-degradation_vars = [s for s in u.SENSORS if s not in operating_vars]
+for v in dfv:
+    for esn in v["ESN"].unique():
+        plot_ww_slope(v[v["ESN"] == esn], residuals(v[v["ESN"] == esn]))
 
-
-df = u.load_testing()()
-# Da rivedere come rimuovere gli outlier
-df = pp.remove_outliers(df, u.SENSORS)
-df = pp.missingfill(df).dropna()
-
-# Per lavorare con i dati a livello di ciclo
-# managed_cols = set(degradation_vars) | set(operating_vars)
-# other_cols = [col for col in df.columns if col not in managed_cols]
-# agg_logic = {col: 'median' for col in degradation_vars}
-# agg_logic.update({col: 'median' for col in operating_vars})
-# agg_logic.update({col: 'first' for col in other_cols})
-
-model = models[model_i]['model']
-
-engines = {}
-for eng in df["ESN"].unique():
-    engines[eng] = {}
-    test_data = df[df["ESN"] == eng].reset_index()
-    #test_data = test_data.groupby(["Cycles_Since_New"]).mean().reset_index()
-
-    rolling_size = 25
-    step = 1
-    X_test = test_data[operating_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    Y_test = test_data[degradation_vars].rolling(rolling_size, step=step, min_periods=1).median().dropna()
-    #df = df.groupby(["Snapshot"]).median().reset_index()
-    Y_pred = model.predict(X_test)
-
-    res = Y_test - Y_pred
-    res = pp.remove_outliers(res, u.SENSORS)
-    test_data[degradation_vars] = res
-    res = test_data.dropna()
-
-    window = 370
-    step = window//5
-    res = res.rolling(window, step).median()
-    res = median_norm(res)
-    res = res.dropna()
-
-    engines[eng]["X_test"] = X_test.copy()
-    engines[eng]["Y_test"] = Y_test.copy()
-    engines[eng]["Y_pred"] = Y_pred.copy()
-    engines[eng]["res"] = res.copy()
-
-    hi_hpt = HIE(coefs_hpt, res[degradation_vars])
-    hi_hpc = HIE(coefs_hpc, res[degradation_vars])
-    hi_ww  = HIE(coefs_ww, res[degradation_vars])
-
-    engines[eng]["hi_hpt"] = hi_hpt
-    engines[eng]["hi_hpc"] = hi_hpc
-    engines[eng]["hi_ww"] = hi_ww
-
-    # gap_true_hpc = test_data["Cycles_to_HPC_SV"].values.reshape(-1,1) - regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    
-    feat_slope_hpc, feat_intercept_hpc = get_rolling_slope_intercept(hi_hpc, window_size)
-    X_lgbm_hpc = pd.DataFrame({
-        'HI': hi_hpc.values,                # Valore attuale HI
-        'Slope': feat_slope_hpc,            # Pendenza locale
-        'Intercept': feat_intercept_hpc     # Intercetta locale
-    })
-
-    base_pred_hpc = regr_hpc.predict(hi_hpc.values.reshape(-1,1))
-    gap_pred_hpc = lgbm_hpc.predict(X_lgbm_hpc)
-
-    final_rul_hpc = base_pred_hpc.flatten() + gap_pred_hpc
-
-    feat_slope_hpt, feat_intercept_hpt = get_rolling_slope_intercept(hi_hpt, window_size)
-    X_lgbm_hpt = pd.DataFrame({
-        'HI': hi_hpt.values,                # Valore attuale HI
-        'Slope': feat_slope_hpt,            # Pendenza locale
-        'Intercept': feat_intercept_hpt     # Intercetta locale
-    })
-    #gap_true_hpt = test_data["Cycles_to_HPT_SV"].values.reshape(-1,1) - regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    base_pred_hpt = regr_hpt.predict(hi_hpt.values.reshape(-1,1))
-    gap_pred_hpt = lgbm_hpt.predict(X_lgbm_hpt)
-    final_rul_hpt = base_pred_hpt.flatten() + gap_pred_hpt
-
-    feat_slope_ww, feat_intercept_ww = get_rolling_slope_intercept(hi_ww, window_size)
-    X_lgbm_ww = pd.DataFrame({
-        'HI': hi_ww.values,                 # Valore attuale HI
-        'Slope': feat_slope_ww,             # Pendenza locale
-        'Intercept': feat_intercept_ww      # Intercetta locale
-    })
-    #gap_true_ww = test_data["Cycles_to_WW"].values.reshape(-1,1) - regr_ww.predict(hi_ww.values.reshape(-1,1))
-    base_pred_ww = regr_ww.predict(hi_ww.values.reshape(-1,1))
-    gap_pred_ww = lgbm_ww.predict(X_lgbm_ww)
-    final_rul_ww = base_pred_ww.flatten() + gap_pred_ww
-
-    plt.subplots(1,3, figsize=(18,6))
-    plt.suptitle(f'Engine ESN {eng} - Health Index and RUL Predictions')
-    plt.subplot(1,3,1)
-    plt.plot(test_data["Cycles_to_HPC_SV"].reset_index(drop=True), label='True RUL HPC')
-    plt.plot(final_rul_hpc, label='LGBM Corrected Pred HPC')
-    plt.legend()
-    plt.subplot(1,3,2)
-    plt.plot(test_data["Cycles_to_HPT_SV"].reset_index(drop=True), label='True RUL HPT')
-    plt.plot(final_rul_hpt, label='LGBM Corrected Pred HPT')
-    plt.legend()
-    plt.subplot(1,3,3)
-    plt.plot(test_data["Cycles_to_WW"].reset_index(drop=True), label='True RUL WW')
-    plt.plot(final_rul_ww, label='LGBM Corrected Pred WW')
-    plt.legend()
-    plt.show()
-
-    engines[eng]["X_lgbm_hpc"] = X_lgbm_hpc
-    #engines[eng]["gap_true_hpc"] = gap_true_hpc
-    engines[eng]["base_pred_hpc"] = base_pred_hpc
-    engines[eng]["X_lgbm_hpt"] = X_lgbm_hpt
-    #engines[eng]["gap_true_hpt"] = gap_true_hpt
-    engines[eng]["base_pred_hpt"] = base_pred_hpt
-    engines[eng]["X_lgbm_ww"] = X_lgbm_ww
-    #engines[eng]["gap_true_ww"] = gap_true_ww
-    engines[eng]["base_pred_ww"] = base_pred_ww
-# %store engines
+for f in dft:
+    for esn in f["ESN"].unique():
+        plot_ww_slope(f[f["ESN"] == esn], residuals(f[f["ESN"] == esn]))
 

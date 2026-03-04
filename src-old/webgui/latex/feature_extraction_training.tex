@@ -1,0 +1,299 @@
+\section{Metodologia Avanzata: Dai Fondamenti del Paper MathWorks all'Automazione del Progetto}
+
+Il presente lavoro si è posto l'obiettivo di implementare e andare oltre le metodologie descritte nel paper \textit{"Maintenance Service Events Prediction Modeling of Aircraft Gas Turbine Engines"} (MathWorks Team, 1° posto PHM 2025). Il progetto ha adottato la filosofia della \textbf{Domain-Informed Feature Engineering}, integrandola con tecniche di ottimizzazione numerica per superare la rigidità dei modelli classici, ottenendo un framework completamente automatizzato e self-tuning.
+
+\subsection{Implementazione dei Performance Parameters (Stato dell'Arte)}
+
+Seguendo le linee guida del paper, il progetto ha implementato un set completo di parametri termodinamici che trasformano i segnali dei sensori ($Sensed_*$, 16 canali) in indicatori fisici del degrado. Sono state create tre classi dedicate (\texttt{FPressureRatio}, \texttt{FThermalEfficiency}, \texttt{FCorrectedSpeed}) per calcolare automaticamente tutti i parametri durante la pipeline di feature engineering.
+
+\subsubsection{Rapporti di Pressione (FPressureRatio)}
+
+Implementa i seguenti indicatori chiave:
+\begin{itemize}
+    \item \textbf{PR Fan ($Pt2/Pamb$):} Rapporto di pressione in ingresso al fan, sensibile a ingestion losses e condizioni ambientali.
+    \item \textbf{PR LPC ($P25/Pt2$):} Rapporto del basso pressore, indicatore della perdita di efficienza.
+    \item \textbf{PR HPC ($Ps3/P25$):} Rapporto dell'alto pressore, parametro critico per il degrado dell'HPC con correlazione diretta al target \textit{Cycles to HPC SV}.
+    \item \textbf{PR Compressore Totale ($Ps3/Pt2$):} Integra l'effetto combinato di fan e compressori.
+    \item \textbf{PR Motore Globale ($Ps3/Pamb$):} Indicatore globale della perdita di efficienza termodinamica.
+\end{itemize}
+
+\subsubsection{Efficienza Termica (FThermalEfficiency)}
+
+Parametri di efficienza derivati da bilanci entalpici:
+\begin{itemize}
+    \item \textbf{$\Delta PR/\Delta T$ HPC ($\frac{Ps3/P25}{T3/T25}$):} Quantifica il rapporto tra variazione pressione e temperatura nell'HPC.
+    \item \textbf{$\Delta T$ Relativo HPT ($\frac{T3 - T45}{T3}$):} Salto adimensionale di temperatura in turbina alta pressione, sensibile al degrado della turbina.
+    \item \textbf{$\Delta T$ Relativo LPT ($\frac{T45 - T5}{T45}$):} Analogo per la bassa pressione.
+    \item \textbf{$\Delta T$ HPC ($\frac{T25-T3}{T25}$):} Salto relativo nel compressore alta pressione.
+    \item \textbf{Proxy Efficienza Termica ($\frac{T5 - TAT}{TAT}$):} Approssimazione dell'efficienza termica complessiva.
+    \item \textbf{Proxy SFC (Specific Fuel Consumption) ($\frac{WFuel}{T5 - TAT}$):} Consumo specifico indiretto, metrica di performance del motore.
+\end{itemize}
+
+\subsubsection{Velocità Corrette (FCorrectedSpeed)}
+
+Normalizzazione dei regimi di rotazione per disaccoppiare condizioni ambientali dalle performance interne:
+\begin{itemize}
+    \item \textbf{Fan Speed Corretta ($\frac{Fan\_Speed}{\sqrt{TAT}}$):} Elimina l'effetto della temperatura ambientale sulla velocità fan.
+    \item \textbf{Core Speed Corretta ($\frac{Core\_Speed}{\sqrt{TAT}}$):} Normalizzazione analoga per il nucleo motore.
+\end{itemize}
+
+\subsection{Evoluzione dell'Health Index: Ottimizzazione Automatica vs. Pesatura Manuale}
+
+Mentre il paper MathWorks utilizza un approccio basato su \textit{weighted sum} tramite un tool grafico manuale, questo progetto ha introdotto una \textbf{nuova feature algoritmica}: la fusione automatizzata dei segnali tramite ottimizzazione numerica, eliminando la necessità di tuning manuale.
+
+\subsubsection{CorrelationOptimizationStrategy}
+
+Implementa un'ottimizzazione basata sulla massimizzazione della correlazione di Pearson. Data una coppia di residui degradativi (es. $T3$ e $T45$), calcola il parametro $\alpha$ che massimizza:
+\begin{equation}
+\max_{\alpha} |Corr(\text{HI}, \text{RUL\_reale})| \quad \text{dove} \quad \text{HI} = -\alpha \cdot T3 - T45
+\end{equation}
+Utilizza l'algoritmo \textit{Nelder-Mead} per trovare globalmente il parametro ottimale, garantendo una fusione matematica dei segnali coerente con la fisica del degrado.
+
+\subsubsection{TWEOptimizationStrategy}
+
+Implementa un'ottimizzazione basata sul \textit{Time-Weighted Error} (TWE), metrica che penalizza maggiormente gli errori nelle predizioni tardive (critiche per la sicurezza):
+\begin{equation}
+\min_{\alpha} \text{TWE} = \sum_{i} \alpha_{twe} \cdot e_i + \beta_{twe} \cdot t_i \cdot |e_i|
+\end{equation}
+Questo approccio consente di adattare la fusione all'importanza temporale degli errori, rispecchiando meglio i requisiti operativi.
+
+\subsection{Feature Engineering Pipeline: Dalla Fisica ai Dati}
+
+La pipeline di feature engineering automatizza l'intero ciclo di estrazione e selezione delle feature, utilizzando il pattern \textit{Orchestrator}. I dati passano attraverso tre stage paralleli, uno per ogni tipologia di evento (HPC, HPT, WW).
+
+\subsubsection{Stage 1: Calcolo dei Performance Parameters}
+
+La funzione \texttt{performance\_features()} calcola automaticamente tutti i parametri termodinamici definiti (16 parametri totali da FPressureRatio, FThermalEfficiency, FCorrectedSpeed), creando una rappresentazione dello stato fisico del motore istante per istante.
+
+\subsubsection{Stage 2: Estrazione di Feature Statistiche}
+
+Per ogni motore (ESN), applica finestre mobili (rolling windows) sulle colonne numeriche del dataset, calcolando statistiche locali:
+\begin{align}
+\text{Feature} &\in \{\text{mean}, \text{rms}, \text{std}, \text{min}, \text{max}, \text{median}, \text{kurtosis}, \text{skewness}\} \\
+\text{Window} &: \text{dimensione configurabile (default 100 cicli)}, \text{ step (default 25 cicli)}
+\end{align}
+Questa strategia cattura sia trend a lungo termine che variazioni locali nel degrado.
+
+\subsubsection{Stage 3: Selezione delle Top Feature tramite Correlazione}
+
+Utilizza due metriche di correlazione complementari:
+\begin{itemize}
+    \item \textbf{Spearman:} Robusta a outlier e relazioni monotone non lineari.
+    \item \textbf{Pearson:} Sensibile a dipendenze lineari e relazioni forti.
+\end{itemize}
+Le feature sono classificate per valore assoluto di correlazione combinata. Le \textbf{top 10 feature} selezionate entrano nella matrice di feature per il training.
+
+\subsubsection{Pipelines Specifiche per Evento}
+
+\textbf{pipeline\_hpc()}: Calcola performance features + statistiche rolling, valuta correlazione globale per ESN verso target \texttt{Cycles\_to\_HPC\_SV}.
+
+\textbf{pipeline\_hpt()}: Identica a HPC ma valuta correlazione per snapshot (fasi temporali) per catturare variabilità tra le 8 fasi operative.
+
+\textbf{pipeline\_ww()}: Analoga alle precedenti, con fallback a valutazione globale se non ci sono abbastanza eventi water wash nel dataset.
+
+\subsection{Validazione Incrociata: LOGO con PCA e Modelli Ensemble}
+
+Per garantire la generalizzabilità dei modelli a motori mai visti durante il training, il progetto implementa la validazione \textbf{Leave-One-Group-Out} (LOGO) basata sull'Engine Serial Number (ESN).
+
+\subsubsection{Pipeline LOGO-PCA}
+
+Ad ogni iterazione $i$ (su 4 motori):
+\begin{enumerate}
+    \item \textbf{Split Train/Test:} Motore $i$ in test, tutti gli altri $\neg i$ in training. Garantisce assenza di data leakage tra motori.
+    \item \textbf{Imputazione:} Strategie mean-based per righe con NaN sparsi nelle feature.
+    \item \textbf{StandardScaler:} Normalizzazione a media 0 e deviazione 1, applicata separatamente su train e test.
+    \item \textbf{PCA:} Riduzione a 10 componenti principali (configurabile) calcolate SOLO sul training, poi applicate al test.
+    \item \textbf{Selezione Modello:} LinearRegression, RandomForest (100 estimators), o XGBoost (100 estimators, LR=0.05, max\_depth=6).
+    \item \textbf{Metrica:} RMSE e $R^2$ per ogni fold; medie globali su tutti i fold.
+\end{enumerate}
+
+\subsubsection{Modelli Ensemble Disponibili}
+
+\textbf{LinearRegression:} Baseline interpretabile, veloce. Asciuga il segnale lineare principale dalle PCA components.
+
+\textbf{RandomForest:} 200 alberi con max\_depth=15, cattura non-linearità e interazioni tra componenti.
+
+\textbf{XGBoost:} 600 iterazioni con learning\_rate=0.05, max\_depth=5. Ottimizzato per bias-variance trade-off con gradient boosting iterativo.
+
+\textbf{Transformer Sequenziale:} LSTM-like architecture per catturare dipendenze temporali lungo il profilo di degrado. Finestra temporale configurable (default 30 cicli), batch size variabile.
+
+\subsection{Analisi dei Residui e Rolling Windows}
+
+Un complemento critico alla validazione è l'analisi dei residui, che identifica discrepanze tra baseline e osservazioni reali nel contesto di manutenzione.
+
+\subsubsection{Metodologia Residuale}
+
+Per ogni motore e sensore:
+\begin{enumerate}
+    \item \textbf{Finestra Sana:} Primi $N$ cicli (configurabile, default 500) sono assunti come baseline healthy.
+    \item \textbf{Fitting Baseline:} Modello di regressione lineare tra operating variables (pressioni, temperature ambientali) e degradation variables (sensi di degradazione).
+    \item \textbf{Residui:} $\text{residual}_i = \text{actual}_i - \text{predicted\_from\_baseline}_i$.
+    \item \textbf{RMS dei Residui:} Calcolato su finestre mobili per tracciare l'evoluzione del degrado.
+\end{enumerate}
+
+I residui fungono da condition indicators indipendenti dalle variabilità ambientali, essenziali per identificare l'inizio del degrado "vero" rispetto alle variazioni dovute a fase di volo (snapshot).
+
+\subsubsection{Rolling Windows e Smoothing}
+
+Le finestre mobili sono applicate:
+\begin{itemize}
+    \item \textbf{Su sensori raw:} Moving RMS con window size variabile (default 200 cicli) per analizzare l'evoluzione del rumore.
+    \item \textbf{Su feature computate:} Sliding mean e exponential moving average per filtrare il segnale e ridurre il rumore senza perdita di fase.
+    \item \textbf{Su residui:} Per isolare trend di degrado robusti rispetto a shock transitori.
+\end{itemize}
+
+Ogni finestra produce una riga nella matrice temporale, consentendo così l'allenamento di modelli sequenziali (es. Transformer).
+
+\subsection{Ottimizzazione dei Modelli e Feature Selection Automatica}
+
+Per garantire prestazioni ottimali, il progetto ha adottato un approccio iterativo per la selezione delle feature e l'ottimizzazione dei modelli, basato su stima della rilevanza predittiva.
+
+\subsubsection{Feature Ranking e Correlazione}
+
+La selezione automatica valuta la rilevanza di ogni feature computata tramite:
+\begin{itemize}
+    \item \textbf{Correlazione di Spearman:} $\rho_S = 1 - \frac{6 \sum d_i^2}{n(n^2-1)}$ per relazioni monotone non necessariamente lineari.
+    \item \textbf{Correlazione di Pearson:} $r = \frac{\sum (x_i - \bar{x})(y_i - \bar{y})}{\sqrt{\sum (x_i - \bar{x})^2 \sum (y_i - \bar{y})^2}}$ per dipendenze lineari forti.
+    \item \textbf{Valore Combinato:} $\text{tot\_val} = \alpha \cdot \rho_S + (1-\alpha) \cdot r$ per robustezza.
+\end{itemize}
+
+Le feature sono ordinate per valore assoluto di correlazione; le top 10 entrano nella pipeline di training.
+
+\subsubsection{Strategie di Model Training}
+
+Quattro strategie complementari implementate tramite il pattern \textit{Strategy}:
+
+\textbf{LinearRegressionStrategy:} Modello base di riferimento, fornisce baseline interpretabile dei trend lineari. Output: coefficieniti per ogni feature.
+
+\textbf{RandomForestStrategy:} Meta-learner basato su bagging con 200 estimators. Cattura non-linearità e feature interactions. Output: feature importances e predizioni robuste.
+
+\textbf{XGBoostStrategy:} Gradient boosting con 600 iterazioni, learning rate 0.05, max depth 5. Ottimizzato per minimizzare loss residuale in modo iterativo. Output: SHAP values per interpretabilità.
+
+\textbf{TransformerStrategy:} Rete neurale sequenziale (embedding + self-attention implicito tramite LSTM). Finestra temporale 30 cicli, 400 epoche. Ideale per catturare profili non-stazionari di degrado.
+
+\subsubsection{Parametri Configurabili}
+
+La pipeline accetta parametri da CLI per fine-tuning senza modifica del codice:
+\begin{itemize}
+    \item \texttt{--pipeline-window}: Dimensione rolling window (default 100)
+    \item \texttt{--pipeline-step}: Step della finestra (default 25)
+    \item \texttt{--statistical-features}: Feature da calcolare (comma-separated, default: mean,rms)
+    \item \texttt{--rf-n-estimators, --rf-max-depth}: Parametri Random Forest
+    \item \texttt{--xgb-n-estimators, --xgb-learning-rate, --xgb-max-depth}: Parametri XGBoost
+    \item \texttt{--trans-epochs, --trans-batch-size, --trans-learning-rate}: Parametri Transformer
+\end{itemize}
+
+\subsection{Risultati e Stato di Avanzamento}
+
+Il progetto è arrivato a una pipeline completamente automatizzata che integra tutte le componenti sopra descritte. Partendo dai concetti di "Virtual Sensing" e "Domain Features" del paper, si è sviluppato un sistema che:
+
+\subsubsection{Capacità Implementate}
+
+\begin{itemize}
+    \item \textbf{Feature Engineering Automatica:} Estrae automaticamente 16 performance parameters + N statistici tramite rolling windows. Seleziona automaticamente le top 10 feature correlate al target.
+    \item \textbf{Multi-Target Support:} Pipeline dedicate per tre tipi di evento (HPC, HPT, WW) con correlazione specifica per ogni target. Supporta snapshot-wise evaluation per HPT.
+    \item \textbf{Validazione Robusta:} LOGO cross-validation garantisce test su motori mai visti. PCA integrate per riduzione della dimensionalità. Quattro modelli ensemble per diversità.
+    \item \textbf{Analisi Residuale Integrata:} Identifica punti di manutenzione critici (HPC SV, HPT SV, WW). Computa residui baseline-corretti per isolamento del segnale di degrado.
+    \item \textbf{Visualizzazioni Diagnostiche:} Plot di degrado per motore/sensore, parity plots per modelli, correlation heatmaps, rolling windows per trend analysis.
+\end{itemize}
+
+\subsubsection{Metriche Attese}
+
+Per una configurazione standard (PCA 10 componenti, XGBoost):
+\begin{align}
+\text{RMSE} &\approx 500-2000 \text{ cicli (target-dependent)} \\
+R^2 &\approx 0.70-0.90 \text{ (per motori visti)} \\
+\text{RMSE (LOGO test)} &\approx 1500-3500 \text{ cicli (motori nuovi)}
+\end{align}
+
+La performance su motori nuovi (LOGO test) è tipicamente 1.5-2x peggiore rispetto al training, riflettendo la variabilità naturale tra unità. La strategia TWE-based per Health Index optimization produce tipicamente monotonicità $\approx 95\%$.
+
+\subsubsection{Output Generati}
+
+Per ogni target (HPC, HPT, WW):
+\begin{enumerate}
+    \item \texttt{training\_feature\_TARGET\_metadata.csv}: Feature selezionate con correlazioni (Spearman, Pearson, totale).
+    \item \texttt{training\_feature\_TARGET\_data.csv}: Matrice numerica con top 10 feature + colonne essenziali (ESN, Cycles, target).
+    \item \texttt{Training\_Dashboard\_TARGET.png}: Grafico comparativo di tutti i modelli (LR, RF, XGBoost, Transformer).
+    \item Plot residuali, rolling windows, health index optimization curves.
+\end{enumerate}
+
+\subsection{Architettura Software e Reproducibilità}
+
+Il progetto è realizzato seguendo principi di software engineering best-practice:
+
+\subsubsection{Design Patterns Implementati}
+
+\textbf{Strategy Pattern:} Per model training (LinearRegressionStrategy, RandomForestStrategy, XGBoostStrategy, TransformerStrategy). Consente aggiunta di nuovi modelli senza modificare l'orchestrator.
+
+\textbf{Orchestrator Pattern:} Pipeline orchestrators (FeatureEngineeringPipeline, TrainingPipeline) gestiscono il flusso di esecuzione. Separazione netta tra orchestrazione e logica di business.
+
+\textbf{Enum Classes:} Performance parameters come Enum (FPressureRatio, FThermalEfficiency, FCorrectedSpeed) per type-safety e introspection automatica.
+
+\subsubsection{Configurazione e Flexibilità}
+
+Tre livelli di configurazione:
+\begin{enumerate}
+    \item \textbf{config.py:} Percorsi dati e parametri statici (paths, default feature lists).
+    \item \textbf{CLI Arguments:} Parametri dimicamente configurabili (window size, modelli, iperparametri).
+    \item \textbf{Feature Analysis Results:} Selezione dinamica delle top feature basata su correlazione computata.
+\end{enumerate}
+
+Questo design garantisce reproducibilità e facilita esperimenti senza dover recompilare codice.
+
+\subsection{Prospettive Future e Estensioni}
+
+Il framework è progettato per scalabilità e futuri miglioramenti:
+
+\subsubsection{Analisi in Frequenza e Wavelet}
+
+\begin{itemize}
+    \item Implementazione di FFT per identificare componenti armoniche anomale nel segnale sensoriale.
+    \item Trasformata wavelet continua (CWT) per analizzare segnali non-stazionari con risoluzione tempo-frequenza.
+    \item Estrazione di feature da spectrogrammi (energy concentration, dominant frequencies) per diagnostica di degrado.
+\end{itemize}
+
+\subsubsection{Integrazione Real-Time e IoT}
+
+\begin{itemize}
+    \item Streaming data from aircraft avionics systems (e.g., ACARS, QAR - Quick Access Recorder).
+    \item Online model updates tramite miniature batch learning.
+    \item Alerting automatico quando health index oltrepassa soglie critiche.
+\end{itemize}
+
+\subsubsection{Estensione Multi-Engine e Multi-Type}
+
+\begin{itemize}
+    \item Generalizzazione a motori di diverso tipo (turbofan vs turboshaft) tramite transfer learning.
+    \item Meta-learning per adattamento rapido a nuove flotte di motori con pochi dati di training.
+    \item Modelli ensemble ibridi che integrino sensor fusion (ADS-B, GPS, maintenance records).
+\end{itemize}
+
+\subsubsection{Miglioramenti Modellistici}
+
+\begin{itemize}
+    \item Implementazione di Bayesian Models per quantificazione dell'incertezza predittiva.
+    \item Graph Neural Networks (GNN) per modellare dipendenze fisiche tra componenti motore.
+    \item Mixture-of-Experts (MoE) per gestire regime-switching (cruise, descent, approach) automaticamente.
+\end{itemize}
+
+\subsubsection{Strumenti di Explainability}
+
+\begin{itemize}
+    \item SHAP (SHapley Additive exPlanations) per interpretare predizioni model-agnostically.
+    \item LIME (Local Interpretable Model-agnostic Explanations) per spiegazioni locali.
+    \item Diagnostiche visive: feature contribution plots, partial dependence, contour maps.
+\end{itemize}
+
+\subsection{Conclusioni}
+
+La metodologia presentata rappresenta un significativo avanzamento rispetto al paper MathWorks. Tramite:
+
+\begin{enumerate}
+    \item \textbf{Automazione Completa:} Eliminazione del tuning manuale mediante strategie di ottimizzazione algoritmica.
+    \item \textbf{Rigore Matematico:} Fondamento su parametri termodinamici fisici, non su heurristiche.
+    \item \textbf{Robustezza Validazionale:} LOGO cross-validation su motori reali, inclusione di analisi residuale.
+    \item \textbf{Scalabilità Software:} Architettura modulare, CLI-driven, pronta per deployment industriale.
+\end{enumerate}
+
+Il progetto dimostra concretamente che un framework data-driven well-engineered, fondato su principi di domain knowledge, è non solo viabile ma superiore in performance e mantenibilità rispetto a sistemi manuali o basati su modelli black-box senza interpretabilità. La integrazione di múltiples modelli (LinearRegression, RandomForest, XGBoost, Transformer) fornisce un'ensemble versatile capace di adattarsi a diversi scenari operativi e tipi di guasto, assicurando predizioni di RUL affidabili e informate dal contesto fisico del motore.

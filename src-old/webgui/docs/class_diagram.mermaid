@@ -1,0 +1,91 @@
+classDiagram
+    %% Script Principali
+    class 01_Preprocess {
+        +main()
+        +preprocess_data()
+    }
+    class 02_FeatureEngineering {
+        +main()
+        +calculate_features()
+    }
+    class 03_TrainModels {
+        +main()
+        +train_models()
+    }
+    class 04_ResidualAnalysis {
+        +main()
+        +calculate_health_index()
+    }
+
+    %% Moduli Tools
+    class PreprocessingTools {
+        +preprocess_data(df, flags)
+        +preprocess_pipeline(df)
+        +missingfill(df)
+        +remove_outliers(df)
+        +rolling_mean(df)
+    }
+
+    class FeatureTools {
+        +calculate_health_index(df, t3, t45, target, ref)
+        +fit_mapping(df, feature, target)
+        +pipeline_hpc(df)
+        +pipeline_hpt(df)
+    }
+
+    class PlottingTools {
+        +plot_engine_level_hi(df)
+        +plot_engine_level_residuals(df)
+        +plot_stat_feat(df)
+    }
+
+    class Utils {
+        +load_training()
+        +load_testing()
+        +plot_path()
+    }
+
+    %% Classi e Enum specifiche
+    class FPerformanceParameter {
+        +description: str
+        +formula: str
+        +colname: str
+        +call(df)
+    }
+
+    class FPressureRatio {
+        +FAN
+        +LPC
+        +HPC
+    }
+
+    class FThermalEfficiency {
+        +DELTA_T_HPT
+        +THERMAL_PROXY
+    }
+
+    class SENSORS {
+        <<enumeration>>
+        Altitude
+        Mach
+        T3
+        T45
+    }
+
+    %% Relazioni
+    01_Preprocess ..> PreprocessingTools : uses
+    01_Preprocess ..> Utils : loads data
+    
+    02_FeatureEngineering ..> PreprocessingTools : uses
+    02_FeatureEngineering ..> FeatureTools : uses
+    
+    03_TrainModels ..> Utils : loads data
+    
+    04_ResidualAnalysis ..> PreprocessingTools : uses
+    04_ResidualAnalysis ..> FeatureTools : calculates HI
+    04_ResidualAnalysis ..> PlottingTools : generates plots
+    04_ResidualAnalysis ..> Utils : configures paths
+
+    FPressureRatio --|> FPerformanceParameter : inherits
+    FThermalEfficiency --|> FPerformanceParameter : inherits
+    FeatureTools ..> FPerformanceParameter : uses

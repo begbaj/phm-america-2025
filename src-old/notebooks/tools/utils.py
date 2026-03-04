@@ -134,7 +134,7 @@ def to_signal(df, column) -> list[tuple[int,float]]:
 ### DATA
 ###
 
-def _loader(ind: int | list[int] | range, path, col, typef, no_concat=False):
+def _loader(ind: int | list[int] | range, path, col, typef):
     # Gestione caso lista o range
     if isinstance(ind, (list, range)):
         esn_cycle_tracker = {}
@@ -160,27 +160,25 @@ def _loader(ind: int | list[int] | range, path, col, typef, no_concat=False):
             all_df.append(df)
             
         # CORREZIONE: Concatenare la lista, non ritornare l'ultimo df!
-        if not no_concat:
-            return pd.concat(all_df, ignore_index=True)
-        return all_df
+        return pd.concat(all_df, ignore_index=True)
 
     # Gestione caso file singolo
     else:
         path = f"{path}{typef}_{ind}.csv"
         return pd.read_csv(path)
 
-def load_testing(ind: int | list[int] | range = 0, no_concat=False) -> pd.DataFrame:
+def load_testing(ind: int | list[int] | range = 0) -> pd.DataFrame:
     """
     Carica il dataset di training concatenando i file e aggiustando i cicli.
     """
-    return _loader(ind, DATA_TESTING_PATH, col="Cycles", typef="test", no_concat=no_concat)
+    return _loader(ind, DATA_TESTING_PATH, col="Cycles", typef="test")
 
 
-def load_validation(ind: int | list[int] | range = 0, no_concat=False) -> pd.DataFrame:
+def load_validation(ind: int | list[int] | range = 0) -> pd.DataFrame:
     """
     Carica il dataset di training
     """
-    return _loader(ind, DATA_VALIDATION_PATH, col="Cycles", typef="val", no_concat=no_concat)
+    return _loader(ind, DATA_VALIDATION_PATH, col="Cycles", typef="val")
 
 def load_training():
     return pd.read_csv(DATA_TRAINING_DATA)
