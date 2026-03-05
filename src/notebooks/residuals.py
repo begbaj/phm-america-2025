@@ -249,14 +249,14 @@ else:
 
 # Quale motore nel training set verrà utilizzato come
 # validation (si usa tecnica Leave-One-Out)
-TESTING_ESN = 102
+TESTING_ESN = 103
 
 # Si vuole comunque utilizzare questo motore training?
-INCLUDE_TEST = True
+INCLUDE_TEST = False
 
 # REGRESSORE LINEARE ANDAMENTO NOMINALE
 # indica quanti cicli devono essere considerati healthy nel training
-cycles_healthy = 7
+cycles_healthy = 5
 # se utilizzare il metodo di data augmentation oppure no
 augmented_data = False
 # se si, quanti dati aggiungere per ogni motore
@@ -387,7 +387,7 @@ def _residuals(df):
             return
         twe = np.mean(TWE(Y_pred, Y_train))
         res_temp = Y_train - Y_pred
-        res_temp = pp.remove_outliers(res_temp, threshold=3)
+        res_temp = pp.remove_outliers(res_temp, threshold=3, method="iqr")
         res_temp.rolling(window=10, min_periods=1).median()
         res_temp = res_temp.ffill()
         res_temp = res_temp.bfill()
@@ -410,7 +410,8 @@ def residuals(df):
     return pd.concat(res_list)
 
 print("training dataset")
-res_train = residuals(train_data)
+res_train_healthy = residuals(train_data)
+res_train = residuals(df[df["ESN"] != TESTING_ESN].copy())
 print("leave-one-out testing esn")
 res_test = residuals(test_data)
 
@@ -463,6 +464,7 @@ def plot(data, window, min):
     plt.show()
 
 
+plot(res_train_healthy, 1, 1)
 plot(res_train, 1, 1)
 plot(res_test, 1, 1)
 # plot(residuals(dfv), 10, 1)
@@ -477,19 +479,20 @@ plot(res_test, 1, 1)
 # %%
 
 # se si vuole evitare la ricerca e usare parametri default
-DO_NOT_TRAIN_COEFS = True
+DO_NOT_TRAIN_COEFS = False
 
 USE_ALL_VARS = False
+THIS_ALL_VARS = ["Sensed_T3", "Sensed_T45", "Sensed_Core_Speed", "Sensed_T25"]
 
 # Parametri di configurazione di differential_evolution()
 # quante volte deve iterare il processo di ricerca (ovvero dopo MAXITER spostamenti dei puntini,
 # il valore che più basso tra tutti i puntini sarà quello selezionato)
-MAXITER = 100
+MAXITER = 1000
 # population size (l'algoritmo spawna questo numero di punti in giro
 # per la funzione e cerca il valore che minimizza la funzione obiettivo)
 POPSIZE = 500
 # Tolleranza
-TOL = 0.001
+TOL = 0.0001
 
 # True: usa solo i motori indicati come train, False prende anche TESTING_ESN
 USE_ONLY_TRAIN = False
@@ -547,8 +550,8 @@ if not DO_NOT_TRAIN_COEFS:
             return mse
 
         target = _target_2
-        target_vars = DEGRAD_VARS
-        bounds = [(-1000, 1000)] * 6
+        target_vars = THIS_ALL_VARS
+        bounds = [(-1000, 1000)] * len(target_vars)
 
     chpt = {}
     chpc = {}
@@ -592,12 +595,7 @@ if not DO_NOT_TRAIN_COEFS:
     print(f"HPC: {chpc.values}")
 
 else:
-    chpt = {
-        "101": -2.23102809,
-        "102": -2.23102809,
-        "103": -2.23102809,
-        "104": -2.23102809,
-    }
+    chpt = {"101": -2.23102809, "102": -2.23102809, "103": -2.23102809, "104": -2.23102809}
     chpc = {"101": 4.25050266, "102": 4.25050266, "103": 4.25050266, "104": 4.25050266}
 
 # %%
@@ -762,90 +760,83 @@ gap_regr_hpc.fit(X_train_hpc, y_train_hpc)
 
 
 # %%
-# TEST DI CLASSIFICATORE E REGRESSORE SUI DATI DI TRAINING
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
 
-if not INCLUDE_TEST:
-    esn_excluded = TESTING_ESN
+def rolling_slope(series, window=30):
+    series = np.asarray(series)
+    slopes = np.zeros(len(series))
+    x = np.arange(window)
+    for i in range(window, len(series)):
+        y = series[i-window:i]
+        slope, _ = np.polyfit(x, y, 1)
+        slopes[i] = slope
+    return slopes
+
+def detect_change_point(series, window=40, threshold=2.5):
+    slopes = rolling_slope(series, window)
+    mean = np.mean(slopes)
+    std = np.std(slopes) + 1e-8
+    zscore = (slopes - mean) / std
+    change_mask = np.abs(zscore) > threshold
+    return change_mask, slopes
+
+def predict_hpc_cycles(df):
+    hi_hpt, hi_hpc = calc_hi(df)
+    hi_hpc = np.asarray(hi_hpc)   # conversione esplicita
+    y_true = df["Cycles_to_HPC_SV"].to_numpy()
+    model = LinearRegression()
+    X = hi_hpc.reshape(-1, 1)
+    model.fit(X, y_true)
+    pred_cycles = model.predict(X)
+    change_mask, slopes = detect_change_point(hi_hpc)
+    if change_mask.any():
+        bias = np.mean(pred_cycles[change_mask] - y_true[change_mask])
+        pred_cycles[change_mask] -= bias
+    return pred_cycles, hi_hpc, change_mask
+
+
 for esn in DATA["ESN"].unique():
-    if esn == esn_excluded:
-        continue
-    esn_data = DATA[DATA["ESN"] == esn].reset_index().copy()
+    esn_data = DATA[DATA["ESN"] == esn].reset_index(drop=True)
+    pred_cycles, hi_hpc, change_mask = predict_hpc_cycles(esn_data)
+    true_cycles = esn_data["Cycles_to_HPC_SV"].values
+    cycles_axis = esn_data["Cycles_Since_New"].values
 
-    # Calcolo degli health index
-    hi_hpt, hi_hpc = calc_hi(esn_data)
+    plt.figure(figsize=(20,6))
 
-    final_output_hpc = hi_hpc.copy()
-
-    feat_slope_hpc, feat_intercept_hpc = rolling_slope_intercept(
-        hi_hpc, window_size
-    )
-
-    X_test_esn = pd.DataFrame(
-        {
-            "HI": hi_hpc,
-            "Slope": feat_slope_hpc,
-            "Cycles_Accumulated": np.arange(len(hi_hpc)),  # Cicli passati
-            "HI_Rolling_Mean": pd.Series(hi_hpc).rolling(50).mean().bfill(),
-        }
-    )
-
-    X_test_esn = X_test_esn.ffill().bfill().fillna(0)
-
-    # PREDIZIONE
-    pred_class = lgbm_classifier_hpc.predict(X_test_esn)
-
-    mask_real = esn_data["Cumulative_HPC_SVs"] == 2
-    mask_pred = pred_class == 1
-
-    if mask_pred.any():
-        X_reg_input = pd.DataFrame(
-            {
-                "HI": hi_hpc,
-                "Slope": feat_slope_hpc,
-                "Cycles_Accumulated": np.arange(len(hi_hpc)),
-                "Intercept": feat_intercept_hpc,
-            }
-        ).loc[mask_pred]
-        pred_gap = gap_regr_hpc.predict(X_reg_input)
-        final_output_hpc[mask_pred] = hi_hpc[mask_pred] + pred_gap.flatten()
-        final_output_hpc = (
-            pd.Series(final_output_hpc).rolling(window=50, min_periods=1).mean()
-        )
-
-    # Plot
-    fig, ax1 = plt.subplots(figsize=(20, 6))
-    ax1.plot(
-        esn_data["Cycles_to_HPC_SV"],
-        color="tab:orange",
+    plt.plot(
+        cycles_axis,
+        true_cycles,
         linestyle="--",
-        label="HPC RUL",
-        alpha=0.8,
+        label="True Cycles to HPC"
     )
-    ax2 = ax1.twinx()
-    ax2.plot(final_output_hpc, color="tab:red", label="HI corrertto", linewidth=2)
-    ax2.fill_between(
-        range(len(pred_class)),
+
+    plt.plot(
+        cycles_axis,
+        pred_cycles,
+        label="Predicted Cycles"
+    )
+
+    plt.fill_between(
+        cycles_axis,
         0,
-        1,
-        where=mask_pred,
-        color="red",
-        alpha=0.05,
-        label="Predizione: Terzo Ciclo",
+        np.max(true_cycles),
+        where=change_mask,
+        alpha=0.15,
+        label="Detected regime change"
     )
-    ax2.fill_between(
-        range(len(mask_real)),
-        0,
-        0.05,
-        where=mask_real,
-        color="green",
-        alpha=0.5,
-        label="Ground Truth (SV=2)",
-    )
-    ax1.set_ylabel("Value")
-    ax1.set_xlabel("Cycles")
-    plt.title(f"Training ESN {esn} - LightGBM + gap correction")
-    ax1.legend(loc="upper left")
-    ax1.grid(True, alpha=0.2)
+
+    plt.title(f"Engine {esn} - HPC prediction")
+
+    plt.xlabel("Cycles")
+    plt.ylabel("Cycles to HPC")
+
+    plt.grid(alpha=0.2)
+
+    plt.legend()
+
     plt.show()
 
 
@@ -856,7 +847,6 @@ for esn in DATA["ESN"].unique():
 # %%
 # fancy, sofitsticato
 from math import e
-
 
 def remove_effect(df, col):
     df = df.sort_values([col, "Cycles_Since_New", "Snapshot"])
@@ -1025,3 +1015,19 @@ for f in dft:
     for esn in f["ESN"].unique():
         plot_ww_slope(f[f["ESN"] == esn], residuals(f[f["ESN"] == esn]))
 
+
+# %%
+def run_engine_model(df):
+    """
+    Applica il modello a ciascun ESN nel dataframe
+    """
+    results = {}
+    for esn in df["ESN"].unique():
+        df_esn = df[df["ESN"] == esn]
+        res = residuals(df_esn)
+        plot_ww_slope(df_esn, res)
+        results[esn] = res
+    return results
+
+results_dfv = run_engine_model(dfv)
+results_dft = run_engine_model(dft)
