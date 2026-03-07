@@ -34,8 +34,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 # %load_ext autoreload
 # %autoreload 2
 
-import sys
-sys.path.insert(1, '../')
 from tools import utils as u, config as cfg, plotting as up, preprocessing as pp
 import tools
 
