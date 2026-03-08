@@ -666,14 +666,15 @@ for esn in DATA["ESN"].unique():
 # ### Applicazione del LightGBM per HPT per terzo ciclo di manutenzione + correzione il gap
 
 # %%
-# STEP 1: Classificatore del ciclo di lavoro
-# Obiettivo: dato lo stato attuale del motore, predire in quale
-# "segmento di manutenzione" (0, 1, 2, ...) ci troviamo
-
+# ===== PREPARAZIONE DATI PER CLASSIFICATORE =====
 from sklearn.model_selection import LeaveOneGroupOut
 import lightgbm as lgbm
+from sklearn.metrics import accuracy_score
 
-# ===== PREPARAZIONE DATI PER CLASSIFICATORE =====
+# STEP 1: Classificatore del ciclo di lavoro
+# Obiettivo: dato lo stato attuale del motore, predire in quale
+# "segmento di manutenzione" (0, 1, 2, ...)
+
 
 # Features: residui + HI + slope dell'HI
 def build_classification_features(data, window=20):
@@ -720,20 +721,19 @@ def build_classification_features(data, window=20):
 
 
 clf_data = build_classification_features(coef_data, window=20)
-
-# Colonne features (senza ESN e labels)
 clf_feature_cols = [c for c in clf_data.columns if c not in ["ESN", "label_hpt", "label_hpc"]]
 
 print(f"Features classificazione: {clf_feature_cols}")
 print(f"Classi HPT: {sorted(clf_data['label_hpt'].unique())}")
 print(f"Classi HPC: {sorted(clf_data['label_hpc'].unique())}")
 
-# ===== TRAINING CLASSIFICATORE CICLO DI LAVORO =====
 
+
+# %%
+# ===== TRAINING CLASSIFICATORE CICLO DI LAVORO =====
 # Usiamo Leave-One-Engine-Out per validare
 logo = LeaveOneGroupOut()
 groups = clf_data["ESN"].values
-
 X_clf = clf_data[clf_feature_cols].values
 y_hpt_cycle = clf_data["label_hpt"].values.astype(int)
 y_hpc_cycle = clf_data["label_hpc"].values.astype(int)
@@ -760,9 +760,8 @@ clf_hpc = lgbm.LGBMClassifier(
     verbose=-1,
 )
 
-# Validazione Leave-One-Engine-Out
-from sklearn.metrics import accuracy_score
 
+# Validazione Leave-One-Engine-Out
 print("=== Cross-Validation Leave-One-Engine-Out ===")
 for train_idx, test_idx in logo.split(X_clf, y_hpc_cycle, groups):
     test_esn = groups[test_idx[0]]
@@ -781,65 +780,15 @@ for train_idx, test_idx in logo.split(X_clf, y_hpc_cycle, groups):
 clf_hpt.fit(X_clf, y_hpt_cycle)
 clf_hpc.fit(X_clf, y_hpc_cycle)
 print("\nClassificatori addestrati su tutti i motori.")
-# ===== STEP 2: BASE PREDICTOR (Linear Regression HI → Cycles_to_SV) =====
 
-# ===== STEP 3: GAP CORRECTION con LightGBM Regressor =====
 
-def build_regression_features(data, window=20):
+# %%
+# ===== STEP 2 + 3: PREDICTOR + GAP CORRECTION =====
+def regress_features(data, window=20):
     """
-    Costruisce features per il regressore del gap.
-    Include: residui, HI, slope, ciclo predetto dal classificatore.
-    """
-    feat_list = []
-
-    for esn in data["ESN"].unique():
-        sd = data[data["ESN"] == esn].copy()
-
-        if SEPARATE_COEFS:
-            ahpt_local = chpt[str(esn)]
-            ahpc_local = chpc[str(esn)]
-        else:
-            ahpt_local = chpt
-            ahpc_local = chpc
-
-        if USE_ALL_VARS:
-            hi_hpt = HIE(ahpt_local, sd[target_vars])
-            hi_hpc = HIE(ahpc_local, sd[target_vars])
-        else:
-            hi_hpt = HI(sd["Sensed_T3"], sd["Sensed_T45"], ahpt_local)
-            hi_hpc = HI(sd["Sensed_T3"], sd["Sensed_T45"], ahpc_local)
-
-        feat = sd[DEGRAD_VARS].copy()
-        feat["HI_HPT"] = hi_hpt.values
-        feat["HI_HPC"] = hi_hpc.values
-        feat["HI_HPT_slope"] = hi_hpt.rolling(window=window, min_periods=1).apply(get_slope, raw=True).values
-        feat["HI_HPC_slope"] = hi_hpc.rolling(window=window, min_periods=1).apply(get_slope, raw=True).values
-        feat["HI_HPT_rolling_mean"] = hi_hpt.rolling(window=window, min_periods=1).mean().values
-        feat["HI_HPC_rolling_mean"] = hi_hpc.rolling(window=window, min_periods=1).mean().values
-        feat["ESN"] = esn
-
-        # Target: Cycles_to_SV reale
-        feat["target_hpt"] = sd["Cycles_to_HPT_SV"].values
-        feat["target_hpc"] = sd["Cycles_to_HPC_SV"].values
-
-        feat_list.append(feat)
-
-    return pd.concat(feat_list, ignore_index=True)
-
-# ===== STEP 2 + 3 MIGLIORATO =====
-# Invece di Linear Regression base + LightGBM gap, facciamo un unico
-# LightGBM con features più ricche e regolarizzazione più forte.
-
-def build_regression_features_v2(data, window=20):
-    """
-    Features migliorate per la predizione diretta di Cycles_to_SV.
-    Aggiunge:
-    - Posizione temporale relativa (quanti cicli dall'inizio)
-    - Features cumulative e di trend
-    - Rapporto tra HI attuale e storico
+    Features per la predizione diretta di Cycles_to_SV.
     """
     feat_list = []
-
     for esn in data["ESN"].unique():
         sd = data[data["ESN"] == esn].copy().sort_values("Cycles_Since_New")
 
@@ -918,33 +867,30 @@ def build_regression_features_v2(data, window=20):
 
 
 # Costruisci features migliorate
-reg_data_v2 = build_regression_features_v2(coef_data, window=20)
-reg_feature_cols_v2 = [c for c in reg_data_v2.columns if c not in ["ESN", "target_hpt", "target_hpc"]]
+regs_data = regress_features(coef_data, window=20)
+regs_feature_cols = [c for c in regs_data.columns if c not in ["ESN", "target_hpt", "target_hpc"]]
+print(f"Features: {len(regs_feature_cols)}")
 
-print(f"Features v1: {len(reg_feature_cols)}")
-print(f"Features v2: {len(reg_feature_cols_v2)}")
-
-# ===== MODELLO DIRETTO (senza base + gap) =====
-
-X_reg_v2 = reg_data_v2[reg_feature_cols_v2].values
-y_hpt_v2 = reg_data_v2["target_hpt"].values
-y_hpc_v2 = reg_data_v2["target_hpc"].values
-groups_v2 = reg_data_v2["ESN"].values
+X_reg = regs_data[regs_feature_cols].values
+y_hpt = regs_data["target_hpt"].values
+y_hpc = regs_data["target_hpc"].values
+groups = regs_data["ESN"].values
 
 # LightGBM con regolarizzazione più forte
 # (4 motori = pochissimi dati, serve contenere l'overfitting)
+
 lgbm_params = dict(
     objective="regression",
     metric="rmse",
     n_estimators=1000,
-    learning_rate=0.01,          # più basso → generalizza meglio
-    max_depth=4,                 # meno profondo → meno overfitting
-    num_leaves=15,               # ridotto (era 31)
-    min_child_samples=50,        # più alto → meno overfitting (era 20)
-    subsample=0.7,               # bagging
-    colsample_bytree=0.7,       # feature sampling
-    reg_alpha=1.0,               # L1 (era 0.1)
-    reg_lambda=5.0,              # L2 (era 0.1)
+    learning_rate=0.01,             # più basso → generalizza meglio
+    max_depth=4,                    # meno profondo → meno overfitting
+    num_leaves=15,                  # ridotto (era 31)
+    min_child_samples=50,           # più alto → meno overfitting (era 20)
+    subsample=0.7,                  # bagging
+    colsample_bytree=0.7,           # feature sampling
+    reg_alpha=1.0,                  # L1 (era 0.1)
+    reg_lambda=5.0,                 # L2 (era 0.1)
     n_jobs=-1,
     verbose=-1,
 )
@@ -953,39 +899,39 @@ lgbm_direct_hpt = lgbm.LGBMRegressor(**lgbm_params)
 lgbm_direct_hpc = lgbm.LGBMRegressor(**lgbm_params)
 
 # ===== VALIDAZIONE LEAVE-ONE-ENGINE-OUT =====
-logo_v2 = LeaveOneGroupOut()
+logo = LeaveOneGroupOut()
 
 print("\n=== V2 Direct Prediction — Leave-One-Engine-Out ===")
 loo_results = []
 
-for train_idx, test_idx in logo_v2.split(X_reg_v2, y_hpt_v2, groups_v2):
-    test_esn = groups_v2[test_idx[0]]
+for train_idx, test_idx in logo.split(X_reg, y_hpt, groups):
+    test_esn = groups[test_idx[0]]
 
     # HPT con early stopping
     lgbm_direct_hpt.fit(
-        X_reg_v2[train_idx], y_hpt_v2[train_idx],
-        eval_set=[(X_reg_v2[test_idx], y_hpt_v2[test_idx])],
+        X_reg[train_idx], y_hpt[train_idx],
+        eval_set=[(X_reg[test_idx], y_hpt[test_idx])],
         callbacks=[lgbm.early_stopping(50, verbose=False)],
     )
-    pred_hpt = lgbm_direct_hpt.predict(X_reg_v2[test_idx])
+    pred_hpt = lgbm_direct_hpt.predict(X_reg[test_idx])
     pred_hpt = np.clip(pred_hpt, 0, None)  # non negativo
-    rmse_hpt = np.sqrt(np.mean((y_hpt_v2[test_idx] - pred_hpt) ** 2))
-    mae_hpt = np.mean(np.abs(y_hpt_v2[test_idx] - pred_hpt))
+    rmse_hpt = np.sqrt(np.mean((y_hpt[test_idx] - pred_hpt) ** 2))
+    mae_hpt = np.mean(np.abs(y_hpt[test_idx] - pred_hpt))
 
     # HPC con early stopping
     lgbm_direct_hpc.fit(
-        X_reg_v2[train_idx], y_hpc_v2[train_idx],
-        eval_set=[(X_reg_v2[test_idx], y_hpc_v2[test_idx])],
+        X_reg[train_idx], y_hpc[train_idx],
+        eval_set=[(X_reg[test_idx], y_hpc[test_idx])],
         callbacks=[lgbm.early_stopping(50, verbose=False)],
     )
-    pred_hpc = lgbm_direct_hpc.predict(X_reg_v2[test_idx])
+    pred_hpc = lgbm_direct_hpc.predict(X_reg[test_idx])
     pred_hpc = np.clip(pred_hpc, 0, None)
-    rmse_hpc = np.sqrt(np.mean((y_hpc_v2[test_idx] - pred_hpc) ** 2))
-    mae_hpc = np.mean(np.abs(y_hpc_v2[test_idx] - pred_hpc))
+    rmse_hpc = np.sqrt(np.mean((y_hpc[test_idx] - pred_hpc) ** 2))
+    mae_hpc = np.mean(np.abs(y_hpc[test_idx] - pred_hpc))
 
     # TWE
-    twe_hpt = np.mean(TWE(pred_hpt, y_hpt_v2[test_idx]))
-    twe_hpc = np.mean(TWE(pred_hpc, y_hpc_v2[test_idx]))
+    twe_hpt = np.mean(TWE(pred_hpt, y_hpt[test_idx]))
+    twe_hpc = np.mean(TWE(pred_hpc, y_hpc[test_idx]))
 
     loo_results.append({
         "ESN": test_esn,
@@ -1003,16 +949,16 @@ print(f"HPT  RMSE={loo_df['HPT_RMSE'].mean():.2f}  MAE={loo_df['HPT_MAE'].mean()
 print(f"HPC  RMSE={loo_df['HPC_RMSE'].mean():.2f}  MAE={loo_df['HPC_MAE'].mean():.2f}  TWE={loo_df['HPC_TWE'].mean():.2f}")
 
 # ===== TRAINING FINALE =====
-lgbm_direct_hpt.fit(X_reg_v2, y_hpt_v2)
-lgbm_direct_hpc.fit(X_reg_v2, y_hpc_v2)
+lgbm_direct_hpt.fit(X_reg, y_hpt)
+lgbm_direct_hpc.fit(X_reg, y_hpc)
 
 # Metriche su training (per confronto con v1)
-train_pred_hpt = np.clip(lgbm_direct_hpt.predict(X_reg_v2), 0, None)
-train_pred_hpc = np.clip(lgbm_direct_hpc.predict(X_reg_v2), 0, None)
+train_pred_hpt = np.clip(lgbm_direct_hpt.predict(X_reg), 0, None)
+train_pred_hpc = np.clip(lgbm_direct_hpc.predict(X_reg), 0, None)
 
 print("\n=== METRICHE TRAINING (v2 direct) ===")
-print(f"HPT  RMSE={np.sqrt(np.mean((y_hpt_v2 - train_pred_hpt)**2)):.2f}  MAE={np.mean(np.abs(y_hpt_v2 - train_pred_hpt)):.2f}")
-print(f"HPC  RMSE={np.sqrt(np.mean((y_hpc_v2 - train_pred_hpc)**2)):.2f}  MAE={np.mean(np.abs(y_hpc_v2 - train_pred_hpc)):.2f}")
+print(f"HPT  RMSE={np.sqrt(np.mean((y_hpt - train_pred_hpt)**2)):.2f}  MAE={np.mean(np.abs(y_hpt - train_pred_hpt)):.2f}")
+print(f"HPC  RMSE={np.sqrt(np.mean((y_hpc - train_pred_hpc)**2)):.2f}  MAE={np.mean(np.abs(y_hpc - train_pred_hpc)):.2f}")
 
 # ===== FEATURE IMPORTANCE =====
 fig, axs = plt.subplots(1, 2, figsize=(20, 8))
@@ -1021,7 +967,7 @@ fig, axs = plt.subplots(1, 2, figsize=(20, 8))
 importance_hpt = lgbm_direct_hpt.feature_importances_
 sorted_idx_hpt = np.argsort(importance_hpt)[-20:]  # top 20
 axs[0].barh(
-    [reg_feature_cols_v2[i] for i in sorted_idx_hpt],
+    [regs_feature_cols[i] for i in sorted_idx_hpt],
     importance_hpt[sorted_idx_hpt],
     color="tab:blue"
 )
@@ -1032,7 +978,7 @@ axs[0].set_xlabel("Importance")
 importance_hpc = lgbm_direct_hpc.feature_importances_
 sorted_idx_hpc = np.argsort(importance_hpc)[-20:]
 axs[1].barh(
-    [reg_feature_cols_v2[i] for i in sorted_idx_hpc],
+    [regs_feature_cols[i] for i in sorted_idx_hpc],
     importance_hpc[sorted_idx_hpc],
     color="tab:green"
 )
@@ -1105,7 +1051,7 @@ def predict_cycles_to_sv_v2(engine_df, engine_residuals, esn, window=20):
     for var in DEGRAD_VARS:
         feat[f"{var}_slope_20"] = sd[var].rolling(window=20, min_periods=1).apply(get_slope, raw=True).values
 
-    X_feat = feat[reg_feature_cols_v2].values
+    X_feat = feat[regs_feature_cols].values
 
     # Predizione diretta
     pred_hpt = np.clip(lgbm_direct_hpt.predict(X_feat), 0, None)
@@ -1130,8 +1076,8 @@ def predict_cycles_to_sv_v2(engine_df, engine_residuals, esn, window=20):
     }
 
 
-reg_data = build_regression_features_v2(coef_data, window=20)
-reg_feature_cols = [c for c in reg_data.columns if c not in ["ESN", "target_hpt", "target_hpc"]]
+reg_data = regress_features(coef_data, window=20)
+regs_feature_cols = [c for c in reg_data.columns if c not in ["ESN", "target_hpt", "target_hpc"]]
 
 # ===== BASE PREDICTOR: Regressione Lineare HI → Cycles_to_SV =====
 
@@ -1163,7 +1109,7 @@ print(f"\nGap HPT - mean: {gap_hpt.mean():.2f}, std: {gap_hpt.std():.2f}")
 print(f"Gap HPC - mean: {gap_hpc.mean():.2f}, std: {gap_hpc.std():.2f}")
 # ===== LGBM REGRESSOR PER CORREZIONE GAP =====
 
-X_reg = reg_data[reg_feature_cols].values
+X_reg = reg_data[regs_feature_cols].values
 groups_reg = reg_data["ESN"].values
 
 # LightGBM Regressor per HPT gap
@@ -1226,6 +1172,463 @@ lgbm_gap_hpt.fit(X_reg, gap_hpt)
 lgbm_gap_hpc.fit(X_reg, gap_hpc)
 print("\nLGBM gap regressors addestrati su tutti i motori.")
 
+
+# %%
+# ===== GLOBAL GRID SEARCH: MINIMO ERRORE DI TRAINING =====
+from sklearn.model_selection import ParameterGrid
+from sklearn.metrics import accuracy_score
+
+# Obiettivo esplicito: minimizzare l'errore IN-SAMPLE (training)
+SEARCH_PROFILE = "fast"   # "fast" | "balanced" | "aggressive"
+TUNE_DIRECT = True
+TUNE_GAP = True
+TUNE_CLASSIFIERS = True
+VERBOSE_EVERY = 20
+CLIP_NEGATIVE_PREDICTIONS = True
+
+# Limiti opzionali: None = usa tutte le combinazioni della griglia
+MAX_COMBINATIONS_DIRECT = None
+MAX_COMBINATIONS_GAP = None
+MAX_COMBINATIONS_CLF = None
+
+if SEARCH_PROFILE == "fast":
+    direct_grid = {
+        "n_estimators": [800, 1500],
+        "learning_rate": [0.03],
+        "max_depth": [4, 8],
+        "num_leaves": [31, 63],
+        "min_child_samples": [5],
+        "reg_alpha": [0.0],
+        "reg_lambda": [0.0],
+    }
+    gap_grid = {
+        "n_estimators": [600, 1200],
+        "learning_rate": [0.03],
+        "max_depth": [4, 8],
+        "num_leaves": [31, 63],
+        "min_child_samples": [5],
+        "reg_alpha": [0.0],
+        "reg_lambda": [0.0],
+    }
+    clf_grid = {
+        "n_estimators": [300, 600],
+        "learning_rate": [0.03],
+        "max_depth": [6],
+        "num_leaves": [31, 63],
+    }
+elif SEARCH_PROFILE == "balanced":
+    direct_grid = {
+        "n_estimators": [800, 1500],
+        "learning_rate": [0.01, 0.03],
+        "max_depth": [4, 8],
+        "num_leaves": [31, 63],
+        "min_child_samples": [5, 20],
+        "reg_alpha": [0.0, 0.1],
+        "reg_lambda": [0.0, 1.0],
+    }
+    gap_grid = {
+        "n_estimators": [600, 1200],
+        "learning_rate": [0.01, 0.03],
+        "max_depth": [4, 8],
+        "num_leaves": [31, 63],
+        "min_child_samples": [5, 20],
+        "reg_alpha": [0.0, 0.1],
+        "reg_lambda": [0.0, 1.0],
+    }
+    clf_grid = {
+        "n_estimators": [300, 600],
+        "learning_rate": [0.01, 0.03],
+        "max_depth": [4, 6],
+        "num_leaves": [31, 63],
+    }
+else:  # aggressive
+    direct_grid = {
+        "n_estimators": [800, 1500, 2500],
+        "learning_rate": [0.01, 0.03, 0.05],
+        "max_depth": [4, 8],
+        "num_leaves": [31, 63, 127],
+        "min_child_samples": [1, 5, 20],
+        "reg_alpha": [0.0, 0.1],
+        "reg_lambda": [0.0, 1.0],
+    }
+    gap_grid = {
+        "n_estimators": [600, 1200, 2000],
+        "learning_rate": [0.01, 0.03, 0.05],
+        "max_depth": [4, 8],
+        "num_leaves": [31, 63, 127],
+        "min_child_samples": [1, 5, 20],
+        "reg_alpha": [0.0, 0.1],
+        "reg_lambda": [0.0, 1.0],
+    }
+    clf_grid = {
+        "n_estimators": [300, 600, 1000],
+        "learning_rate": [0.01, 0.03],
+        "max_depth": [4, 6, 8],
+        "num_leaves": [31, 63, 127],
+    }
+
+
+def _rmse(y_true, y_pred):
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+
+def _mae(y_true, y_pred):
+    return float(np.mean(np.abs(y_true - y_pred)))
+
+
+def _clip_pred(y_pred):
+    if CLIP_NEGATIVE_PREDICTIONS:
+        return np.clip(y_pred, 0, None)
+    return y_pred
+
+
+def _make_combinations(grid, max_combinations=None):
+    combos = list(ParameterGrid(grid))
+    if max_combinations is not None:
+        combos = combos[:max_combinations]
+    return combos
+
+
+def _search_regressors(
+    combinations,
+    X,
+    y_fit_hpt,
+    y_fit_hpc,
+    y_eval_hpt,
+    y_eval_hpc,
+    label,
+    base_pred_hpt=None,
+    base_pred_hpc=None,
+):
+    base_reg_params = dict(
+        objective="regression",
+        metric="rmse",
+        n_jobs=-1,
+        verbose=-1,
+        random_state=42,
+    )
+
+    best = {
+        "score": np.inf,
+        "params": None,
+        "model_hpt": None,
+        "model_hpc": None,
+        "rmse_hpt": np.inf,
+        "rmse_hpc": np.inf,
+        "mae_hpt": np.inf,
+        "mae_hpc": np.inf,
+    }
+    rows = []
+
+    total = len(combinations)
+    print(f"\n[{label}] combinazioni da testare: {total}")
+
+    for i, params in enumerate(combinations, start=1):
+        mhpt = lgbm.LGBMRegressor(**base_reg_params, **params)
+        mhpc = lgbm.LGBMRegressor(**base_reg_params, **params)
+
+        mhpt.fit(X, y_fit_hpt)
+        mhpc.fit(X, y_fit_hpc)
+
+        pred_hpt = mhpt.predict(X)
+        pred_hpc = mhpc.predict(X)
+
+        if base_pred_hpt is not None and base_pred_hpc is not None:
+            pred_hpt = base_pred_hpt + pred_hpt
+            pred_hpc = base_pred_hpc + pred_hpc
+
+        pred_hpt = _clip_pred(pred_hpt)
+        pred_hpc = _clip_pred(pred_hpc)
+
+        rmse_hpt = _rmse(y_eval_hpt, pred_hpt)
+        rmse_hpc = _rmse(y_eval_hpc, pred_hpc)
+        mae_hpt = _mae(y_eval_hpt, pred_hpt)
+        mae_hpc = _mae(y_eval_hpc, pred_hpc)
+
+        score = rmse_hpt + rmse_hpc
+
+        rows.append(
+            {
+                "trial": i,
+                "score": score,
+                "rmse_hpt": rmse_hpt,
+                "rmse_hpc": rmse_hpc,
+                "mae_hpt": mae_hpt,
+                "mae_hpc": mae_hpc,
+                **params,
+            }
+        )
+
+        if score < best["score"]:
+            best = {
+                "score": score,
+                "params": params,
+                "model_hpt": mhpt,
+                "model_hpc": mhpc,
+                "rmse_hpt": rmse_hpt,
+                "rmse_hpc": rmse_hpc,
+                "mae_hpt": mae_hpt,
+                "mae_hpc": mae_hpc,
+            }
+
+        if i % VERBOSE_EVERY == 0 or i == total:
+            print(
+                f"[{label}] {i}/{total} | best_score={best['score']:.4f} "
+                f"(RMSE_HPT={best['rmse_hpt']:.4f}, RMSE_HPC={best['rmse_hpc']:.4f})"
+            )
+
+    return best, pd.DataFrame(rows).sort_values("score").reset_index(drop=True)
+
+
+def _search_classifiers(combinations, X, y_hpt, y_hpc, label="CLASSIFIERS"):
+    base_clf_params = dict(
+        objective="multiclass",
+        n_jobs=-1,
+        verbose=-1,
+        random_state=42,
+    )
+
+    best = {
+        "score": np.inf,
+        "params": None,
+        "model_hpt": None,
+        "model_hpc": None,
+        "err_hpt": np.inf,
+        "err_hpc": np.inf,
+        "acc_hpt": 0.0,
+        "acc_hpc": 0.0,
+    }
+    rows = []
+
+    total = len(combinations)
+    print(f"\n[{label}] combinazioni da testare: {total}")
+
+    for i, params in enumerate(combinations, start=1):
+        chpt = lgbm.LGBMClassifier(**base_clf_params, **params)
+        chpc = lgbm.LGBMClassifier(**base_clf_params, **params)
+
+        chpt.fit(X, y_hpt)
+        chpc.fit(X, y_hpc)
+
+        pred_hpt = chpt.predict(X)
+        pred_hpc = chpc.predict(X)
+
+        acc_hpt_local = float(accuracy_score(y_hpt, pred_hpt))
+        acc_hpc_local = float(accuracy_score(y_hpc, pred_hpc))
+        err_hpt = 1.0 - acc_hpt_local
+        err_hpc = 1.0 - acc_hpc_local
+        score = err_hpt + err_hpc
+
+        rows.append(
+            {
+                "trial": i,
+                "score": score,
+                "acc_hpt": acc_hpt_local,
+                "acc_hpc": acc_hpc_local,
+                "err_hpt": err_hpt,
+                "err_hpc": err_hpc,
+                **params,
+            }
+        )
+
+        if score < best["score"]:
+            best = {
+                "score": score,
+                "params": params,
+                "model_hpt": chpt,
+                "model_hpc": chpc,
+                "err_hpt": err_hpt,
+                "err_hpc": err_hpc,
+                "acc_hpt": acc_hpt_local,
+                "acc_hpc": acc_hpc_local,
+            }
+
+        if i % VERBOSE_EVERY == 0 or i == total:
+            print(
+                f"[{label}] {i}/{total} | best_score={best['score']:.6f} "
+                f"(acc_hpt={best['acc_hpt']:.4f}, acc_hpc={best['acc_hpc']:.4f})"
+            )
+
+    return best, pd.DataFrame(rows).sort_values("score").reset_index(drop=True)
+
+
+# -----------------------------
+# 1) Preparazione dati tuning
+# -----------------------------
+if "reg_data" in globals() and all(
+    col in reg_data.columns for col in ["ESN", "target_hpt", "target_hpc"]
+):
+    tune_df = reg_data.copy()
+elif "regs_data" in globals() and all(
+    col in regs_data.columns for col in ["ESN", "target_hpt", "target_hpc"]
+):
+    tune_df = regs_data.copy()
+else:
+    raise ValueError(
+        "Né 'reg_data' né 'regs_data' sono disponibili con le colonne attese. "
+        "Esegui prima la cella 19."
+    )
+
+feature_cols_tune = [
+    c for c in tune_df.columns if c not in ["ESN", "target_hpt", "target_hpc"]
+]
+X_tune = tune_df[feature_cols_tune].values
+y_tune_hpt = tune_df["target_hpt"].values
+y_tune_hpc = tune_df["target_hpc"].values
+
+# Base predictor lineare (serve per la parte gap)
+base_reg_hpt = LinearRegression().fit(tune_df[["HI_HPT"]].values, y_tune_hpt)
+base_reg_hpc = LinearRegression().fit(tune_df[["HI_HPC"]].values, y_tune_hpc)
+base_pred_hpt = base_reg_hpt.predict(tune_df[["HI_HPT"]].values)
+base_pred_hpc = base_reg_hpc.predict(tune_df[["HI_HPC"]].values)
+gap_target_hpt = y_tune_hpt - base_pred_hpt
+gap_target_hpc = y_tune_hpc - base_pred_hpc
+
+# -----------------------------
+# 2) Grid search DIRECT
+# -----------------------------
+best_direct, search_results_direct = None, None
+if TUNE_DIRECT:
+    direct_combinations = _make_combinations(direct_grid, MAX_COMBINATIONS_DIRECT)
+    best_direct, search_results_direct = _search_regressors(
+        combinations=direct_combinations,
+        X=X_tune,
+        y_fit_hpt=y_tune_hpt,
+        y_fit_hpc=y_tune_hpc,
+        y_eval_hpt=y_tune_hpt,
+        y_eval_hpc=y_tune_hpc,
+        label="DIRECT",
+    )
+
+    lgbm_direct_hpt = best_direct["model_hpt"]
+    lgbm_direct_hpc = best_direct["model_hpc"]
+    best_params_hpt = best_direct["params"]
+    best_params_hpc = best_direct["params"]
+    best_rmse_hpt = best_direct["rmse_hpt"]
+    best_rmse_hpc = best_direct["rmse_hpc"]
+
+    print("\n[DIRETTI] Miglior combinazione:")
+    print(best_direct["params"])
+    print(
+        f"RMSE_HPT={best_direct['rmse_hpt']:.4f}, RMSE_HPC={best_direct['rmse_hpc']:.4f}, "
+        f"score={best_direct['score']:.4f}"
+    )
+
+# -----------------------------
+# 3) Grid search GAP (errore finale)
+# -----------------------------
+best_gap, search_results_gap = None, None
+if TUNE_GAP:
+    gap_combinations = _make_combinations(gap_grid, MAX_COMBINATIONS_GAP)
+    best_gap, search_results_gap = _search_regressors(
+        combinations=gap_combinations,
+        X=X_tune,
+        y_fit_hpt=gap_target_hpt,
+        y_fit_hpc=gap_target_hpc,
+        y_eval_hpt=y_tune_hpt,
+        y_eval_hpc=y_tune_hpc,
+        label="GAP",
+        base_pred_hpt=base_pred_hpt,
+        base_pred_hpc=base_pred_hpc,
+    )
+
+    lgbm_gap_hpt = best_gap["model_hpt"]
+    lgbm_gap_hpc = best_gap["model_hpc"]
+
+    print("\n[GAP] Miglior combinazione:")
+    print(best_gap["params"])
+    print(
+        f"RMSE_HPT={best_gap['rmse_hpt']:.4f}, RMSE_HPC={best_gap['rmse_hpc']:.4f}, "
+        f"score={best_gap['score']:.4f}"
+    )
+
+# -----------------------------
+# 4) Grid search classificatori
+# -----------------------------
+best_clf, search_results_clf = None, None
+if TUNE_CLASSIFIERS:
+    if "clf_data" in globals() and all(
+        col in clf_data.columns for col in ["label_hpt", "label_hpc"]
+    ):
+        X_clf_tune = clf_data[clf_feature_cols].values
+        y_clf_hpt = clf_data["label_hpt"].values.astype(int)
+        y_clf_hpc = clf_data["label_hpc"].values.astype(int)
+
+        clf_combinations = _make_combinations(clf_grid, MAX_COMBINATIONS_CLF)
+        best_clf, search_results_clf = _search_classifiers(
+            combinations=clf_combinations,
+            X=X_clf_tune,
+            y_hpt=y_clf_hpt,
+            y_hpc=y_clf_hpc,
+            label="CLASSIFIERS",
+        )
+
+        clf_hpt = best_clf["model_hpt"]
+        clf_hpc = best_clf["model_hpc"]
+
+        print("\n[CLASSIFIER] Miglior combinazione:")
+        print(best_clf["params"])
+        print(
+            f"acc_hpt={best_clf['acc_hpt']:.4f}, acc_hpc={best_clf['acc_hpc']:.4f}, "
+            f"score={best_clf['score']:.6f}"
+        )
+    else:
+        print(
+            "\n[CLASSIFIER] Saltato: esegui prima le celle 17 e 18 per creare "
+            "clf_data e clf_feature_cols."
+        )
+
+# -----------------------------
+# 5) Riepilogo finale
+# -----------------------------
+summary_rows = []
+
+if best_direct is not None:
+    summary_rows.append(
+        {
+            "model": "direct",
+            "rmse_hpt": best_direct["rmse_hpt"],
+            "rmse_hpc": best_direct["rmse_hpc"],
+            "mae_hpt": best_direct["mae_hpt"],
+            "mae_hpc": best_direct["mae_hpc"],
+            "score": best_direct["score"],
+        }
+    )
+if best_gap is not None:
+    summary_rows.append(
+        {
+            "model": "gap_final",
+            "rmse_hpt": best_gap["rmse_hpt"],
+            "rmse_hpc": best_gap["rmse_hpc"],
+            "mae_hpt": best_gap["mae_hpt"],
+            "mae_hpc": best_gap["mae_hpc"],
+            "score": best_gap["score"],
+        }
+    )
+if best_clf is not None:
+    summary_rows.append(
+        {
+            "model": "classifiers",
+            "rmse_hpt": np.nan,
+            "rmse_hpc": np.nan,
+            "mae_hpt": 1.0 - best_clf["acc_hpt"],
+            "mae_hpc": 1.0 - best_clf["acc_hpc"],
+            "score": best_clf["score"],
+        }
+    )
+
+if len(summary_rows) > 0:
+    summary_df = pd.DataFrame(summary_rows)
+    print("\n=== MIGLIORI RISULTATI TRAINING ===")
+    print(summary_df.to_string(index=False))
+
+hyperparam_search_summary = {
+    "profile": SEARCH_PROFILE,
+    "direct_best_params": None if best_direct is None else best_direct["params"],
+    "gap_best_params": None if best_gap is None else best_gap["params"],
+    "classifier_best_params": None if best_clf is None else best_clf["params"],
+}
+print("\nHyperparam search summary pronto in variabile: hyperparam_search_summary")
 
 
 # %%
@@ -1645,7 +2048,7 @@ def plot_training_before_after(coef_data, reg_data, base_reg_hpt, base_reg_hpc, 
 
 
 # ===== ESECUZIONE =====
-plot_training_before_after(coef_data, reg_data, base_reg_hpt, base_reg_hpc, lgbm_gap_hpt, lgbm_gap_hpc, reg_feature_cols)
+plot_training_before_after(coef_data, reg_data, base_reg_hpt, base_reg_hpc, lgbm_gap_hpt, lgbm_gap_hpc, regs_feature_cols)
 
 
 # %%
@@ -1673,10 +2076,10 @@ def predict_all_engines(engine_list, res_data_list=None):
     # Range ragionevoli dalle statistiche di training
     # (i target nel training hanno un certo range — le predizioni non dovrebbero
     #  uscire troppo da lì)
-    train_max_hpt = reg_data_v2["target_hpt"].max()
-    train_max_hpc = reg_data_v2["target_hpc"].max()
-    train_mean_hpt = reg_data_v2["target_hpt"].mean()
-    train_mean_hpc = reg_data_v2["target_hpc"].mean()
+    train_max_hpt = regs_data["target_hpt"].max()
+    train_max_hpc = regs_data["target_hpc"].max()
+    train_mean_hpt = regs_data["target_hpt"].mean()
+    train_mean_hpc = regs_data["target_hpc"].mean()
 
     print(f"Training range HPT: 0 — {train_max_hpt:.0f} (mean={train_mean_hpt:.0f})")
     print(f"Training range HPC: 0 — {train_max_hpc:.0f} (mean={train_mean_hpc:.0f})")
@@ -2070,6 +2473,8 @@ def plot_ww_prediction(ww_result):
         print(f"  ESN {esn}: Detected={len(sv)}, Slope={slope:.6f}")
 
 
+
+# %%
 # ===== ESECUZIONE =====
 
 # --- Training ---
@@ -2110,190 +2515,225 @@ for t in dft:
         ww_results_test[esn] = ww_result
         plot_ww_prediction(ww_result)
 
+# %% [markdown]
+# # Generate Submission
+
 # %%
-# # fancy, sofitsticato
-# from math import e
+# Cycles to WW
 
-# def remove_effect(df, col):
-#     df = df.sort_values([col, "Cycles_Since_New", "Snapshot"])
-#     df = pp.remove_outliers(df, threshold=2.6, sensor_cols=["Sensed_T45"])
-#     df = df.groupby(["Cycles_Since_New"], as_index=False).median()
-#     grp_stats = df.groupby(col)["Sensed_T45"].agg(["first", "last"])
-#     grp_stats = grp_stats.sort_index()
-#     grp_stats["prev_last"] = grp_stats["last"].shift(1)
-#     grp_stats["jump"] = grp_stats["first"] - grp_stats["prev_last"]
-#     grp_stats["jump"] = grp_stats["jump"].fillna(0)
-#     grp_stats["cumulative_offset"] = grp_stats["jump"].cumsum()
-#     offset_map = grp_stats["cumulative_offset"].to_dict()
-#     df["Sensed_T45"] = df["Sensed_T45"] - df[col].map(offset_map)
-#     return df
+print("=== WW PREDICTION — TRAINING ===")
+ww_results_train = {}
+for esn in df["ESN"].unique():
+    engine_df = df[df["ESN"] == esn]
+    engine_res = _residuals(engine_df)
+    if engine_res is None:
+        continue
+    ww_result = predict_ww(engine_df, engine_res, esn)
+    len(ww_result["detected_events"])
 
-# def get_events(df, soglia=10):
-#     hi_hpt, hi_hpc = calc_hi(df)
-#     cond_1 = hi_hpt.diff(1) > soglia  # Differenza col punto i-1
-#     cond_2 = hi_hpt.diff(2) > soglia  # Differenza col punto i-2
-#     cond_3 = hi_hpt.diff(3) > soglia  # Differenza col punto i-3
-#     eventi_hpt = hi_hpt[cond_1 & cond_2 & cond_3]
-    
-#     cond_1_c = hi_hpc.diff(1) > soglia
-#     cond_2_c = hi_hpc.diff(2) > soglia
-#     cond_3_c = hi_hpc.diff(3) > soglia
-#     eventi_hpc = hi_hpc[cond_1_c & cond_2_c & cond_3_c]
+print("\n=== WW PREDICTION — VALIDATION ===")
+ww_results_val = {}
+for v in dfv:
+    for esn in v["ESN"].unique():
+        engine_df = v[v["ESN"] == esn]
+        engine_res = _residuals(engine_df)
+        if engine_res is None:
+            continue
+        ww_result = predict_ww(engine_df, engine_res, esn)
+        len(ww_result["detected_events"])
 
-#     return eventi_hpt, eventi_hpc
+# --- Test ---
+print("\n=== WW PREDICTION — TEST ===")
+ww_results_test = {}
+for t in dft:
+    for esn in t["ESN"].unique():
+        engine_df = t[t["ESN"] == esn]
+        engine_res = _residuals(engine_df)
+        if engine_res is None:
+            continue
+        ww_result = predict_ww(engine_df, engine_res, esn)
+        len(ww_result["detected_events"])
 
 
+# %% [markdown]
+# # Salvataggio Modelli su Disco
+# Salva tutti i modelli addestrati con joblib così puoi ricaricarli
+# senza dover riallenare da zero ogni volta.
 
-# # nudo e crudo
-# def remove_effect_hard_core(df):
-#     df = df.sort_values(["Cycles_Since_New", "Snapshot"]).copy()
-#     df = pp.remove_outliers(df, threshold=2.6, sensor_cols=["Sensed_T45"])
-#     df = df.rolling(window=5, min_periods=1).median().reset_index(drop=True)
-#     ehpt, ehpc = get_events(df)
-#     df["Event_Group"] = 0
-#     df.loc[ehpt.index, "Event_Group"] = 1
-#     df["Event_Group"] = df["Event_Group"].cumsum()
-#     grp_stats = df.groupby("Event_Group")["Sensed_T45"].agg(["first", "last"])
-#     grp_stats["prev_last"] = grp_stats["last"].shift(1)
-#     grp_stats["jump"] = grp_stats["first"] - grp_stats["prev_last"]
-#     grp_stats["jump"] = grp_stats["jump"].fillna(0)
-#     grp_stats["cumulative_offset"] = grp_stats["jump"].cumsum()
-#     offset_map = grp_stats["cumulative_offset"].to_dict()
-#     df["Sensed_T45"] = df["Sensed_T45"] - df["Event_Group"].map(offset_map)
-#     df = df.drop(columns=["Event_Group"])
-#     return df
+# %%
+import joblib
 
-# def plot_ww_slope(wwdf, res):
-#     if all(wwdf.ESN.unique() != [101,102,103,104]):
-#         not_training = True
-#     else:
-#         not_training = False
+MODELS_DIR = "./saved_models"
+os.makedirs(MODELS_DIR, exist_ok=True)
 
-#     wwdf[DEGRAD_VARS] = res[DEGRAD_VARS]
-#     wwdf = wwdf.rename(columns={"Cycles": "Cycles_Since_New"})
+# Il regressore lineare usato come ensemble per calcolare i residui
+joblib.dump(models,            f"{MODELS_DIR}/linear_ensemble.pkl")
 
-#     if not_training:
-#         wwdf = remove_effect_hard_core(wwdf)
-#     if not not_training:
-#         wwdf = remove_effect(wwdf, "Cumulative_HPT_SVs")
-#         wwdf = remove_effect(wwdf, "Cumulative_HPC_SVs")
+# I coefficienti alpha dell'health index (uno per HPT, uno per HPC)
+joblib.dump(chpt,              f"{MODELS_DIR}/chpt.pkl")
+joblib.dump(chpc,              f"{MODELS_DIR}/chpc.pkl")
 
-#     wwdf = wwdf.dropna()
+# I LightGBM per la stima diretta di Cycles_to_SV
+joblib.dump(lgbm_direct_hpt,   f"{MODELS_DIR}/lgbm_direct_hpt.pkl")
+joblib.dump(lgbm_direct_hpc,   f"{MODELS_DIR}/lgbm_direct_hpc.pkl")
 
-#     X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
-#     Y = wwdf["Sensed_T45"].values  # Target
+# I classificatori del "ciclo di lavoro" (quante manutenzioni sono già state fatte)
+joblib.dump(clf_hpt,           f"{MODELS_DIR}/clf_hpt.pkl")
+joblib.dump(clf_hpc,           f"{MODELS_DIR}/clf_hpc.pkl")
 
-#     reg = LinearRegression().fit(X, Y)
-#     slope = reg.coef_[0]
+# Le liste di feature names: cruciali per allineare input a modelli salvati
+joblib.dump(regs_feature_cols, f"{MODELS_DIR}/regs_feature_cols.pkl")
+joblib.dump(clf_feature_cols,  f"{MODELS_DIR}/clf_feature_cols.pkl")
 
-#     sv = {}
-#     counter = []
-#     reference_r = None 
-#     floor = None
-#     last_cum = 0
-#     window = 11
+print(f"Tutti i modelli salvati in: {MODELS_DIR}/")
 
-#     # ho scelto 542 perchè è il numero di nepero moltiplicato per 200. Si a caso e funziona anche
-#     factor = (e**2)*80 # poi sto provando altri valori
 
-#     if not_training:
-#         for i, (idx, val_t45)in enumerate(wwdf["Sensed_T45"].items()):
+# %% [markdown]
+# # Predizione WW corretta + Generazione Submission
+#
+# Il blocco precedente "Generate Submission" non salvava i risultati WW
+# e non assemblava il CSV finale.  Questo blocco corregge entrambi i problemi.
 
-#             if reference_r is None:
-#                 reference_r = val_t45
-#                 floor = val_t45
-#                 counter.append(val_t45)
-#                 continue
+# %%
+# ----- funzione di estrapolazione WW -----
+# Dopo l'ultimo evento WW rilevato (o dall'inizio del dato se nessuno è stato
+# rilevato), T45 sale linearmente con pendenza `slope`.
+# Un nuovo evento WW scatta quando la media mobile supera:
+#   floor  +  slope * e² * factor_mult
+# Partiamo dal valore corrente di T45 e calcoliamo quanti cicli mancano.
 
-#             counter.append(val_t45)
-#             if len(counter) < window:
-#                 continue
+from math import e as _e
 
-#             mc = np.mean(counter[-window:]) - floor
-#             msp = reference_r - floor
-                
-#             if (mc - msp) > slope * factor:
-#                 sv[idx] = val_t45               
-#                 reference_r = val_t45           
-#                 floor = val_t45
-#     else:
-#         for i, (idx, row) in enumerate(wwdf[["Sensed_T45", "Cumulative_WWs"]].iterrows()):
-#             val_t45 = row["Sensed_T45"]
-#             val_cum = row["Cumulative_WWs"]
+def cycles_to_next_ww_from_end(ww_result, factor_mult=80):
+    """
+    Stima quanti cicli mancano alla prossima Water Wash dall'ultimo
+    punto disponibile nel dato (val o test).
 
-#             if reference_r is None:
-#                 reference_r = val_t45
-#                 floor = val_t45
-#                 counter.append(val_t45)
-#                 continue
+    Parametri
+    ---------
+    ww_result   : output di predict_ww()
+    factor_mult : stesso valore usato in detect_ww_events (default 80)
 
-#             counter.append(val_t45)
-#             if len(counter) < window:
-#                 continue
+    Ritorna
+    -------
+    int  ≥ 0  — cicli stimati alla prossima WW
+    """
+    wwdf  = ww_result["wwdf"]
+    slope = ww_result["slope"]
+    sv    = ww_result["detected_events"]   # dict {row_index: t45_value}
 
-#             mc = np.mean(counter[-window:]) - floor
-#             msp = reference_r - floor
+    if len(wwdf) == 0 or slope <= 0:
+        # pendenza piatta o nessun dato → non possiamo stimare, ritorniamo 0
+        return 0
 
-#             if val_cum > last_cum:
-#                 last_cum = val_cum
-#                 reference_r = val_t45
-#                 floor = val_t45 
-                
-#             if (mc - msp) > slope * factor: 
-#                 sv[idx] = val_t45               
-#                 reference_r = val_t45           
-#                 floor = val_t45
+    # La soglia di attivazione: quanto deve salire T45 sopra la base
+    trigger_threshold = slope * (_e ** 2) * factor_mult
 
-#     print(len(sv))
-#     if not not_training:
-#         print(len(wwdf["Cumulative_WWs"].unique()))
+    # Floor = T45 all'ultimo evento WW rilevato (o al primo punto del dato)
+    if sv:
+        last_event_idx = max(sv.keys())
+        floor = sv[last_event_idx]
+    else:
+        floor = wwdf["Sensed_T45"].iloc[0]
 
-#     plt.figure(figsize=(14, 6))
+    # Valore T45 attuale (fine del dato)
+    current_t45 = wwdf["Sensed_T45"].iloc[-1]
 
-#     sv_cycles = wwdf.loc[list(sv.keys()), "Cycles_Since_New"]
+    # Rise già accumulato dall'ultimo floor
+    current_rise = current_t45 - floor
 
-#     plt.vlines(x=sv_cycles, ymin=wwdf["Sensed_T45"].min(), ymax=wwdf["Sensed_T45"].max(), colors='green', linestyles='dashed', alpha=0.7, label="Detected SV", zorder=1)
+    # Rise ancora necessario per raggiungere il trigger
+    remaining_rise = trigger_threshold - current_rise
 
-#     if not not_training:
-#         ww_boundaries = wwdf["Cycles_Since_New"].groupby(wwdf["Cumulative_WWs"]).last()
-#         plt.vlines(x=ww_boundaries, ymin=wwdf["Sensed_T45"].min(), ymax=wwdf["Sensed_T45"].max(), colors='gray', linestyles='dashed', alpha=0.5, label="WW Boundary", zorder=1)
+    if remaining_rise <= 0:
+        # T45 ha già superato la soglia → WW imminente
+        return 0
 
-#     plt.scatter(wwdf["Cycles_Since_New"], wwdf["Sensed_T45"], color="blue", alpha=0.8, label="Data", zorder=2, s=3)
-#     plt.plot(wwdf["Cycles_Since_New"], reg.predict(X), color="red", linewidth=2, label=f"Slope: {slope:.5f}", zorder=2)
+    # Cicli rimanenti = rise rimanente / velocità di salita (slope)
+    cycles_remaining = remaining_rise / slope
 
-#     plt.title(f"WW Prediction {esn}")
-#     plt.xlabel("Cycles Since New")
-#     plt.ylabel("Sensed T45")
-#     plt.legend()
-#     plt.tight_layout()
-
-# for esn in df["ESN"].unique():
-#     plot_ww_slope(df[df["ESN"] == esn], residuals(df[df["ESN"] == esn]))
+    return max(0, int(round(cycles_remaining)))
 
 
 # %%
+# ----- Predizione WW sui file di test (con storage corretto) -----
+# dft[i] corrisponde a test_i.csv  → usiamo l'indice i come chiave aggiuntiva
+# così possiamo recuperare il risultato sia per ESN che per numero file.
 
-# for v in dfv:
-#     for esn in v["ESN"].unique():
-#         plot_ww_slope(v[v["ESN"] == esn], residuals(v[v["ESN"] == esn]))
+print("=== WW PREDICTION — TEST (submission run) ===")
+ww_results_test_final = {}   # chiave: ESN   oppure  indice file (i)
 
-# for f in dft:
-#     for esn in f["ESN"].unique():
-#         plot_ww_slope(f[f["ESN"] == esn], residuals(f[f["ESN"] == esn]))
+for i, t in enumerate(dft):
+    for esn in t["ESN"].unique():
+        engine_df  = t[t["ESN"] == esn]
+        engine_res = _residuals(engine_df)
+        if engine_res is None:
+            print(f"  test_{i} (ESN {esn}): residui None, skip")
+            continue
+        ww_result = predict_ww(engine_df, engine_res, esn)
+        cycles_ww = cycles_to_next_ww_from_end(ww_result)
+
+        # Salviamo con entrambe le chiavi per comodità
+        ww_results_test_final[esn] = ww_result
+        ww_results_test_final[i]   = ww_result
+
+        print(f"  test_{i} (ESN {esn}): eventi rilevati={ww_result['n_events']}  "
+              f"slope={ww_result['slope']:.5f}  Cycles_to_WW≈{cycles_ww}")
 
 
 # %%
-# def run_engine_model(df):
-#     """
-#     Applica il modello a ciascun ESN nel dataframe
-#     """
-#     results = {}
-#     for esn in df["ESN"].unique():
-#         df_esn = df[df["ESN"] == esn]
-#         res = residuals(df_esn)
-#         plot_ww_slope(df_esn, res)
-#         results[esn] = res
-#     return results
+# ----- Assemblaggio CSV di submission -----
+# Per ogni file test_i prendiamo:
+#   • Cycles_to_HPT_SV e Cycles_to_HPC_SV  da results_test (pipeline v2)
+#   • Cycles_to_WW                          dall'estrapolazione WW qui sopra
 
-# results_dfv = run_engine_model(dfv)
-# results_dft = run_engine_model(dft)
+# Range di training: usato come fallback se un motore manca nelle predizioni
+_fallback_hpt = float(regs_data["target_hpt"].mean())
+_fallback_hpc = float(regs_data["target_hpc"].mean())
+
+rows = []
+for i, engine_df in enumerate(dft):
+    file_name = f"test_{i}"
+    esn       = engine_df["ESN"].iloc[0]
+
+    # --- HPT e HPC ---
+    mask = results_test["ESN"] == esn
+    if mask.any():
+        cycles_hpt = float(results_test.loc[mask, "Cycles_to_HPT_SV"].values[0])
+        cycles_hpc = float(results_test.loc[mask, "Cycles_to_HPC_SV"].values[0])
+    else:
+        cycles_hpt = _fallback_hpt
+        cycles_hpc = _fallback_hpc
+        print(f"  {file_name}: FALLBACK HPT/HPC (ESN {esn} non trovato in results_test)")
+
+    # --- WW ---
+    if esn in ww_results_test_final:
+        cycles_ww = cycles_to_next_ww_from_end(ww_results_test_final[esn])
+    elif i in ww_results_test_final:
+        cycles_ww = cycles_to_next_ww_from_end(ww_results_test_final[i])
+    else:
+        cycles_ww = 0
+        print(f"  {file_name}: WW non disponibile, impostato a 0")
+
+    rows.append({
+        "file":             file_name,
+        "Cycles_to_WW":     int(round(cycles_ww)),
+        "Cycles_to_HPC_SV": int(round(cycles_hpc)),
+        "Cycles_to_HPT_SV": int(round(cycles_hpt)),
+    })
+
+    print(f"  {file_name} (ESN {esn}):  "
+          f"WW={cycles_ww:.0f}  HPC={cycles_hpc:.0f}  HPT={cycles_hpt:.0f}")
+
+# Assembla il DataFrame nel formato richiesto dal portale
+submission_df = pd.DataFrame(
+    rows,
+    columns=["file", "Cycles_to_WW", "Cycles_to_HPC_SV", "Cycles_to_HPT_SV"]
+)
+
+# Salva nella root del progetto (stessa posizione del template submission.csv)
+SUBMISSION_OUTPUT = "../../submission.csv"
+submission_df.to_csv(SUBMISSION_OUTPUT, index=False)
+
+print(f"\nSubmission salvata in: {SUBMISSION_OUTPUT}")
+print(submission_df.to_string(index=False))
