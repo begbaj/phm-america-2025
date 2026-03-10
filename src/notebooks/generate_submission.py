@@ -137,9 +137,9 @@ def _predict_files(file_list: list[Path], models: dict[str, Pipeline], feature_c
         rows.append(
             {
                 "file": file_path.stem,
-                "Cycles_to_WW": int(round(preds["Cycles_to_WW"])),
-                "Cycles_to_HPC_SV": int(round(preds["Cycles_to_HPC_SV"])),
-                "Cycles_to_HPT_SV": int(round(preds["Cycles_to_HPT_SV"])),
+                "Cycles_to_WW": preds["Cycles_to_WW"],
+                "Cycles_to_HPC_SV": preds["Cycles_to_HPC_SV"],
+                "Cycles_to_HPT_SV": preds["Cycles_to_HPT_SV"],
             }
         )
     return pd.DataFrame(rows, columns=["file", "Cycles_to_WW", "Cycles_to_HPC_SV", "Cycles_to_HPT_SV"])
@@ -160,9 +160,9 @@ def _build_training_submission(train_raw: pd.DataFrame) -> pd.DataFrame:
         esn = int(row["ESN"])
         rows.append({
             "file": f"training_esn_{esn}",
-            "Cycles_to_WW": int(round(row["Cycles_to_WW"])),
-            "Cycles_to_HPC_SV": int(round(row["Cycles_to_HPC_SV"])),
-            "Cycles_to_HPT_SV": int(round(row["Cycles_to_HPT_SV"])),
+            "Cycles_to_WW": row["Cycles_to_WW"],
+            "Cycles_to_HPC_SV": row["Cycles_to_HPC_SV"],
+            "Cycles_to_HPT_SV": row["Cycles_to_HPT_SV"],
         })
     return pd.DataFrame(rows, columns=["file", "Cycles_to_WW", "Cycles_to_HPC_SV", "Cycles_to_HPT_SV"])
 
