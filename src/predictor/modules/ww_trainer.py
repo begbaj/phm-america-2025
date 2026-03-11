@@ -324,13 +324,15 @@ class WWTrainer:
 
         trigger_threshold = slope * (_e**2) * factor_mult
 
+        t45 = wwdf["Sensed_T45"]
+
         if sv:
             last_event_idx = max(sv.keys())
             floor = sv[last_event_idx]
         else:
-            floor = wwdf["Sensed_T45"].iloc[0]
+            floor = t45.iloc[0]
 
-        current_t45 = wwdf["Sensed_T45"].iloc[-1]
+        current_t45 = t45.iloc[-1]
         current_rise = current_t45 - floor
         remaining_rise = trigger_threshold - current_rise
 
@@ -410,11 +412,24 @@ class WWTrainer:
 
         X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
 
-        fig, axs = plt.subplots(1, 2, figsize=(22, 6))
-        fig.suptitle(f"WW Prediction — ESN {esn}", fontsize=16)
+        subplots = []
+        if cfg.PLOT_WW_T45_EVENTS:
+            subplots.append(("t45", self._plot_t45_with_events))
+        if cfg.PLOT_WW_DETRENDED:
+            subplots.append(("detrended", self._plot_detrended))
+        if not subplots:
+            return
 
-        self._plot_t45_with_events(axs[0], wwdf, reg, X, sv, slope, is_training)
-        self._plot_detrended(axs[1], wwdf, reg, X, sv)
+        n = len(subplots)
+        fig, axs = plt.subplots(1, n, figsize=(11 * n, 6))
+        fig.suptitle(f"WW Prediction — ESN {esn}", fontsize=16)
+        if n == 1:
+            axs = [axs]
+        for ax, (kind, fn) in zip(axs, subplots):
+            if kind == "t45":
+                fn(ax, wwdf, reg, X, sv, slope, is_training)
+            else:
+                fn(ax, wwdf, reg, X, sv)
 
         plt.tight_layout()
         save_fig(fig, f"ww_prediction_esn_{esn}")
@@ -530,16 +545,6 @@ class WWTrainer:
                 edgecolors="black",
                 linewidth=0.5,
             )
-
-        rolling_mean = pd.Series(detrended).rolling(window=20, min_periods=1).mean()
-        ax.plot(
-            wwdf["Cycles_Since_New"].values,
-            rolling_mean.values,
-            color="tab:orange",
-            linewidth=1.5,
-            alpha=0.8,
-            label="Rolling mean (20)",
-        )
 
         ax.set_title("T45 Detrended — Fouling Accumulation")
         ax.set_xlabel("Cycles Since New")

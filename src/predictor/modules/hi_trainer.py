@@ -125,7 +125,6 @@ class HITrainer:
             res_temp = Data.remove_outliers(
                 res_temp, threshold=3, method="iqr"
             )
-            res_temp.rolling(window=10, min_periods=1).median()
             res_temp = res_temp.ffill().bfill()
             res_temp["ESN"] = esn
             try:
@@ -593,14 +592,20 @@ class HITrainer:
             ahpt, ahpc = self.get_coefs_for_esn(esn)
             hi_hpt, hi_hpc = self.calc_hi(sd, ahpt, ahpc)
 
-            fig, axs = plt.subplots(1, 2, figsize=(30, 6))
+            subplots = []
+            if cfg.PLOT_HI_HPT:
+                subplots.append((hi_hpt, "Health Index (HPT)", "tab:blue"))
+            if cfg.PLOT_HI_HPC:
+                subplots.append((hi_hpc, "Health Index (HPC)", "tab:green"))
+            if not subplots:
+                continue
+
+            fig, axs = plt.subplots(1, len(subplots), figsize=(15 * len(subplots), 6))
             fig.suptitle(f"Training: ESN - {esn}", fontsize=16)
-            self._plot_hi_subplot(
-                axs[0], hi_hpt, "Health Index (HPT)", "tab:blue"
-            )
-            self._plot_hi_subplot(
-                axs[1], hi_hpc, "Health Index (HPC)", "tab:green"
-            )
+            if len(subplots) == 1:
+                axs = [axs]
+            for ax, (hi_data, label, color) in zip(axs, subplots):
+                self._plot_hi_subplot(ax, hi_data, label, color)
             fig.tight_layout()
             save_fig(fig, f"training_hi_esn_{esn}")
 

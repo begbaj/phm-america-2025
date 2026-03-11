@@ -345,19 +345,20 @@ class LGBMGapCorrection:
         pred_hpt = np.clip(base_hpt.values + gap_hpt, 0, None)
         pred_hpc = np.clip(base_hpc.values + gap_hpc, 0, None)
 
-        # Smoothing
-        pred_hpt = (
-            pd.Series(pred_hpt)
-            .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-            .mean()
-            .values
-        )
-        pred_hpc = (
-            pd.Series(pred_hpc)
-            .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-            .mean()
-            .values
-        )
+        # Smoothing — ONLY here, right before extracting the final value
+        if cfg.SMOOTH_PREDICTIONS:
+            pred_hpt = (
+                pd.Series(pred_hpt)
+                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
+                .mean()
+                .values
+            )
+            pred_hpc = (
+                pd.Series(pred_hpc)
+                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
+                .mean()
+                .values
+            )
 
         return {
             "ESN": esn,
@@ -401,17 +402,17 @@ class LGBMGapCorrection:
 
         results: list[dict] = []
 
-        for engine_df in engine_list:
+        for file_idx, engine_df in enumerate(engine_list):
             for esn in engine_df["ESN"].unique():
                 edf = engine_df[engine_df["ESN"] == esn].copy()
                 engine_res = self.hi.residuals_single(edf)
                 if engine_res is None:
                     print(f"  ESN {esn}: SKIP (residuals None)")
-                    results.append(
-                        self._fallback_result(
-                            esn, train_mean_hpt, train_mean_hpc, "fallback"
-                        )
+                    fb = self._fallback_result(
+                        esn, train_mean_hpt, train_mean_hpc, "fallback"
                     )
+                    fb["file_idx"] = file_idx
+                    results.append(fb)
                     continue
                 try:
                     pred = self.predict_engine(edf, engine_res, esn)
@@ -419,24 +420,27 @@ class LGBMGapCorrection:
                     pred_hpc = np.clip(pred["Cycles_to_HPC_SV"], 0, clip_max_hpc)
                     results.append(
                         {
+                            "file_idx": file_idx,
                             "ESN": esn,
                             "Cycles_to_HPT_SV": pred_hpt,
                             "Cycles_to_HPC_SV": pred_hpc,
                             "HPT_cycle": pred["HPT_cycle"],
                             "HPC_cycle": pred["HPC_cycle"],
+                            "pred_series_hpt": pred["pred_series_hpt"],
+                            "pred_series_hpc": pred["pred_series_hpc"],
                             "confidence": "ok",
                         }
                     )
                 except Exception as ex:
                     print(f"  ESN {esn}: ERROR ({ex}) — fallback to mean")
-                    results.append(
-                        self._fallback_result(
-                            esn,
-                            train_mean_hpt,
-                            train_mean_hpc,
-                            "error_fallback",
-                        )
+                    fb = self._fallback_result(
+                        esn,
+                        train_mean_hpt,
+                        train_mean_hpc,
+                        "error_fallback",
                     )
+                    fb["file_idx"] = file_idx
+                    results.append(fb)
 
         return pd.DataFrame(results)
 
@@ -502,10 +506,9 @@ class LGBMGapCorrection:
         """Plot bar charts, distributions, and per-engine detail for
         the prediction results.
         """
-        val_esns = {esn for v in val_list for esn in v["ESN"].unique()}
-        test_esns = {esn for t in test_list for esn in t["ESN"].unique()}
-        val_results = results_df[results_df["ESN"].isin(val_esns)].copy()
-        test_results = results_df[results_df["ESN"].isin(test_esns)].copy()
+        n_val = len(val_list)
+        val_results = results_df[results_df["file_idx"] < n_val].copy()
+        test_results = results_df[results_df["file_idx"] >= n_val].copy()
 
         # ── Bar plots ───────────────────────────────────────────
         fig, axs = plt.subplots(2, 2, figsize=(20, 10))
@@ -657,76 +660,82 @@ class LGBMGapCorrection:
         results_sub: pd.DataFrame,
         label_prefix: str,
     ) -> None:
-        """Plot HI + prediction for every engine."""
-        for engine_df in engine_list:
-            for esn in engine_df["ESN"].unique():
+        """Plot the actual predicted RUL signal for every file.
+
+        Uses the prediction series stored in results_sub (the same
+        signal whose last value goes into submission.csv).
+        Each file gets its own plot, even when multiple files share an ESN.
+        """
+        for i, engine_df in enumerate(engine_list):
+            file_idx_val = results_sub["file_idx"].min() + i
+            row_match = results_sub[results_sub["file_idx"] == file_idx_val]
+            if len(row_match) == 0:
+                continue
+
+            row = row_match.iloc[0]
+            esn = row["ESN"]
+            series_hpt = row.get("pred_series_hpt")
+            series_hpc = row.get("pred_series_hpc")
+
+            # If series not available, recompute via predict_engine
+            if series_hpt is None or series_hpc is None:
                 edf = engine_df[engine_df["ESN"] == esn].copy()
                 engine_res = self.hi.residuals_single(edf)
                 if engine_res is None:
                     continue
-                edf_res = edf.copy()
-                edf_res[cfg.DEGRAD_VARS] = engine_res[cfg.DEGRAD_VARS].values
-                ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
-                hi_hpt, hi_hpc = self.hi.calc_hi(edf_res, ahpt, ahpc)
+                pred = self.predict_engine(edf, engine_res, esn)
+                series_hpt = pred["pred_series_hpt"]
+                series_hpc = pred["pred_series_hpc"]
 
-                esn_pred = results_sub[results_sub["ESN"] == esn]
-                fig, axs = plt.subplots(1, 2, figsize=(18, 5))
-                fig.suptitle(f"{label_prefix} ESN {esn}", fontsize=14)
-                self._plot_engine_hi_subplot(
-                    axs[0],
-                    hi_hpt,
-                    esn_pred,
-                    "Cycles_to_HPT_SV",
-                    "HPT_cycle",
-                    "HPT",
-                    "tab:blue",
-                )
-                self._plot_engine_hi_subplot(
-                    axs[1],
-                    hi_hpc,
-                    esn_pred,
-                    "Cycles_to_HPC_SV",
-                    "HPC_cycle",
-                    "HPC",
-                    "tab:green",
-                )
-                plt.tight_layout()
-                save_fig(fig, f"engine_detail_{label_prefix.lower()}_{esn}")
+            fig, axs = plt.subplots(1, 2, figsize=(18, 5))
+            fig.suptitle(f"{label_prefix} file {i} (ESN {esn})", fontsize=14)
+            self._plot_engine_pred_subplot(
+                axs[0],
+                series_hpt,
+                row["Cycles_to_HPT_SV"],
+                row["HPT_cycle"],
+                "HPT",
+                "tab:blue",
+            )
+            self._plot_engine_pred_subplot(
+                axs[1],
+                series_hpc,
+                row["Cycles_to_HPC_SV"],
+                row["HPC_cycle"],
+                "HPC",
+                "tab:green",
+            )
+            plt.tight_layout()
+            save_fig(fig, f"engine_detail_{label_prefix.lower()}_file{i}_esn{esn}")
 
     @staticmethod
-    def _plot_engine_hi_subplot(
+    def _plot_engine_pred_subplot(
         ax: plt.Axes,
-        hi: pd.Series,
-        esn_pred: pd.DataFrame,
-        pred_col: str,
-        cycle_col: str,
+        pred_series: np.ndarray,
+        final_value: float,
+        cycle: int,
         component: str,
         color: str,
     ) -> None:
-        """Single subplot: smoothed HI + prediction annotation."""
-        hi_smooth = hi.rolling(window=10, min_periods=1).mean()
+        """Single subplot: actual predicted RUL series + final value."""
         ax.plot(
-            hi_smooth.values,
+            pred_series,
             color=color,
             linewidth=0.8,
-            label=f"HI {component} (smoothed)",
+            label=f"Predicted RUL {component}",
         )
-        if len(esn_pred) > 0:
-            pred_val = esn_pred[pred_col].values[0]
-            cycle_val = esn_pred[cycle_col].values[0]
-            ax.axhline(
-                y=hi_smooth.values[-1],
-                color="red",
-                linestyle="--",
-                alpha=0.5,
-            )
-            ax.set_title(
-                f"{component} — Pred: {pred_val:.0f} cycles (cycle {cycle_val})"
-            )
-        else:
-            ax.set_title(f"{component} — Health Index")
+        ax.axhline(
+            y=final_value,
+            color="red",
+            linestyle="--",
+            alpha=0.6,
+            label=f"Final = {final_value:.0f}",
+        )
+        ax.set_title(
+            f"{component} — Pred: {final_value:.0f} cycles (cycle {cycle})"
+        )
         ax.set_xlabel("Observation")
-        ax.set_ylabel("HI")
+        ax.set_ylabel("Predicted Cycles to SV")
         ax.legend(fontsize="small")
         ax.grid(True, alpha=0.3)
 
@@ -779,97 +788,47 @@ class LGBMGapCorrection:
             y_true_hpt = esn_reg["target_hpt"].values
             y_true_hpc = esn_reg["target_hpc"].values
 
-            base_hpt = (
-                pd.DataFrame(base_pred_hpt_all[esn_mask.values])
-                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-                .mean()
-                .values.reshape(-1)
-            )
-            base_hpc = (
-                pd.DataFrame(base_pred_hpc_all[esn_mask.values])
-                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-                .mean()
-                .values.reshape(-1)
-            )
+            base_hpt = base_pred_hpt_all[esn_mask.values].copy()
+            base_hpc = base_pred_hpc_all[esn_mask.values].copy()
 
             X_feat = esn_reg[self.feature_cols].values
             gap_hpt = self.lgbm_gap_hpt.predict(X_feat)
             gap_hpc = self.lgbm_gap_hpc.predict(X_feat)
-            final_hpt = (
-                pd.DataFrame(base_hpt + gap_hpt)
-                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-                .mean()
-                .values.reshape(-1)
-            )
-            final_hpc = (
-                pd.DataFrame(base_hpc + gap_hpc)
-                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-                .mean()
-                .values.reshape(-1)
-            )
+            final_hpt = np.clip(base_hpt + gap_hpt, 0, None)
+            final_hpc = np.clip(base_hpc + gap_hpc, 0, None)
 
-            fig, axs = plt.subplots(2, 3, figsize=(24, 10))
+            # Build subplot grid based on enabled toggles
+            subplot_specs = []
+            if cfg.PLOT_BA_TIME_SERIES:
+                subplot_specs.append(("time_series", "_plot_time_series"))
+            if cfg.PLOT_BA_ERROR:
+                subplot_specs.append(("error", "_plot_error"))
+            if cfg.PLOT_BA_SCATTER:
+                subplot_specs.append(("scatter", "_plot_scatter"))
+
+            if not subplot_specs:
+                continue
+
+            n_cols = len(subplot_specs)
+            fig, axs = plt.subplots(2, n_cols, figsize=(8 * n_cols, 10))
             fig.suptitle(
                 f"Training ESN {esn} — Before vs After Correction",
                 fontsize=16,
             )
+            if n_cols == 1:
+                axs = axs.reshape(-1, 1)
             x_axis = np.arange(len(y_true_hpt))
 
-            # HPT row
-            self._plot_time_series(
-                axs[0, 0],
-                x_axis,
-                y_true_hpt,
-                base_hpt,
-                final_hpt,
-                "HPT — Cycles to SV",
-                "tab:blue",
-            )
-            self._plot_error(
-                axs[0, 1],
-                x_axis,
-                y_true_hpt,
-                base_hpt,
-                final_hpt,
-                "HPT — Error",
-                "tab:blue",
-            )
-            self._plot_scatter(
-                axs[0, 2],
-                y_true_hpt,
-                base_hpt,
-                final_hpt,
-                "HPT — Scatter",
-                "tab:blue",
-            )
-
-            # HPC row
-            self._plot_time_series(
-                axs[1, 0],
-                x_axis,
-                y_true_hpc,
-                base_hpc,
-                final_hpc,
-                "HPC — Cycles to SV",
-                "tab:green",
-            )
-            self._plot_error(
-                axs[1, 1],
-                x_axis,
-                y_true_hpc,
-                base_hpc,
-                final_hpc,
-                "HPC — Error",
-                "tab:green",
-            )
-            self._plot_scatter(
-                axs[1, 2],
-                y_true_hpc,
-                base_hpc,
-                final_hpc,
-                "HPC — Scatter",
-                "tab:green",
-            )
+            for col_idx, (kind, method_name) in enumerate(subplot_specs):
+                method = getattr(self, method_name)
+                if kind == "scatter":
+                    method(axs[0, col_idx], y_true_hpt, base_hpt, final_hpt, "HPT — Scatter", "tab:blue")
+                    method(axs[1, col_idx], y_true_hpc, base_hpc, final_hpc, "HPC — Scatter", "tab:green")
+                else:
+                    label_hpt = "HPT — Cycles to SV" if kind == "time_series" else "HPT — Error"
+                    label_hpc = "HPC — Cycles to SV" if kind == "time_series" else "HPC — Error"
+                    method(axs[0, col_idx], x_axis, y_true_hpt, base_hpt, final_hpt, label_hpt, "tab:blue")
+                    method(axs[1, col_idx], x_axis, y_true_hpc, base_hpc, final_hpc, label_hpc, "tab:green")
 
             plt.tight_layout()
             save_fig(fig, f"training_before_after_esn_{esn}")
@@ -893,7 +852,8 @@ class LGBMGapCorrection:
             print()
 
         # Global summary
-        self._plot_global_error_distribution()
+        if cfg.PLOT_BA_GLOBAL_ERROR:
+            self._plot_global_error_distribution()
 
     @staticmethod
     def _plot_time_series(

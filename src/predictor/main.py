@@ -106,9 +106,10 @@ def main() -> None:
         print("STEP 4 — COMPUTE RESIDUALS")
         print("=" * 60)
         hi.compute_all_residuals()
-        hi.plot_residuals(hi._res_train_healthy, title_suffix="Training (healthy)")
-        hi.plot_residuals(hi._res_train, title_suffix="Training (full)")
-        hi.plot_residuals(hi._res_test_loo, title_suffix="Leave-One-Out ESN")
+        if cfg.PLOT_RESIDUALS:
+            hi.plot_residuals(hi._res_train_healthy, title_suffix="Training (healthy)")
+            hi.plot_residuals(hi._res_train, title_suffix="Training (full)")
+            hi.plot_residuals(hi._res_test_loo, title_suffix="Leave-One-Out ESN")
 
         # 5. OPTIMISE HI COEFFICIENTS
         print("\n" + "=" * 60)
@@ -117,7 +118,7 @@ def main() -> None:
         hi.train_coefficients()
         print(f"  chpt = {hi.chpt}")
         print(f"  chpc = {hi.chpc}")
-        hi.plot_training_hi()
+        hi.plot_training_hi() if cfg.PLOT_TRAINING_HI else None
         hi.save()
 
     # ──────────────────────────────────────────────────────────────
@@ -161,7 +162,8 @@ def main() -> None:
         gap.save()
 
     # Plot training before/after gap correction
-    gap.plot_training_before_after()
+    if cfg.PLOT_GAP_BEFORE_AFTER:
+        gap.plot_training_before_after()
 
     # ──────────────────────────────────────────────────────────────
     # 8. PREDICT HPT / HPC (validation + test)
@@ -176,6 +178,10 @@ def main() -> None:
     print("\n=== TEST ===")
     results_test = gap.predict_all_engines(data.test)
 
+    # Offset test file_idx so they don't collide with validation
+    n_val = len(data.validation)
+    results_test = results_test.copy()
+    results_test["file_idx"] = results_test["file_idx"] + n_val
     results_df = pd.concat([results_val, results_test], ignore_index=True)
 
     # Quality check
@@ -201,7 +207,8 @@ def main() -> None:
         )
 
     # Plot results
-    gap.plot_results(results_df, data.validation, data.test)
+    if cfg.PLOT_GAP_RESULTS:
+        gap.plot_results(results_df, data.validation, data.test)
 
     # ──────────────────────────────────────────────────────────────
     # 9. PREDICT WATER WASH (WW)
@@ -221,7 +228,8 @@ def main() -> None:
             continue
         ww_result = ww.predict_ww(edf, engine_res, esn)
         ww.results_train[esn] = ww_result
-        ww.plot_ww_prediction(ww_result)
+        if cfg.PLOT_WW:
+            ww.plot_ww_prediction(ww_result)
 
     # --- Validation WW ---
     print("\n--- Validation WW ---")
@@ -239,7 +247,8 @@ def main() -> None:
                 f"  val_{i} (ESN {esn}): events={ww_result['n_events']}  "
                 f"slope={ww_result['slope']:.5f}  Cycles_to_WW≈{cycles_ww:.0f}"
             )
-            ww.plot_ww_prediction(ww_result)
+            if cfg.PLOT_WW:
+                ww.plot_ww_prediction(ww_result)
 
     # --- Test WW ---
     print("\n--- Test WW ---")
@@ -253,8 +262,7 @@ def main() -> None:
                 continue
             ww_result = ww.predict_ww(edf, engine_res, esn)
             ww.results_test[esn] = ww_result
-            ww_results_test_final[esn] = ww_result
-            ww_results_test_final[i] = ww_result
+            ww_results_test_final[i] = ww_result  # keyed by file index
             cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
             print(
                 f"  test_{i} (ESN {esn}): events={ww_result['n_events']}  "
@@ -276,8 +284,9 @@ def main() -> None:
         file_name = f"test_{i}"
         esn = engine_df["ESN"].iloc[0]
 
-        # --- HPT and HPC ---
-        mask = results_test["ESN"] == esn
+        # --- HPT and HPC (match by file index, not by ESN) ---
+        file_idx = i + n_val  # consistent with the offset applied above
+        mask = results_test["file_idx"] == file_idx
         if mask.any():
             cycles_hpt = float(results_test.loc[mask, "Cycles_to_HPT_SV"].values[0])
             cycles_hpc = float(results_test.loc[mask, "Cycles_to_HPC_SV"].values[0])
@@ -285,13 +294,11 @@ def main() -> None:
             cycles_hpt = _fallback_hpt
             cycles_hpc = _fallback_hpc
             print(
-                f"  {file_name}: FALLBACK HPT/HPC (ESN {esn} not found in results_test)"
+                f"  {file_name}: FALLBACK HPT/HPC (file_idx {file_idx} not found)"
             )
 
-        # --- WW ---
-        if esn in ww_results_test_final:
-            cycles_ww = ww.cycles_to_next_ww_from_end(ww_results_test_final[esn])
-        elif i in ww_results_test_final:
+        # --- WW (keyed by file index) ---
+        if i in ww_results_test_final:
             cycles_ww = ww.cycles_to_next_ww_from_end(ww_results_test_final[i])
         else:
             cycles_ww = 0

@@ -18,7 +18,7 @@ DATA_VALIDATION_PATH = f"{DATA_BASE_PATH}PHM2025_validation_data/"
 DATA_TRAINING_DATA = f"{DATA_TRAINING_PATH}training_data.csv"
 PLOT_PATH = "./img/"
 MODELS_DIR = "./saved_models"
-SUBMISSION_OUTPUT = "../../submission.csv"
+SUBMISSION_OUTPUT = "submission.csv"
 
 
 # ──────────────────────────────────────────
@@ -136,8 +136,8 @@ GAP_LGBM_PARAMS: dict = {
     "verbose": -1,
     "random_state": 42,
 }
-SMOOTHING_WINDOW: int = 10
-
+SMOOTHING_WINDOW: int = 20
+SMOOTH_PREDICTIONS: bool = True
 
 # ──────────────────────────────────────────
 # WW PREDICTION
@@ -163,3 +163,27 @@ PLOTS_DIR: str = "./plots/"
 PLOT_GROUP_CYCLES: bool = True
 PLOT_REMOVE_OUTLIERS: bool = True
 PLOT_OUTLIERS_THRESHOLD: float = 3
+
+# Per-plot toggles (set False to skip)
+PLOT_RESIDUALS: bool = True
+PLOT_TRAINING_HI: bool = True
+PLOT_GAP_BEFORE_AFTER: bool = True
+PLOT_GAP_RESULTS: bool = True
+PLOT_WW: bool = True
+
+# Subplot-level toggles (only checked when parent plot is enabled)
+# -- HITrainer: plot_training_hi
+PLOT_HI_HPT: bool = True
+PLOT_HI_HPC: bool = True
+# -- LGBMGapCorrection: plot_results
+PLOT_RESULTS_BAR: bool = True            # bar charts (val/test × HPT/HPC)
+PLOT_RESULTS_DISTRIBUTIONS: bool = False # histogram + cycle distribution
+PLOT_RESULTS_ENGINE_DETAIL: bool = True  # per-engine HI detail
+# -- LGBMGapCorrection: plot_training_before_after
+PLOT_BA_TIME_SERIES: bool = True         # time series (base vs corrected)
+PLOT_BA_ERROR: bool = True               # error plots
+PLOT_BA_SCATTER: bool = True             # scatter pred vs truth
+PLOT_BA_GLOBAL_ERROR: bool = True        # global error distribution histogram
+# -- WWTrainer: plot_ww_prediction
+PLOT_WW_T45_EVENTS: bool = True          # T45 residuals + detected events
+PLOT_WW_DETRENDED: bool = False          # detrended T45 fouling
