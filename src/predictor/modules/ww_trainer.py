@@ -18,9 +18,9 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from predictor import config as cfg, save_fig
-from predictor.data import Data
-from predictor.hi_trainer import HITrainer
+from modules import config as cfg, save_fig
+from modules.data import Data
+from modules.hi_trainer import HITrainer
 
 
 class WWTrainer:
@@ -58,15 +58,9 @@ class WWTrainer:
         col : str
             Column indicating the cumulative maintenance count.
         """
-        df = df.sort_values(
-            [col, "Cycles_Since_New", "Snapshot"]
-        ).copy()
-        df = Data.remove_outliers(
-            df, threshold=2.6, sensor_cols=["Sensed_T45"]
-        )
-        df = df.groupby(
-            ["Cycles_Since_New"], as_index=False
-        ).median(numeric_only=True)
+        df = df.sort_values([col, "Cycles_Since_New", "Snapshot"]).copy()
+        df = Data.remove_outliers(df, threshold=2.6, sensor_cols=["Sensed_T45"])
+        df = df.groupby(["Cycles_Since_New"], as_index=False).median(numeric_only=True)
 
         grp = df.groupby(col)["Sensed_T45"].agg(["first", "last"])
         grp = grp.sort_index()
@@ -95,41 +89,29 @@ class WWTrainer:
         )
         return hi_hpt[cond_hpt], hi_hpc[cond_hpc]
 
-    def remove_effect_hard_core(
-        self, df: pd.DataFrame
-    ) -> pd.DataFrame:
+    def remove_effect_hard_core(self, df: pd.DataFrame) -> pd.DataFrame:
         """Remove maintenance effects when Cumulative_*_SVs are unavailable.
 
         Detects events via HI jumps and subtracts cumulative offsets.
         """
-        df = df.sort_values(
-            ["Cycles_Since_New", "Snapshot"]
-        ).copy()
-        df = Data.remove_outliers(
-            df, threshold=2.6, sensor_cols=["Sensed_T45"]
-        )
+        df = df.sort_values(["Cycles_Since_New", "Snapshot"]).copy()
+        df = Data.remove_outliers(df, threshold=2.6, sensor_cols=["Sensed_T45"])
 
         num_cols = df.select_dtypes(include=[np.number]).columns
-        df[num_cols] = df[num_cols].rolling(
-            window=5, min_periods=1
-        ).median()
+        df[num_cols] = df[num_cols].rolling(window=5, min_periods=1).median()
 
         ehpt, _ = self._get_events(df)
         df["Event_Group"] = 0
         df.loc[ehpt.index, "Event_Group"] = 1
         df["Event_Group"] = df["Event_Group"].cumsum()
 
-        grp = df.groupby("Event_Group")["Sensed_T45"].agg(
-            ["first", "last"]
-        )
+        grp = df.groupby("Event_Group")["Sensed_T45"].agg(["first", "last"])
         grp["prev_last"] = grp["last"].shift(1)
         grp["jump"] = grp["first"] - grp["prev_last"]
         grp["jump"] = grp["jump"].fillna(0)
         grp["cumulative_offset"] = grp["jump"].cumsum()
         offset_map = grp["cumulative_offset"].to_dict()
-        df["Sensed_T45"] = (
-            df["Sensed_T45"] - df["Event_Group"].map(offset_map)
-        )
+        df["Sensed_T45"] = df["Sensed_T45"] - df["Event_Group"].map(offset_map)
         df = df.drop(columns=["Event_Group"])
         return df
 
@@ -162,7 +144,7 @@ class WWTrainer:
         dict
             ``{index: t45_value}`` of detected events.
         """
-        factor = (_e ** 2) * factor_mult
+        factor = (_e**2) * factor_mult
         sv: dict[Any, float] = {}
         counter: list[float] = []
         reference_r: float | None = None
@@ -252,13 +234,9 @@ class WWTrainer:
 
         # Detect events
         if is_training:
-            sv = self._detect_training_events(
-                wwdf, slope, window, factor_mult
-            )
+            sv = self._detect_training_events(wwdf, slope, window, factor_mult)
         else:
-            sv = self.detect_ww_events(
-                wwdf["Sensed_T45"], slope, window, factor_mult
-            )
+            sv = self.detect_ww_events(wwdf["Sensed_T45"], slope, window, factor_mult)
 
         return {
             "esn": esn,
@@ -283,7 +261,7 @@ class WWTrainer:
         reference_r: float | None = None
         floor: float | None = None
         last_cum = 0
-        factor = (_e ** 2) * factor_mult
+        factor = (_e**2) * factor_mult
 
         for idx, row in wwdf[["Sensed_T45", "Cumulative_WWs"]].iterrows():
             val_t45 = row["Sensed_T45"]
@@ -344,7 +322,7 @@ class WWTrainer:
         if len(wwdf) == 0 or slope <= 0:
             return 0.0
 
-        trigger_threshold = slope * (_e ** 2) * factor_mult
+        trigger_threshold = slope * (_e**2) * factor_mult
 
         if sv:
             last_event_idx = max(sv.keys())
@@ -400,9 +378,7 @@ class WWTrainer:
             self.results_train[esn] = result
             self.plot_ww_prediction(result)
 
-        self.results_val = self.predict_batch(
-            data.validation, "validation"
-        )
+        self.results_val = self.predict_batch(data.validation, "validation")
         for r in self.results_val.values():
             self.plot_ww_prediction(r)
 
@@ -437,9 +413,7 @@ class WWTrainer:
         fig, axs = plt.subplots(1, 2, figsize=(22, 6))
         fig.suptitle(f"WW Prediction — ESN {esn}", fontsize=16)
 
-        self._plot_t45_with_events(
-            axs[0], wwdf, reg, X, sv, slope, is_training
-        )
+        self._plot_t45_with_events(axs[0], wwdf, reg, X, sv, slope, is_training)
         self._plot_detrended(axs[1], wwdf, reg, X, sv)
 
         plt.tight_layout()
@@ -452,9 +426,7 @@ class WWTrainer:
                 f"Real WW cycles={n_real}, Slope={slope:.6f}"
             )
         else:
-            print(
-                f"  ESN {esn}: Detected={len(sv)}, Slope={slope:.6f}"
-            )
+            print(f"  ESN {esn}: Detected={len(sv)}, Slope={slope:.6f}")
 
     @staticmethod
     def _plot_t45_with_events(
@@ -499,9 +471,7 @@ class WWTrainer:
             )
 
         if is_training and "Cumulative_WWs" in wwdf.columns:
-            ww_bounds = wwdf["Cycles_Since_New"].groupby(
-                wwdf["Cumulative_WWs"]
-            ).last()
+            ww_bounds = wwdf["Cycles_Since_New"].groupby(wwdf["Cumulative_WWs"]).last()
             n_real = len(wwdf["Cumulative_WWs"].unique())
             ax.vlines(
                 x=ww_bounds,
@@ -529,9 +499,7 @@ class WWTrainer:
         sv: dict,
     ) -> None:
         """Subplot: detrended T45 showing fouling accumulation."""
-        detrended = (
-            wwdf["Sensed_T45"].values - reg.predict(X).flatten()
-        )
+        detrended = wwdf["Sensed_T45"].values - reg.predict(X).flatten()
         ax.scatter(
             wwdf["Cycles_Since_New"],
             detrended,
@@ -563,9 +531,7 @@ class WWTrainer:
                 linewidth=0.5,
             )
 
-        rolling_mean = pd.Series(detrended).rolling(
-            window=20, min_periods=1
-        ).mean()
+        rolling_mean = pd.Series(detrended).rolling(window=20, min_periods=1).mean()
         ax.plot(
             wwdf["Cycles_Since_New"].values,
             rolling_mean.values,

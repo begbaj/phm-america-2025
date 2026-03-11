@@ -15,7 +15,7 @@ from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import NearestNeighbors
 
-from predictor import config as cfg
+from modules import config as cfg
 
 
 class Data:
@@ -154,12 +154,8 @@ class Data:
         # Per-ESN forward + backward fill
         if "ESN" in df_out.columns:
             for col in valid_cols:
-                df_out[col] = df_out.groupby("ESN")[col].transform(
-                    lambda x: x.ffill()
-                )
-                df_out[col] = df_out.groupby("ESN")[col].transform(
-                    lambda x: x.bfill()
-                )
+                df_out[col] = df_out.groupby("ESN")[col].transform(lambda x: x.ffill())
+                df_out[col] = df_out.groupby("ESN")[col].transform(lambda x: x.bfill())
 
         return df_out
 
@@ -231,18 +227,13 @@ class Data:
         if cfg.INCLUDE_TEST:
             self.train_data = self.train.copy()
         else:
-            self.train_data = self.train[
-                self.train["ESN"] != cfg.TESTING_ESN
-            ].copy()
+            self.train_data = self.train[self.train["ESN"] != cfg.TESTING_ESN].copy()
 
-        self.test_loo = self.train[
-            self.train["ESN"] == cfg.TESTING_ESN
-        ].copy()
+        self.test_loo = self.train[self.train["ESN"] == cfg.TESTING_ESN].copy()
 
         if cfg.CYCLES_HEALTHY > 0:
             self.train_data = (
-                self.train_data
-                .groupby("ESN")
+                self.train_data.groupby("ESN")
                 .head(cfg.CYCLES_HEALTHY * 8)
                 .reset_index(drop=True)
                 .copy()
@@ -260,30 +251,21 @@ class Data:
         newdf: list[pd.DataFrame] = []
         for esn in self.train_data["ESN"].unique():
             cur = self.train_data[self.train_data["ESN"] == esn]
-            nbrs = NearestNeighbors(
-                n_neighbors=min(5, len(cur))
-            ).fit(cur[cfg.ALL_VARS])
+            nbrs = NearestNeighbors(n_neighbors=min(5, len(cur))).fit(cur[cfg.ALL_VARS])
             _, idx = nbrs.kneighbors(cur[cfg.ALL_VARS])
             for i in range(cfg.AUGMENTED_COUNT):
-                neighbor_offsets = np.random.randint(
-                    1, idx.shape[1], size=len(cur)
-                )
+                neighbor_offsets = np.random.randint(1, idx.shape[1], size=len(cur))
                 neighbor_indices = idx[np.arange(len(cur)), neighbor_offsets]
                 diff = (
                     self.train_data.iloc[neighbor_indices][cfg.ALL_VARS].values
                     - cur[cfg.ALL_VARS].values
                 )
-                new_vals = (
-                    cur[cfg.ALL_VARS].values
-                    + diff * np.random.rand(len(cur), 1)
-                )
+                new_vals = cur[cfg.ALL_VARS].values + diff * np.random.rand(len(cur), 1)
                 aug_df = cur.copy()
                 aug_df[cfg.ALL_VARS] = new_vals
                 aug_df["ESN"] = f"aug_{i}_{esn}"
                 newdf.append(aug_df)
-        self.train_data = pd.concat(
-            [self.train_data] + newdf, ignore_index=True
-        )
+        self.train_data = pd.concat([self.train_data] + newdf, ignore_index=True)
 
     # ──────────────────────── Accessors ─────────────────────────────
 
@@ -297,9 +279,7 @@ class Data:
             return sorted(esns)
         return sorted(ds["ESN"].unique())
 
-    def get_engine(
-        self, esn, dataset: str = "train"
-    ) -> pd.DataFrame | None:
+    def get_engine(self, esn, dataset: str = "train") -> pd.DataFrame | None:
         """Return rows for a single ESN from the chosen dataset."""
         ds = self._resolve_dataset(dataset)
         if isinstance(ds, list):
@@ -324,7 +304,6 @@ class Data:
         ds = mapping.get(name)
         if ds is None:
             raise ValueError(
-                f"Unknown dataset '{name}'. "
-                f"Choose from {list(mapping.keys())}."
+                f"Unknown dataset '{name}'. Choose from {list(mapping.keys())}."
             )
         return ds

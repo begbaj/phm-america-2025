@@ -5,7 +5,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from predictor import config as cfg
+from modules import config as cfg
 
 _plot_counter: dict[str, int] = {}
 

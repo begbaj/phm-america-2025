@@ -19,9 +19,9 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score
 
-from predictor import config as cfg, save_fig
-from predictor.data import Data
-from predictor.hi_trainer import HITrainer
+from modules import config as cfg, save_fig
+from modules.data import Data
+from modules.hi_trainer import HITrainer
 
 
 class LGBMCycleClassifier:
@@ -72,12 +72,8 @@ class LGBMCycleClassifier:
             hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
 
             # Scale HI with classifier-level coefficients
-            hi_hpt_s = HITrainer.scale_to_target_test(
-                hi_hpt, self.scale_coefs_hpt
-            )
-            hi_hpc_s = HITrainer.scale_to_target_test(
-                hi_hpc, self.scale_coefs_hpc
-            )
+            hi_hpt_s = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt)
+            hi_hpc_s = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc)
 
             feat = sd[cfg.DEGRAD_VARS].copy()
             feat["HI_HPT"] = hi_hpt_s.values
@@ -93,14 +89,10 @@ class LGBMCycleClassifier:
                 .values
             )
             feat["HI_HPT_rolling_mean"] = (
-                hi_hpt_s.rolling(window=window, min_periods=1)
-                .mean()
-                .values
+                hi_hpt_s.rolling(window=window, min_periods=1).mean().values
             )
             feat["HI_HPC_rolling_mean"] = (
-                hi_hpc_s.rolling(window=window, min_periods=1)
-                .mean()
-                .values
+                hi_hpc_s.rolling(window=window, min_periods=1).mean().values
             )
             feat["ESN"] = esn
             feat["label_hpt"] = sd["Cumulative_HPT_SVs"].values
@@ -122,8 +114,7 @@ class LGBMCycleClassifier:
             coef_data = self.hi.coef_data
         if coef_data is None:
             raise ValueError(
-                "No coef_data available. Run HITrainer.train_coefficients() "
-                "first."
+                "No coef_data available. Run HITrainer.train_coefficients() first."
             )
 
         # Pre-compute classifier-level scale coefficients
@@ -138,9 +129,7 @@ class LGBMCycleClassifier:
 
         clf_data = self.build_features(coef_data)
         self.feature_cols = [
-            c
-            for c in clf_data.columns
-            if c not in ("ESN", "label_hpt", "label_hpc")
+            c for c in clf_data.columns if c not in ("ESN", "label_hpt", "label_hpc")
         ]
 
         X = clf_data[self.feature_cols].values
@@ -205,12 +194,8 @@ class LGBMCycleClassifier:
         ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
         hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
 
-        hi_hpt_clf = HITrainer.scale_to_target_test(
-            hi_hpt, self.scale_coefs_hpt
-        )
-        hi_hpc_clf = HITrainer.scale_to_target_test(
-            hi_hpc, self.scale_coefs_hpc
-        )
+        hi_hpt_clf = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt)
+        hi_hpc_clf = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc)
 
         window = cfg.CLF_WINDOW
         clf_feat = sd[cfg.DEGRAD_VARS].copy()
@@ -227,14 +212,10 @@ class LGBMCycleClassifier:
             .values
         )
         clf_feat["HI_HPT_rolling_mean"] = (
-            hi_hpt_clf.rolling(window=window, min_periods=1)
-            .mean()
-            .values
+            hi_hpt_clf.rolling(window=window, min_periods=1).mean().values
         )
         clf_feat["HI_HPC_rolling_mean"] = (
-            hi_hpc_clf.rolling(window=window, min_periods=1)
-            .mean()
-            .values
+            hi_hpc_clf.rolling(window=window, min_periods=1).mean().values
         )
 
         try:
@@ -263,21 +244,15 @@ class LGBMCycleClassifier:
         self.clf_hpt = joblib.load(f"{directory}/clf_hpt.pkl")
         self.clf_hpc = joblib.load(f"{directory}/clf_hpc.pkl")
         self.feature_cols = joblib.load(f"{directory}/clf_feature_cols.pkl")
-        self.scale_coefs_hpt = joblib.load(
-            f"{directory}/clf_scale_coefs_hpt.pkl"
-        )
-        self.scale_coefs_hpc = joblib.load(
-            f"{directory}/clf_scale_coefs_hpc.pkl"
-        )
+        self.scale_coefs_hpt = joblib.load(f"{directory}/clf_scale_coefs_hpt.pkl")
+        self.scale_coefs_hpc = joblib.load(f"{directory}/clf_scale_coefs_hpc.pkl")
         print(f"Classifiers loaded from {directory}/")
 
     # ════════════════════════════════════════════════════════════════
     #  PLOTTING
     # ════════════════════════════════════════════════════════════════
 
-    def plot_cycle_distribution(
-        self, results_df: pd.DataFrame
-    ) -> None:
+    def plot_cycle_distribution(self, results_df: pd.DataFrame) -> None:
         """Bar chart of predicted cycle counts for HPT and HPC."""
         if "HPT_cycle" not in results_df.columns:
             print("No cycle columns in results.")
@@ -286,12 +261,8 @@ class LGBMCycleClassifier:
         fig, ax = plt.subplots(figsize=(8, 5))
         fig.suptitle("Predicted Maintenance Cycles", fontsize=14)
 
-        cycles_hpt = (
-            results_df["HPT_cycle"].value_counts().sort_index()
-        )
-        cycles_hpc = (
-            results_df["HPC_cycle"].value_counts().sort_index()
-        )
+        cycles_hpt = results_df["HPT_cycle"].value_counts().sort_index()
+        cycles_hpc = results_df["HPC_cycle"].value_counts().sort_index()
         width = 0.35
         x_hpt = np.arange(len(cycles_hpt))
         x_hpc = np.arange(len(cycles_hpc))

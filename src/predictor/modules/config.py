@@ -80,12 +80,12 @@ SEPARATE_MODELS: bool = True
 # ──────────────────────────────────────────
 # HI COEFFICIENT SEARCH (differential_evolution)
 # ──────────────────────────────────────────
-DO_NOT_TRAIN_COEFS: bool = False
+DO_NOT_TRAIN_COEFS: bool = True
 USE_ALL_VARS: bool = False
 THIS_ALL_VARS: List[str] = ["Sensed_T3", "Sensed_T45", "Sensed_Core_Speed", "Sensed_T25"]
 
 DE_MAXITER: int = 800
-DE_POPSIZE: int = 200
+DE_POPSIZE: int = 80
 DE_TOL: float = 0.001
 
 USE_ONLY_TRAIN: bool = False
@@ -144,6 +144,16 @@ SMOOTHING_WINDOW: int = 10
 # ──────────────────────────────────────────
 WW_DETECTION_WINDOW: int = 11
 WW_FACTOR_MULT: int = 80
+
+
+# ──────────────────────────────────────────────────────────────
+# MODEL LOADING (per-model: skip training, use saved models)
+# Set to True to load from MODELS_DIR; False to retrain.
+# If the saved file doesn't exist, training runs automatically.
+# ──────────────────────────────────────────────────────────────
+LOAD_HI_TRAINER: bool = False       # linear models + HI coefficients
+LOAD_LGBM_CLASSIFIER: bool = True # LGBM cycle classifier
+LOAD_LGBM_GAP: bool = True # LGBM gap correction
 
 
 # ──────────────────────────────────────────

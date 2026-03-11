@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from predictor import config as cfg
-from predictor.data import Data
+from modules import config as cfg
+from modules.data import Data
 
 
 class DataLoading:
@@ -94,8 +94,6 @@ class DataLoading:
             path = f"{base_path}{prefix}_{i}.csv"
             df = pd.read_csv(path)
             df = Data.remove_outliers(df, cfg.SENSORS)
-            df = Data.missingfill(
-                df, align_cols=["Snapshot", "Cycles"]
-            ).dropna()
+            df = Data.missingfill(df, align_cols=["Snapshot", "Cycles"]).dropna()
             frames.append(df)
         return frames

@@ -21,6 +21,7 @@ Usage
 """
 
 from __future__ import annotations
+from pathlib import Path
 from modules.ww_trainer import WWTrainer
 from modules.lgbm_gap_correction import LGBMGapCorrection
 from modules.lgbm_classifier import LGBMCycleClassifier
@@ -75,60 +76,89 @@ def main() -> None:
     )
 
     # ──────────────────────────────────────────────────────────────
-    # 3. TRAIN LINEAR MODELS (nominal-behaviour regressors)
+    # 3-5. HITrainer: LINEAR MODELS + RESIDUALS + HI COEFFICIENTS
     # ──────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("STEP 3 — TRAIN LINEAR MODELS")
-    print("=" * 60)
     hi = HITrainer(data)
-    hi.train_linear_models()
-    print(f"  Models: {list(hi.models.keys())}")
+    _hi_saved = Path(cfg.MODELS_DIR, "hi_models.pkl").exists()
+
+    if cfg.LOAD_HI_TRAINER and _hi_saved:
+        print("\n" + "=" * 60)
+        print("STEPS 3-5 — LOADING HITrainer")
+        print("=" * 60)
+        hi.load()
+        print(f"  Models: {list(hi.models.keys())}")
+        print(f"  chpt = {hi.chpt}")
+        print(f"  chpc = {hi.chpc}")
+        hi.compute_all_residuals()
+    else:
+        if cfg.LOAD_HI_TRAINER and not _hi_saved:
+            print("\n  [!] LOAD_HI_TRAINER=True but no saved models — training...")
+
+        # 3. TRAIN LINEAR MODELS
+        print("\n" + "=" * 60)
+        print("STEP 3 — TRAIN LINEAR MODELS")
+        print("=" * 60)
+        hi.train_linear_models()
+        print(f"  Models: {list(hi.models.keys())}")
+
+        # 4. COMPUTE RESIDUALS
+        print("\n" + "=" * 60)
+        print("STEP 4 — COMPUTE RESIDUALS")
+        print("=" * 60)
+        hi.compute_all_residuals()
+        hi.plot_residuals(hi._res_train_healthy, title_suffix="Training (healthy)")
+        hi.plot_residuals(hi._res_train, title_suffix="Training (full)")
+        hi.plot_residuals(hi._res_test_loo, title_suffix="Leave-One-Out ESN")
+
+        # 5. OPTIMISE HI COEFFICIENTS
+        print("\n" + "=" * 60)
+        print("STEP 5 — HI COEFFICIENT OPTIMISATION")
+        print("=" * 60)
+        hi.train_coefficients()
+        print(f"  chpt = {hi.chpt}")
+        print(f"  chpc = {hi.chpc}")
+        hi.plot_training_hi()
+        hi.save()
 
     # ──────────────────────────────────────────────────────────────
-    # 4. COMPUTE RESIDUALS (all datasets)
+    # 6. LGBM CYCLE CLASSIFIER
     # ──────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("STEP 4 — COMPUTE RESIDUALS")
-    print("=" * 60)
-    hi.compute_all_residuals()
-
-    # Plot training residuals
-    hi.plot_residuals(hi._res_train_healthy, title_suffix="Training (healthy)")
-    hi.plot_residuals(hi._res_train, title_suffix="Training (full)")
-    hi.plot_residuals(hi._res_test_loo, title_suffix="Leave-One-Out ESN")
-
-    # ──────────────────────────────────────────────────────────────
-    # 5. OPTIMISE HI COEFFICIENTS
-    # ──────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("STEP 5 — HI COEFFICIENT OPTIMISATION")
-    print("=" * 60)
-    hi.train_coefficients()
-    print(f"  chpt = {hi.chpt}")
-    print(f"  chpc = {hi.chpc}")
-
-    # Plot HI on training data
-    hi.plot_training_hi()
-
-    # ──────────────────────────────────────────────────────────────
-    # 6. TRAIN LGBM CYCLE CLASSIFIER
-    # ──────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("STEP 6 — LGBM CYCLE CLASSIFIER")
-    print("=" * 60)
     classifier = LGBMCycleClassifier(hi)
-    classifier.train()
-    classifier.save()
+    _clf_saved = Path(cfg.MODELS_DIR, "clf_hpt.pkl").exists()
+
+    if cfg.LOAD_LGBM_CLASSIFIER and _clf_saved:
+        print("\n" + "=" * 60)
+        print("STEP 6 — LOADING LGBM CYCLE CLASSIFIER")
+        print("=" * 60)
+        classifier.load()
+    else:
+        if cfg.LOAD_LGBM_CLASSIFIER and not _clf_saved:
+            print("\n  [!] LOAD_LGBM_CLASSIFIER=True but no saved models — training...")
+        print("\n" + "=" * 60)
+        print("STEP 6 — TRAIN LGBM CYCLE CLASSIFIER")
+        print("=" * 60)
+        classifier.train()
+        classifier.save()
 
     # ──────────────────────────────────────────────────────────────
-    # 7. TRAIN LGBM GAP CORRECTION
+    # 7. LGBM GAP CORRECTION
     # ──────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("STEP 7 — LGBM GAP CORRECTION")
-    print("=" * 60)
     gap = LGBMGapCorrection(hi, classifier)
-    gap.train()
-    gap.save()
+    _gap_saved = Path(cfg.MODELS_DIR, "lgbm_gap_hpt.pkl").exists()
+
+    if cfg.LOAD_LGBM_GAP and _gap_saved:
+        print("\n" + "=" * 60)
+        print("STEP 7 — LOADING LGBM GAP CORRECTION")
+        print("=" * 60)
+        gap.load()
+    else:
+        if cfg.LOAD_LGBM_GAP and not _gap_saved:
+            print("\n  [!] LOAD_LGBM_GAP=True but no saved models — training...")
+        print("\n" + "=" * 60)
+        print("STEP 7 — TRAIN LGBM GAP CORRECTION")
+        print("=" * 60)
+        gap.train()
+        gap.save()
 
     # Plot training before/after gap correction
     gap.plot_training_before_after()

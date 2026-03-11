@@ -14,8 +14,10 @@ Handles:
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -23,8 +25,8 @@ from scipy import stats
 from scipy.optimize import differential_evolution
 from sklearn.linear_model import LinearRegression
 
-from predictor import config as cfg, save_fig
-from predictor.data import Data
+from modules import config as cfg, save_fig
+from modules.data import Data
 
 
 class HITrainer:
@@ -196,11 +198,27 @@ class HITrainer:
             ``Sensed_T3`` + ``Sensed_T45``.
         ahpt, ahpc : coefficients (scalar or array).
             If ``None``, uses ``self.chpt`` / ``self.chpc``.
+            When the stored coefficients are dicts, they are resolved
+            via ``get_coefs_for_esn`` using the ESN in *sensor_data*.
         """
-        if ahpt is None:
-            ahpt = self.chpt
-        if ahpc is None:
-            ahpc = self.chpc
+        if ahpt is None or ahpc is None:
+            # Resolve dict coefficients when no explicit values given
+            if isinstance(self.chpt, dict) or isinstance(self.chpc, dict):
+                esn = (
+                    sensor_data["ESN"].iloc[0]
+                    if "ESN" in sensor_data.columns
+                    else None
+                )
+                _ahpt, _ahpc = self.get_coefs_for_esn(esn)
+                if ahpt is None:
+                    ahpt = _ahpt
+                if ahpc is None:
+                    ahpc = _ahpc
+            else:
+                if ahpt is None:
+                    ahpt = self.chpt
+                if ahpc is None:
+                    ahpc = self.chpc
 
         if cfg.USE_ALL_VARS:
             hi_hpt = self.HIE(ahpt, sensor_data[self.target_vars])
@@ -226,13 +244,7 @@ class HITrainer:
         """Find optimal HI alpha coefficients via differential_evolution,
         or load defaults from config.
         """
-        if cfg.DO_NOT_TRAIN_COEFS:
-            self.chpt = cfg.DEFAULT_CHPT
-            self.chpc = cfg.DEFAULT_CHPC
-            print("Using default coefficients from config.")
-            return
-
-        # Prepare data
+        # Prepare data (always needed — downstream classifiers use coef_data)
         if cfg.USE_ONLY_TRAIN:
             esn_data = self.data.train[
                 self.data.train["ESN"] != cfg.TESTING_ESN
@@ -257,6 +269,12 @@ class HITrainer:
             X_train = X_train.ffill().bfill().dropna()
 
         self.coef_data = X_train.copy()
+
+        if cfg.DO_NOT_TRAIN_COEFS:
+            self.chpt = cfg.DEFAULT_CHPT
+            self.chpc = cfg.DEFAULT_CHPC
+            print("Using default coefficients from config.")
+            return
 
         # Select target function and bounds
         if not cfg.USE_ALL_VARS:
@@ -439,6 +457,32 @@ class HITrainer:
             )
         return ahpt, ahpc
 
+    # ════════════════════════════════════════════════════════════════
+    #  SAVE / LOAD
+    # ════════════════════════════════════════════════════════════════
+
+    def save(self, directory: str = cfg.MODELS_DIR) -> None:
+        """Persist HITrainer state (models, coefficients, coef_data) to disk."""
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        joblib.dump(self.models, f"{directory}/hi_models.pkl")
+        joblib.dump(self.chpt, f"{directory}/hi_chpt.pkl")
+        joblib.dump(self.chpc, f"{directory}/hi_chpc.pkl")
+        joblib.dump(self.target_vars, f"{directory}/hi_target_vars.pkl")
+        if self.coef_data is not None:
+            joblib.dump(self.coef_data, f"{directory}/hi_coef_data.pkl")
+        print(f"HITrainer saved to {directory}/")
+
+    def load(self, directory: str = cfg.MODELS_DIR) -> None:
+        """Load HITrainer state from disk."""
+        self.models = joblib.load(f"{directory}/hi_models.pkl")
+        self.chpt = joblib.load(f"{directory}/hi_chpt.pkl")
+        self.chpc = joblib.load(f"{directory}/hi_chpc.pkl")
+        self.target_vars = joblib.load(f"{directory}/hi_target_vars.pkl")
+        coef_path = Path(f"{directory}/hi_coef_data.pkl")
+        if coef_path.exists():
+            self.coef_data = joblib.load(coef_path)
+        print(f"HITrainer loaded from {directory}/")
+
     def get_median_coefs(self) -> tuple[float, float]:
         """Return median (ahpt, ahpc) for unknown engines."""
         if isinstance(self.chpt, dict):
@@ -510,7 +554,8 @@ class HITrainer:
                 self._plot_residual_axis(ax, degrad, d_var, str(esn))
         axs_flat[0].legend(fontsize="small", loc="upper right")
         plt.tight_layout()
-        suffix = title_suffix.replace(" ", "_").lower() if title_suffix else "residuals"
+        suffix = title_suffix.replace(
+            " ", "_").lower() if title_suffix else "residuals"
         save_fig(fig, f"residuals_{suffix}")
 
     @staticmethod
@@ -557,9 +602,9 @@ class HITrainer:
                 axs[1], hi_hpc, "Health Index (HPC)", "tab:green"
             )
             fig.tight_layout()
-            save_fig(fig, f"training_hi_esn_{esn}"show(
+            save_fig(fig, f"training_hi_esn_{esn}")
 
-    @staticmethod
+    @ staticmethod
     def _plot_hi_subplot(
         ax: plt.Axes,
         hi: pd.Series,
