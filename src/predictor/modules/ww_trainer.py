@@ -23,6 +23,18 @@ from modules.data import Data
 from modules.hi_trainer import HITrainer
 
 
+class _FixedSlopeTrend:
+    """Lightweight linear trend model with fixed slope and fitted intercept."""
+
+    def __init__(self, slope: float, intercept: float) -> None:
+        self.coef_ = np.array([slope], dtype=float)
+        self.intercept_ = float(intercept)
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x).reshape(-1)
+        return self.coef_[0] * x_arr + self.intercept_
+
+
 class WWTrainer:
     """Water Wash event detection and cycles-to-next-WW prediction.
 
@@ -39,6 +51,79 @@ class WWTrainer:
         self.results_train: dict[Any, dict] = {}
         self.results_val: dict[Any, dict] = {}
         self.results_test: dict[Any, dict] = {}
+
+        # Training slope statistics for global-slope inference
+        self.training_slopes: list[float] = []
+        self.training_mean_slope: float | None = None
+
+    # ════════════════════════════════════════════════════════════════
+    #  TRAINING SLOPE MANAGEMENT
+    # ════════════════════════════════════════════════════════════════
+
+    def clear_training_slopes(self) -> None:
+        """Reset cached training slopes and global mean slope."""
+        self.training_slopes = []
+        self.training_mean_slope = None
+
+    def register_training_slope(self, slope: float) -> None:
+        """Store a valid per-engine training slope for global aggregation."""
+        if np.isfinite(slope) and slope > 0:
+            self.training_slopes.append(float(slope))
+
+    def finalize_training_mean_slope(self) -> float | None:
+        """Compute global training slope as mean of collected slopes."""
+        if not self.training_slopes:
+            self.training_mean_slope = None
+            return None
+        self.training_mean_slope = float(np.mean(self.training_slopes))
+        return self.training_mean_slope
+
+    @staticmethod
+    def _fixed_trend_from_slope(
+        x: np.ndarray,
+        y: np.ndarray,
+        slope: float,
+    ) -> _FixedSlopeTrend:
+        """Create a fixed-slope trend line with least-bias intercept."""
+        x_arr = np.asarray(x).reshape(-1)
+        y_arr = np.asarray(y).reshape(-1)
+        intercept = float(np.mean(y_arr) - slope * np.mean(x_arr))
+        return _FixedSlopeTrend(slope, intercept)
+
+    @staticmethod
+    def _apply_window_before_ww_predict(df: pd.DataFrame) -> pd.DataFrame:
+        """Apply optional rolling window to T45 before WW prediction."""
+        if not cfg.APPLY_WINDOW_BEFORE_WW_PREDICT:
+            return df
+        if "Sensed_T45" not in df.columns:
+            return df
+
+        window = int(cfg.WINDOW_BEFORE_WW_PREDICT)
+        min_periods = max(1, int(cfg.WINDOW_BEFORE_WW_PREDICT_MIN_PERIODS))
+        if window <= 1:
+            return df
+
+        out = df.copy()
+        sort_cols: list[str] = []
+        if "ESN" in out.columns:
+            sort_cols.append("ESN")
+        if "Cycles_Since_New" in out.columns:
+            sort_cols.append("Cycles_Since_New")
+        if "Snapshot" in out.columns:
+            sort_cols.append("Snapshot")
+        if sort_cols:
+            out = out.sort_values(sort_cols).copy()
+
+        if "ESN" in out.columns:
+            out["Sensed_T45"] = out.groupby("ESN")["Sensed_T45"].transform(
+                lambda x: x.rolling(window=window, min_periods=min_periods).mean()
+            )
+        else:
+            out["Sensed_T45"] = out["Sensed_T45"].rolling(
+                window=window,
+                min_periods=min_periods,
+            ).mean()
+        return out
 
     # ════════════════════════════════════════════════════════════════
     #  EFFECT REMOVAL
@@ -182,13 +267,15 @@ class WWTrainer:
         esn: Any,
         window: int = cfg.WW_DETECTION_WINDOW,
         factor_mult: int = cfg.WW_FACTOR_MULT,
+        use_training_mean_slope: bool = cfg.WW_USE_TRAINING_MEAN_SLOPE,
     ) -> dict[str, Any]:
         """Full WW prediction pipeline for a single engine.
 
         1. Substitute sensors with residuals.
         2. Remove HPT/HPC maintenance effects on T45.
-        3. Fit global linear trend.
-        4. Detect where T45 deviates enough → WW event.
+        3. Build one T45 signal.
+        4. Fit global linear trend on that signal.
+        5. Detect where the same signal deviates enough → WW event.
 
         Returns
         -------
@@ -201,6 +288,8 @@ class WWTrainer:
 
         if "Cycles" in wwdf.columns and "Cycles_Since_New" not in wwdf.columns:
             wwdf = wwdf.rename(columns={"Cycles": "Cycles_Since_New"})
+
+        wwdf = self._apply_window_before_ww_predict(wwdf)
 
         is_training = (
             "Cumulative_HPT_SVs" in wwdf.columns
@@ -222,21 +311,40 @@ class WWTrainer:
                 "n_events": 0,
                 "slope": 0.0,
                 "wwdf": wwdf,
+                "t45_signal": pd.Series(dtype=float),
                 "regression": None,
                 "is_training": is_training,
+                "used_training_mean_slope": False,
             }
 
         # Global linear trend
         X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
-        Y = wwdf["Sensed_T45"].values
-        reg = LinearRegression().fit(X, Y)
-        slope = reg.coef_[0]
+        t45_signal = wwdf["Sensed_T45"].copy()
+        Y = t45_signal.values
+        use_global_slope = (
+            use_training_mean_slope
+            and self.training_mean_slope is not None
+            and self.training_mean_slope > 0
+        )
+
+        if use_global_slope:
+            slope = float(self.training_mean_slope)
+            reg = self._fixed_trend_from_slope(X, Y, slope)
+        else:
+            reg = LinearRegression().fit(X, Y)
+            slope = float(reg.coef_[0])
 
         # Detect events
         if is_training:
-            sv = self._detect_training_events(wwdf, slope, window, factor_mult)
+            sv = self._detect_training_events(
+                wwdf,
+                t45_signal,
+                slope,
+                window,
+                factor_mult,
+            )
         else:
-            sv = self.detect_ww_events(wwdf["Sensed_T45"], slope, window, factor_mult)
+            sv = self.detect_ww_events(t45_signal, slope, window, factor_mult)
 
         return {
             "esn": esn,
@@ -244,13 +352,16 @@ class WWTrainer:
             "n_events": len(sv),
             "slope": slope,
             "wwdf": wwdf,
+            "t45_signal": t45_signal,
             "regression": reg,
             "is_training": is_training,
+            "used_training_mean_slope": use_global_slope,
         }
 
     def _detect_training_events(
         self,
         wwdf: pd.DataFrame,
+        t45_series: pd.Series,
         slope: float,
         window: int,
         factor_mult: int,
@@ -263,7 +374,14 @@ class WWTrainer:
         last_cum = 0
         factor = (_e**2) * factor_mult
 
-        for idx, row in wwdf[["Sensed_T45", "Cumulative_WWs"]].iterrows():
+        det_df = pd.DataFrame(
+            {
+                "Sensed_T45": t45_series.reindex(wwdf.index),
+                "Cumulative_WWs": wwdf["Cumulative_WWs"],
+            }
+        ).dropna()
+
+        for idx, row in det_df.iterrows():
             val_t45 = row["Sensed_T45"]
             val_cum = row["Cumulative_WWs"]
 
@@ -324,7 +442,7 @@ class WWTrainer:
 
         trigger_threshold = slope * (_e**2) * factor_mult
 
-        t45 = wwdf["Sensed_T45"]
+        t45 = ww_result.get("t45_signal", wwdf["Sensed_T45"])
 
         if sv:
             last_event_idx = max(sv.keys())
@@ -349,6 +467,7 @@ class WWTrainer:
         self,
         engine_list: list[pd.DataFrame],
         label: str = "engines",
+        use_training_mean_slope: bool = cfg.WW_USE_TRAINING_MEAN_SLOPE,
     ) -> dict[Any, dict]:
         """Run WW prediction for every engine in a list.
 
@@ -363,7 +482,12 @@ class WWTrainer:
                 engine_res = self.hi.residuals_single(edf)
                 if engine_res is None:
                     continue
-                result = self.predict_ww(edf, engine_res, esn)
+                result = self.predict_ww(
+                    edf,
+                    engine_res,
+                    esn,
+                    use_training_mean_slope=use_training_mean_slope,
+                )
                 results[esn] = result
         return results
 
@@ -371,20 +495,40 @@ class WWTrainer:
         """Run WW prediction on training, validation, and test."""
         # Training (use full train df, per-ESN)
         print("=== WW PREDICTION — TRAINING ===")
+        if cfg.WW_USE_TRAINING_MEAN_SLOPE:
+            self.clear_training_slopes()
         for esn in data.train["ESN"].unique():
             edf = data.train[data.train["ESN"] == esn]
             engine_res = self.hi.residuals_single(edf)
             if engine_res is None:
                 continue
-            result = self.predict_ww(edf, engine_res, esn)
+            result = self.predict_ww(
+                edf,
+                engine_res,
+                esn,
+                use_training_mean_slope=False,
+            )
+            if cfg.WW_USE_TRAINING_MEAN_SLOPE:
+                self.register_training_slope(float(result["slope"]))
             self.results_train[esn] = result
             self.plot_ww_prediction(result)
 
-        self.results_val = self.predict_batch(data.validation, "validation")
+        if cfg.WW_USE_TRAINING_MEAN_SLOPE:
+            self.finalize_training_mean_slope()
+
+        self.results_val = self.predict_batch(
+            data.validation,
+            "validation",
+            use_training_mean_slope=cfg.WW_USE_TRAINING_MEAN_SLOPE,
+        )
         for r in self.results_val.values():
             self.plot_ww_prediction(r)
 
-        self.results_test = self.predict_batch(data.test, "test")
+        self.results_test = self.predict_batch(
+            data.test,
+            "test",
+            use_training_mean_slope=cfg.WW_USE_TRAINING_MEAN_SLOPE,
+        )
         for r in self.results_test.values():
             self.plot_ww_prediction(r)
 

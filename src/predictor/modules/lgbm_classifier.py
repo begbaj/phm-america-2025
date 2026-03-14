@@ -51,6 +51,29 @@ class LGBMCycleClassifier:
         self.scale_coefs_hpt: dict[str, float] = {}
         self.scale_coefs_hpc: dict[str, float] = {}
 
+    @staticmethod
+    def _split_train_valid_by_esn(
+        clf_data: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+        """Deterministic ESN-level train/validation split for early-stopping."""
+        if not cfg.LGBM_USE_EARLY_STOPPING:
+            return clf_data, None
+
+        esn_values = sorted(clf_data["ESN"].dropna().unique())
+        if len(esn_values) < 3:
+            return clf_data, None
+
+        n_valid = int(np.ceil(len(esn_values) * cfg.LGBM_VALID_FRACTION_BY_ESN))
+        n_valid = max(1, min(n_valid, len(esn_values) - 1))
+
+        valid_esn = set(esn_values[-n_valid:])
+        valid_df = clf_data[clf_data["ESN"].isin(valid_esn)].copy()
+        train_df = clf_data[~clf_data["ESN"].isin(valid_esn)].copy()
+
+        if train_df.empty or valid_df.empty:
+            return clf_data, None
+        return train_df, valid_df
+
     # ════════════════════════════════════════════════════════════════
     #  FEATURE BUILDING
     # ════════════════════════════════════════════════════════════════
@@ -132,9 +155,19 @@ class LGBMCycleClassifier:
             c for c in clf_data.columns if c not in ("ESN", "label_hpt", "label_hpc")
         ]
 
-        X = clf_data[self.feature_cols].values
-        y_hpt = clf_data["label_hpt"].values.astype(int)
-        y_hpc = clf_data["label_hpc"].values.astype(int)
+        train_df, valid_df = self._split_train_valid_by_esn(clf_data)
+
+        X_train = train_df[self.feature_cols].values
+        y_hpt_train = train_df["label_hpt"].values.astype(int)
+        y_hpc_train = train_df["label_hpc"].values.astype(int)
+
+        X_valid = None
+        y_hpt_valid = None
+        y_hpc_valid = None
+        if valid_df is not None:
+            X_valid = valid_df[self.feature_cols].values
+            y_hpt_valid = valid_df["label_hpt"].values.astype(int)
+            y_hpc_valid = valid_df["label_hpc"].values.astype(int)
 
         self.clf_hpt = lgbm.LGBMClassifier(
             objective="multiclass",
@@ -157,20 +190,53 @@ class LGBMCycleClassifier:
             random_state=42,
         )
 
-        self.clf_hpt.fit(X, y_hpt)
-        self.clf_hpc.fit(X, y_hpc)
+        fit_kwargs_hpt: dict[str, Any] = {}
+        fit_kwargs_hpc: dict[str, Any] = {}
+        if X_valid is not None:
+            callbacks = [
+                lgbm.early_stopping(
+                    cfg.LGBM_EARLY_STOPPING_ROUNDS,
+                    verbose=False,
+                )
+            ]
+            fit_kwargs_hpt = {
+                "eval_set": [(X_valid, y_hpt_valid)],
+                "eval_metric": "multi_logloss",
+                "callbacks": callbacks,
+            }
+            fit_kwargs_hpc = {
+                "eval_set": [(X_valid, y_hpc_valid)],
+                "eval_metric": "multi_logloss",
+                "callbacks": callbacks,
+            }
 
-        pred_hpt = self.clf_hpt.predict(X)
-        pred_hpc = self.clf_hpc.predict(X)
-        acc_hpt = accuracy_score(y_hpt, pred_hpt)
-        acc_hpc = accuracy_score(y_hpc, pred_hpc)
+        self.clf_hpt.fit(X_train, y_hpt_train, **fit_kwargs_hpt)
+        self.clf_hpc.fit(X_train, y_hpc_train, **fit_kwargs_hpc)
+
+        pred_hpt_train = self.clf_hpt.predict(X_train)
+        pred_hpc_train = self.clf_hpc.predict(X_train)
+        acc_hpt = accuracy_score(y_hpt_train, pred_hpt_train)
+        acc_hpc = accuracy_score(y_hpc_train, pred_hpc_train)
+
+        valid_msg = ""
+        if X_valid is not None:
+            pred_hpt_valid = self.clf_hpt.predict(X_valid)
+            pred_hpc_valid = self.clf_hpc.predict(X_valid)
+            val_acc_hpt = accuracy_score(y_hpt_valid, pred_hpt_valid)
+            val_acc_hpc = accuracy_score(y_hpc_valid, pred_hpc_valid)
+            valid_msg = (
+                f" | Validation accuracy: HPT={val_acc_hpt:.4f}, "
+                f"HPC={val_acc_hpc:.4f}"
+            )
+
         print(
             f"Classifiers trained. "
             f"In-sample accuracy: HPT={acc_hpt:.4f}, HPC={acc_hpc:.4f}"
+            f"{valid_msg}"
         )
         print(f"Features: {self.feature_cols}")
-        print(f"HPT classes: {sorted(set(y_hpt))}")
-        print(f"HPC classes: {sorted(set(y_hpc))}")
+        print(f"HPT classes: {sorted(set(y_hpt_train))}")
+        print(f"HPC classes: {sorted(set(y_hpc_train))}")
 
     # ════════════════════════════════════════════════════════════════
     #  PREDICT
@@ -221,9 +287,10 @@ class LGBMCycleClassifier:
         try:
             X = clf_feat[self.feature_cols].values
             return self.clf_hpt.predict(X), self.clf_hpc.predict(X)
-        except Exception:
-            n = len(clf_feat)
-            return np.zeros(n, dtype=int), np.zeros(n, dtype=int)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cycle classifier prediction failed for ESN {esn}: {exc}"
+            ) from exc
 
     # ════════════════════════════════════════════════════════════════
     #  SAVE / LOAD

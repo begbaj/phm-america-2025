@@ -46,6 +46,66 @@ class Data:
     # ──────────────────────── Atomic preprocessing ───────────────────
 
     @staticmethod
+    def aggregate_by_cycle(
+        df: pd.DataFrame,
+        cycle_col: str | None = None,
+        sensor_cols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Aggregate snapshots to one row per engine-cycle.
+
+        Sensor columns are averaged; label/metadata columns keep the first
+        value within each engine-cycle block.
+        """
+        if df.empty:
+            return df
+
+        if cycle_col is None:
+            if "Cycles_Since_New" in df.columns:
+                cycle_col = "Cycles_Since_New"
+            elif "Cycles" in df.columns:
+                cycle_col = "Cycles"
+            else:
+                return df.copy()
+
+        group_cols: list[str] = []
+        if "ESN" in df.columns:
+            group_cols.append("ESN")
+        if cycle_col in df.columns:
+            group_cols.append(cycle_col)
+
+        if not group_cols:
+            return df.copy()
+
+        if sensor_cols is None:
+            base_sensors = list(cfg.SENSORS)
+        else:
+            base_sensors = list(sensor_cols)
+
+        sensor_mean_cols = {
+            c
+            for c in (base_sensors + list(cfg.OPERATING_VARS) + list(cfg.DEGRAD_VARS))
+            if c in df.columns and c not in group_cols
+        }
+
+        agg_map: dict[str, str] = {}
+        for col in df.columns:
+            if col in group_cols:
+                continue
+            if col in sensor_mean_cols and pd.api.types.is_numeric_dtype(df[col]):
+                agg_map[col] = "mean"
+            elif col.startswith("Cumulative_") or col.startswith("Cycles_to_"):
+                agg_map[col] = "first"
+            elif col == "Snapshot":
+                agg_map[col] = "first"
+            elif pd.api.types.is_numeric_dtype(df[col]):
+                agg_map[col] = "mean"
+            else:
+                agg_map[col] = "first"
+
+        out = df.groupby(group_cols, as_index=False).agg(agg_map)
+        return out.sort_values(group_cols).reset_index(drop=True)
+
+    @staticmethod
     def remove_outliers(
         df: pd.DataFrame,
         sensor_cols: list[str] | None = None,
@@ -110,28 +170,31 @@ class Data:
         align_cols: list[str] | None = None,
         sensor_cols: list[str] | None = None,
     ) -> pd.DataFrame:
-        """Fill missing values using fleet mean + forward/backward fill.
+        """Fill missing values using interpolation, fleet mean and ffill/bfill.
 
         Parameters
         ----------
         df : pd.DataFrame
         align_cols : list[str] | None
             Columns for grouping when computing fleet mean.
-            Tries ``['Snapshot', 'Cycles_Since_New']`` then
-            ``['Snapshot', 'Cycles']``.
+            Tries ``['Snapshot', 'Cycles_Since_New']``,
+            ``['Snapshot', 'Cycles']``, then cycle-only alternatives.
         sensor_cols : list[str] | None
             Columns to fill. Defaults to ``cfg.SENSORS``.
         """
-        default_align = ["Snapshot", "Cycles_Since_New"]
-        alt_align = ["Snapshot", "Cycles"]
+        align_candidates = [
+            ["Snapshot", "Cycles_Since_New"],
+            ["Snapshot", "Cycles"],
+            ["Cycles_Since_New"],
+            ["Cycles"],
+        ]
 
         if align_cols is None:
-            if all(c in df.columns for c in default_align):
-                align_cols = default_align
-            elif all(c in df.columns for c in alt_align):
-                align_cols = alt_align
-            else:
-                align_cols = []
+            align_cols = []
+            for cand in align_candidates:
+                if all(c in df.columns for c in cand):
+                    align_cols = cand
+                    break
 
         if sensor_cols is None:
             raw_sensors = list(cfg.SENSORS)
@@ -142,6 +205,28 @@ class Data:
             return df
 
         df_out = df.copy()
+
+        cycle_col = None
+        if "Cycles_Since_New" in df_out.columns:
+            cycle_col = "Cycles_Since_New"
+        elif "Cycles" in df_out.columns:
+            cycle_col = "Cycles"
+
+        if "ESN" in df_out.columns and cycle_col is not None:
+            df_out = df_out.sort_values(["ESN", cycle_col]).copy()
+        elif cycle_col is not None:
+            df_out = df_out.sort_values([cycle_col]).copy()
+
+        # Per-ESN interpolation
+        if "ESN" in df_out.columns:
+            for col in valid_cols:
+                df_out[col] = df_out.groupby("ESN")[col].transform(
+                    lambda x: x.interpolate(method="linear", limit_direction="both")
+                )
+        elif cycle_col is not None:
+            df_out[valid_cols] = df_out[valid_cols].interpolate(
+                method="linear", limit_direction="both"
+            )
 
         # Fleet mean fill
         if align_cols and all(c in df_out.columns for c in align_cols):
@@ -234,7 +319,7 @@ class Data:
         if cfg.CYCLES_HEALTHY > 0:
             self.train_data = (
                 self.train_data.groupby("ESN")
-                .head(cfg.CYCLES_HEALTHY * 8)
+                .head(cfg.CYCLES_HEALTHY)
                 .reset_index(drop=True)
                 .copy()
             )

@@ -181,7 +181,11 @@ class LGBMGapCorrection:
     #  TRAIN
     # ════════════════════════════════════════════════════════════════
 
-    def train(self, coef_data: pd.DataFrame | None = None) -> None:
+    def train(
+        self,
+        coef_data: pd.DataFrame | None = None,
+        run_logo_validation: bool = True,
+    ) -> None:
         """Train LightGBM gap-correction regressors.
 
         Includes leave-one-engine-out validation and a final fit on all data.
@@ -252,34 +256,36 @@ class LGBMGapCorrection:
         self.lgbm_gap_hpc = lgbm.LGBMRegressor(**cfg.GAP_LGBM_PARAMS)
 
         # ── Leave-one-engine-out validation ──────────────────
-        logo = LeaveOneGroupOut()
-        print("\n=== Gap Correction — Leave-One-Engine-Out ===")
-        for train_idx, test_idx in logo.split(X_reg, gap_hpt, groups):
-            test_esn = groups[test_idx[0]]
+        if run_logo_validation:
+            logo = LeaveOneGroupOut()
+            print("\n=== Gap Correction — Leave-One-Engine-Out ===")
+            for train_idx, test_idx in logo.split(X_reg, gap_hpt, groups):
+                test_esn = groups[test_idx[0]]
 
-            self.lgbm_gap_hpt.fit(X_reg[train_idx], gap_hpt[train_idx])
-            gap_pred_hpt = self.lgbm_gap_hpt.predict(X_reg[test_idx])
-            final_hpt = base_pred_hpt[test_idx] + gap_pred_hpt
-            rmse_hpt_ = np.sqrt(np.mean((y_true_hpt[test_idx] - final_hpt) ** 2))
+                self.lgbm_gap_hpt.fit(X_reg[train_idx], gap_hpt[train_idx])
+                gap_pred_hpt = self.lgbm_gap_hpt.predict(X_reg[test_idx])
+                final_hpt = base_pred_hpt[test_idx] + gap_pred_hpt
+                rmse_hpt_ = np.sqrt(np.mean((y_true_hpt[test_idx] - final_hpt) ** 2))
 
-            self.lgbm_gap_hpc.fit(X_reg[train_idx], gap_hpc[train_idx])
-            gap_pred_hpc = self.lgbm_gap_hpc.predict(X_reg[test_idx])
-            final_hpc = base_pred_hpc[test_idx] + gap_pred_hpc
-            rmse_hpc_ = np.sqrt(np.mean((y_true_hpc[test_idx] - final_hpc) ** 2))
+                self.lgbm_gap_hpc.fit(X_reg[train_idx], gap_hpc[train_idx])
+                gap_pred_hpc = self.lgbm_gap_hpc.predict(X_reg[test_idx])
+                final_hpc = base_pred_hpc[test_idx] + gap_pred_hpc
+                rmse_hpc_ = np.sqrt(np.mean((y_true_hpc[test_idx] - final_hpc) ** 2))
 
-            base_rmse_hpt = np.sqrt(
-                np.mean((y_true_hpt[test_idx] - base_pred_hpt[test_idx]) ** 2)
-            )
-            base_rmse_hpc = np.sqrt(
-                np.mean((y_true_hpc[test_idx] - base_pred_hpc[test_idx]) ** 2)
-            )
-            print(f"ESN {test_esn}:")
-            print(
-                f"  HPT: base RMSE={base_rmse_hpt:.2f} → corrected RMSE={rmse_hpt_:.2f}"
-            )
-            print(
-                f"  HPC: base RMSE={base_rmse_hpc:.2f} → corrected RMSE={rmse_hpc_:.2f}"
-            )
+                base_rmse_hpt = np.sqrt(
+                    np.mean((y_true_hpt[test_idx] - base_pred_hpt[test_idx]) ** 2)
+                )
+                base_rmse_hpc = np.sqrt(
+                    np.mean((y_true_hpc[test_idx] - base_pred_hpc[test_idx]) ** 2)
+                )
+
+                print(f"ESN {test_esn}:")
+                print(
+                    f"  HPT: base RMSE={base_rmse_hpt:.2f} → corrected RMSE={rmse_hpt_:.2f}"
+                )
+                print(
+                    f"  HPC: base RMSE={base_rmse_hpc:.2f} → corrected RMSE={rmse_hpc_:.2f}"
+                )
 
         # ── Final fit on all data ────────────────────────────
         self.lgbm_gap_hpt.fit(X_reg, gap_hpt)
@@ -290,11 +296,24 @@ class LGBMGapCorrection:
     #  PREDICT — single engine (v2 pipeline)
     # ════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _apply_window(series: np.ndarray, window: int, min_periods: int) -> np.ndarray:
+        """Apply rolling mean to a prediction series."""
+        if window <= 1:
+            return series
+        return (
+            pd.Series(series)
+            .rolling(window=window, min_periods=min_periods)
+            .mean()
+            .values
+        )
+
     def predict_engine(
         self,
         engine_df: pd.DataFrame,
         engine_residuals: pd.DataFrame,
         esn: Any,
+        apply_submission_window: bool = False,
     ) -> dict[str, Any]:
         """Full v2 prediction pipeline for one engine.
 
@@ -325,16 +344,8 @@ class LGBMGapCorrection:
         ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
         hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
 
-        hpt_key = (
-            cycle_hpt
-            if cycle_hpt in self.scale_coefs_hpt
-            else min(self.scale_coefs_hpt.keys())
-        )
-        hpc_key = (
-            cycle_hpc
-            if cycle_hpc in self.scale_coefs_hpc
-            else min(self.scale_coefs_hpc.keys())
-        )
+        hpt_key, hpt_seen = self._resolve_cycle_key(cycle_hpt, self.scale_coefs_hpt)
+        hpc_key, hpc_seen = self._resolve_cycle_key(cycle_hpc, self.scale_coefs_hpc)
 
         base_hpt = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt[hpt_key])
         base_hpc = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc[hpc_key])
@@ -345,19 +356,16 @@ class LGBMGapCorrection:
         pred_hpt = np.clip(base_hpt.values + gap_hpt, 0, None)
         pred_hpc = np.clip(base_hpc.values + gap_hpc, 0, None)
 
-        # Smoothing — ONLY here, right before extracting the final value
-        if cfg.SMOOTH_PREDICTIONS:
-            pred_hpt = (
-                pd.Series(pred_hpt)
-                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-                .mean()
-                .values
+        if apply_submission_window and cfg.APPLY_WINDOW_BEFORE_SUBMISSION:
+            pred_hpt = self._apply_window(
+                pred_hpt,
+                int(cfg.WINDOW_BEFORE_SUBMISSION_HPT),
+                int(cfg.WINDOW_BEFORE_SUBMISSION_MIN_PERIODS),
             )
-            pred_hpc = (
-                pd.Series(pred_hpc)
-                .rolling(window=cfg.SMOOTHING_WINDOW, min_periods=1)
-                .mean()
-                .values
+            pred_hpc = self._apply_window(
+                pred_hpc,
+                int(cfg.WINDOW_BEFORE_SUBMISSION_HPC),
+                int(cfg.WINDOW_BEFORE_SUBMISSION_MIN_PERIODS),
             )
 
         return {
@@ -368,7 +376,20 @@ class LGBMGapCorrection:
             "HPC_cycle": cycle_hpc,
             "pred_series_hpt": pred_hpt,
             "pred_series_hpc": pred_hpc,
+            "confidence": "ok" if hpt_seen and hpc_seen else "nearest_cycle_fallback",
         }
+
+    @staticmethod
+    def _resolve_cycle_key(
+        cycle: int,
+        known_scale_coefs: dict[int, dict[str, float]],
+    ) -> tuple[int, bool]:
+        """Resolve a cycle key using nearest known cycle as fallback."""
+        if cycle in known_scale_coefs:
+            return cycle, True
+        keys = np.array(sorted(known_scale_coefs.keys()), dtype=int)
+        idx = int(np.argmin(np.abs(keys - int(cycle))))
+        return int(keys[idx]), False
 
     # ════════════════════════════════════════════════════════════════
     #  PREDICT — all engines
@@ -377,6 +398,7 @@ class LGBMGapCorrection:
     def predict_all_engines(
         self,
         engine_list: list[pd.DataFrame],
+        apply_submission_window: bool = False,
     ) -> pd.DataFrame:
         """Predict Cycles_to_SV for every engine in a list of DataFrames.
 
@@ -415,7 +437,12 @@ class LGBMGapCorrection:
                     results.append(fb)
                     continue
                 try:
-                    pred = self.predict_engine(edf, engine_res, esn)
+                    pred = self.predict_engine(
+                        edf,
+                        engine_res,
+                        esn,
+                        apply_submission_window=apply_submission_window,
+                    )
                     pred_hpt = np.clip(pred["Cycles_to_HPT_SV"], 0, clip_max_hpt)
                     pred_hpc = np.clip(pred["Cycles_to_HPC_SV"], 0, clip_max_hpc)
                     results.append(
@@ -428,7 +455,7 @@ class LGBMGapCorrection:
                             "HPC_cycle": pred["HPC_cycle"],
                             "pred_series_hpt": pred["pred_series_hpt"],
                             "pred_series_hpc": pred["pred_series_hpc"],
-                            "confidence": "ok",
+                            "confidence": pred.get("confidence", "ok"),
                         }
                     )
                 except Exception as ex:
@@ -683,7 +710,12 @@ class LGBMGapCorrection:
                 engine_res = self.hi.residuals_single(edf)
                 if engine_res is None:
                     continue
-                pred = self.predict_engine(edf, engine_res, esn)
+                pred = self.predict_engine(
+                    edf,
+                    engine_res,
+                    esn,
+                    apply_submission_window=(label_prefix.lower() == "test"),
+                )
                 series_hpt = pred["pred_series_hpt"]
                 series_hpc = pred["pred_series_hpc"]
 
