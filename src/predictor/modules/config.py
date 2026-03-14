@@ -136,7 +136,9 @@ GAP_LGBM_PARAMS: dict = {
     "verbose": -1,
     "random_state": 42,
 }
-SMOOTHING_WINDOW: int = 20
+SMOOTHING_WINDOW: int = 40
+# SMOOTHING_WINDOW_HPT_HPC: int = 10
+# SMOOTHING_MIN_PERIODS_HPT_HPC: int = 1
 SMOOTH_PREDICTIONS: bool = True
 
 # ──────────────────────────────────────────

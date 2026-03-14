@@ -338,6 +338,7 @@ class LGBMGapCorrection:
 
         base_hpt = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt[hpt_key])
         base_hpc = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc[hpc_key])
+
         # Gap correction
         gap_hpt = self.lgbm_gap_hpt.predict(X_feat)
         gap_hpc = self.lgbm_gap_hpc.predict(X_feat)
