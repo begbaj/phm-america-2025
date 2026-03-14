@@ -39,6 +39,7 @@ class WWTrainer:
         self.results_train: dict[Any, dict] = {}
         self.results_val: dict[Any, dict] = {}
         self.results_test: dict[Any, dict] = {}
+        self.trained_slope: float | None = None
 
     # ════════════════════════════════════════════════════════════════
     #  EFFECT REMOVAL
@@ -226,11 +227,16 @@ class WWTrainer:
                 "is_training": is_training,
             }
 
-        # Global linear trend
+        # Engine-specific linear trend (always fit for plotting/context)
         X = wwdf["Cycles_Since_New"].values.reshape(-1, 1)
         Y = wwdf["Sensed_T45"].values
         reg = LinearRegression().fit(X, Y)
-        slope = reg.coef_[0]
+        engine_slope = float(reg.coef_[0])
+
+        # Use globally trained slope for non-training data when available.
+        slope = engine_slope
+        if not is_training and self.trained_slope is not None:
+            slope = self.trained_slope
 
         # Detect events
         if is_training:
@@ -371,6 +377,7 @@ class WWTrainer:
         """Run WW prediction on training, validation, and test."""
         # Training (use full train df, per-ESN)
         print("=== WW PREDICTION — TRAINING ===")
+        train_slopes: list[float] = []
         for esn in data.train["ESN"].unique():
             edf = data.train[data.train["ESN"] == esn]
             engine_res = self.hi.residuals_single(edf)
@@ -378,7 +385,15 @@ class WWTrainer:
                 continue
             result = self.predict_ww(edf, engine_res, esn)
             self.results_train[esn] = result
+            train_slopes.append(float(result["slope"]))
             self.plot_ww_prediction(result)
+
+        if train_slopes:
+            self.trained_slope = float(np.mean(train_slopes))
+            print(f"Global WW slope (training mean): {self.trained_slope:.6f}")
+        else:
+            self.trained_slope = None
+            print("Global WW slope not available (no valid training engines).")
 
         self.results_val = self.predict_batch(data.validation, "validation")
         for r in self.results_val.values():

@@ -32,6 +32,7 @@ from modules import config as cfg
 
 import time
 import warnings
+import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
@@ -220,6 +221,7 @@ def main() -> None:
 
     # --- Training WW ---
     print("\n--- Training WW ---")
+    train_ww_slopes: list[float] = []
     for esn in data.train["ESN"].unique():
         edf = data.train[data.train["ESN"] == esn]
         engine_res = hi.residuals_single(edf)
@@ -228,8 +230,16 @@ def main() -> None:
             continue
         ww_result = ww.predict_ww(edf, engine_res, esn)
         ww.results_train[esn] = ww_result
+        train_ww_slopes.append(float(ww_result["slope"]))
         if cfg.PLOT_WW:
             ww.plot_ww_prediction(ww_result)
+
+    if train_ww_slopes:
+        ww.trained_slope = float(np.mean(train_ww_slopes))
+        print(f"  Global WW slope (training mean): {ww.trained_slope:.5f}")
+    else:
+        ww.trained_slope = None
+        print("  Global WW slope unavailable (no valid training WW slopes)")
 
     # --- Validation WW ---
     print("\n--- Validation WW ---")
