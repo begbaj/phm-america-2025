@@ -21,6 +21,7 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 from scipy import stats
 from scipy.optimize import differential_evolution
 from sklearn.linear_model import LinearRegression
@@ -559,7 +560,7 @@ class HITrainer:
 
     @staticmethod
     def _plot_residual_axis(
-        ax: plt.Axes,
+        ax: Axes,
         degrad: pd.Series,
         var_name: str,
         label: str,
@@ -588,15 +589,52 @@ class HITrainer:
             return
 
         for esn in self.coef_data["ESN"].unique():
-            sd = self.coef_data[self.coef_data["ESN"] == esn].copy()
+            sd = self.coef_data.loc[
+                self.coef_data["ESN"] == esn
+            ].copy()
+            if "Cycles_Since_New" in sd.columns:
+                sd = sd.sort_values("Cycles_Since_New")
+                x_axis = sd["Cycles_Since_New"]
+            elif "Cycles" in sd.columns:
+                sd = sd.sort_values("Cycles")
+                x_axis = sd["Cycles"]
+            else:
+                x_axis = pd.Series(np.arange(len(sd)), index=sd.index)
+
             ahpt, ahpc = self.get_coefs_for_esn(esn)
             hi_hpt, hi_hpc = self.calc_hi(sd, ahpt, ahpc)
+            rul_hpt = (
+                sd["Cycles_to_HPT_SV"]
+                if "Cycles_to_HPT_SV" in sd.columns
+                else None
+            )
+            rul_hpc = (
+                sd["Cycles_to_HPC_SV"]
+                if "Cycles_to_HPC_SV" in sd.columns
+                else None
+            )
 
             subplots = []
             if cfg.PLOT_HI_HPT:
-                subplots.append((hi_hpt, "Health Index (HPT)", "tab:blue"))
+                subplots.append(
+                    (
+                        hi_hpt,
+                        rul_hpt,
+                        "Health Index (HPT)",
+                        "True RUL (HPT)",
+                        "tab:blue",
+                    )
+                )
             if cfg.PLOT_HI_HPC:
-                subplots.append((hi_hpc, "Health Index (HPC)", "tab:green"))
+                subplots.append(
+                    (
+                        hi_hpc,
+                        rul_hpc,
+                        "Health Index (HPC)",
+                        "True RUL (HPC)",
+                        "tab:green",
+                    )
+                )
             if not subplots:
                 continue
 
@@ -604,20 +642,50 @@ class HITrainer:
             fig.suptitle(f"Training: ESN - {esn}", fontsize=16)
             if len(subplots) == 1:
                 axs = [axs]
-            for ax, (hi_data, label, color) in zip(axs, subplots):
-                self._plot_hi_subplot(ax, hi_data, label, color)
+            for ax, (hi_data, rul_data, label, rul_label, color) in zip(
+                axs, subplots
+            ):
+                self._plot_hi_subplot(
+                    ax,
+                    x_axis,
+                    hi_data,
+                    rul_data,
+                    label,
+                    rul_label,
+                    color,
+                )
             fig.tight_layout()
             save_fig(fig, f"training_hi_esn_{esn}")
 
-    @ staticmethod
+    @staticmethod
     def _plot_hi_subplot(
-        ax: plt.Axes,
+        ax: Axes,
+        x_axis: pd.Series,
         hi: pd.Series,
+        rul: pd.Series | None,
         label: str,
+        rul_label: str,
         color: str,
     ) -> None:
-        """Draw HI line + scatter on a single axis."""
-        ax.plot(hi, color=color, label=label)
-        ax.scatter(hi.index, hi, color=color, label=label, s=3)
-        ax.legend(fontsize="small")
+        """Draw HI line + scatter and overlay true RUL when available."""
+        ax.plot(x_axis, hi, color=color, label=label, linewidth=0.8)
+        ax.scatter(x_axis, hi, color=color, s=3, alpha=0.7)
+        ax.set_xlabel("Cycles Since New")
         ax.grid(True, alpha=0.3)
+
+        if rul is not None:
+            ax_rul = ax.twinx()
+            ax_rul.plot(
+                x_axis,
+                rul,
+                color="tab:red",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.9,
+                label=rul_label,
+            )
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax_rul.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, fontsize="small", loc="best")
+        else:
+            ax.legend(fontsize="small", loc="best")

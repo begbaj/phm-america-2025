@@ -39,12 +39,20 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
 
-def main() -> None:
-    t0 = time.time()
+# ══════════════════════════════════════════════════════════════════
+#  STEP 1-2: DATA LOADING & PREPARATION
+# ══════════════════════════════════════════════════════════════════
 
-    # ──────────────────────────────────────────────────────────────
-    # 1. LOAD DATA
-    # ──────────────────────────────────────────────────────────────
+
+def load_data() -> Data:
+    """Load all datasets and prepare the training subset.
+
+    Returns
+    -------
+    Data
+        Populated Data instance with train/val/test loaded and
+        training subset prepared.
+    """
     print("=" * 60)
     print("STEP 1 — LOAD DATA")
     print("=" * 60)
@@ -60,9 +68,6 @@ def main() -> None:
         f"  Test files:       {len(data.test)}"
     )
 
-    # ──────────────────────────────────────────────────────────────
-    # 2. PREPARE TRAINING SUBSET
-    # ──────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("STEP 2 — PREPARE TRAINING SUBSET")
     print("=" * 60)
@@ -76,9 +81,28 @@ def main() -> None:
         f"  SEPARATE_MODELS: {cfg.SEPARATE_MODELS}"
     )
 
-    # ──────────────────────────────────────────────────────────────
-    # 3-5. HITrainer: LINEAR MODELS + RESIDUALS + HI COEFFICIENTS
-    # ──────────────────────────────────────────────────────────────
+    return data
+
+
+# ══════════════════════════════════════════════════════════════════
+#  STEPS 3-5: HITrainer (linear models + residuals + HI coefs)
+# ══════════════════════════════════════════════════════════════════
+
+
+def train_hi(data: Data) -> HITrainer:
+    """Train or load the HITrainer (linear models, residuals, HI
+    coefficients).
+
+    Parameters
+    ----------
+    data : Data
+        Populated Data instance.
+
+    Returns
+    -------
+    HITrainer
+        Ready-to-use HITrainer with models and coefficients.
+    """
     hi = HITrainer(data)
     _hi_saved = Path(cfg.MODELS_DIR, "hi_models.pkl").exists()
 
@@ -122,9 +146,35 @@ def main() -> None:
         hi.plot_training_hi() if cfg.PLOT_TRAINING_HI else None
         hi.save()
 
-    # ──────────────────────────────────────────────────────────────
-    # 6. LGBM CYCLE CLASSIFIER
-    # ──────────────────────────────────────────────────────────────
+    return hi
+
+
+# ══════════════════════════════════════════════════════════════════
+#  STEPS 6-8: HPT/HPC SV PREDICTION (classifier + gap + predict)
+# ══════════════════════════════════════════════════════════════════
+
+
+def predict_hpc_hpt(
+    hi: HITrainer, data: Data
+) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    """Run the full HPT/HPC SV prediction pipeline.
+
+    Steps 6-8: LGBM classifier, gap correction, and inference on
+    validation + test sets.
+
+    Parameters
+    ----------
+    hi : HITrainer
+        Trained HITrainer.
+    data : Data
+        Populated Data instance.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, int]
+        (results_val, results_test, n_val)
+    """
+    # ── 6. LGBM CYCLE CLASSIFIER ─────────────────────────────────
     classifier = LGBMCycleClassifier(hi)
     _clf_saved = Path(cfg.MODELS_DIR, "clf_hpt.pkl").exists()
 
@@ -142,9 +192,7 @@ def main() -> None:
         classifier.train()
         classifier.save()
 
-    # ──────────────────────────────────────────────────────────────
-    # 7. LGBM GAP CORRECTION
-    # ──────────────────────────────────────────────────────────────
+    # ── 7. LGBM GAP CORRECTION ───────────────────────────────────
     gap = LGBMGapCorrection(hi, classifier)
     _gap_saved = Path(cfg.MODELS_DIR, "lgbm_gap_hpt.pkl").exists()
 
@@ -162,13 +210,10 @@ def main() -> None:
         gap.train()
         gap.save()
 
-    # Plot training before/after gap correction
     if cfg.PLOT_GAP_BEFORE_AFTER:
         gap.plot_training_before_after()
 
-    # ──────────────────────────────────────────────────────────────
-    # 8. PREDICT HPT / HPC (validation + test)
-    # ──────────────────────────────────────────────────────────────
+    # ── 8. PREDICT HPT / HPC (validation + test) ─────────────────
     print("\n" + "=" * 60)
     print("STEP 8 — PREDICT CYCLES TO SV (HPT / HPC)")
     print("=" * 60)
@@ -207,81 +252,146 @@ def main() -> None:
             f"max={rdf['Cycles_to_HPC_SV'].max():.0f}"
         )
 
-    # Plot results
     if cfg.PLOT_GAP_RESULTS:
         gap.plot_results(results_df, data.validation, data.test)
 
-    # ──────────────────────────────────────────────────────────────
-    # 9. PREDICT WATER WASH (WW)
-    # ──────────────────────────────────────────────────────────────
+    return results_val, results_test, n_val
+
+
+# ══════════════════════════════════════════════════════════════════
+#  STEP 9: WATER WASH PREDICTION
+# ══════════════════════════════════════════════════════════════════
+
+
+def predict_ww(
+    hi: HITrainer, data: Data
+) -> tuple[WWTrainer, dict]:
+    """Run the full WW prediction pipeline.
+
+    Trains the global WW slope/gap on training engines, then predicts
+    WW events for validation and test sets.
+
+    Parameters
+    ----------
+    hi : HITrainer
+        Trained HITrainer.
+    data : Data
+        Populated Data instance.
+
+    Returns
+    -------
+    tuple[WWTrainer, dict]
+        (ww_trainer, ww_results_test_final) where
+        ww_results_test_final is keyed by test file index.
+    """
     print("\n" + "=" * 60)
     print("STEP 9 — WATER WASH PREDICTION")
     print("=" * 60)
+
     ww = WWTrainer(hi)
 
-    # --- Training WW ---
-    print("\n--- Training WW ---")
-    train_ww_slopes: list[float] = []
+    # ── Train WW global slope + gap ──────────────────────────────
+    print("\n--- Training WW global slope ---")
+    engine_training = []
     for esn in data.train["ESN"].unique():
-        edf = data.train[data.train["ESN"] == esn]
+        edf = data.train[data.train["ESN"] == esn].copy()
+        if edf.empty:
+            continue
+        engine_training.append(edf)
+    ww.train_ww(engine_training)
+
+    # ── Training WW (predict + plot) ─────────────────────────────
+    print("\n--- Training WW ---")
+    for edf in engine_training:
+        esn = edf["ESN"].iloc[0]
         engine_res = hi.residuals_single(edf)
         if engine_res is None:
-            print(f"  ESN {esn}: residuals None, skip")
             continue
         ww_result = ww.predict_ww(edf, engine_res, esn)
         ww.results_train[esn] = ww_result
-        train_ww_slopes.append(float(ww_result["slope"]))
         if cfg.PLOT_WW:
             ww.plot_ww_prediction(ww_result)
 
-    if train_ww_slopes:
-        ww.trained_slope = float(np.mean(train_ww_slopes))
-        print(f"  Global WW slope (training mean): {ww.trained_slope:.5f}")
-    else:
-        ww.trained_slope = None
-        print("  Global WW slope unavailable (no valid training WW slopes)")
-
-    # --- Validation WW ---
+    # ── Validation WW ────────────────────────────────────────────
     print("\n--- Validation WW ---")
     for i, engine_df in enumerate(data.validation):
-        for esn in engine_df["ESN"].unique():
-            edf = engine_df[engine_df["ESN"] == esn]
-            engine_res = hi.residuals_single(edf)
-            if engine_res is None:
-                print(f"  val_{i} (ESN {esn}): residuals None, skip")
-                continue
-            ww_result = ww.predict_ww(edf, engine_res, esn)
-            ww.results_val[esn] = ww_result
-            cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
-            print(
-                f"  val_{i} (ESN {esn}): events={ww_result['n_events']}  "
-                f"slope={ww_result['slope']:.5f}  Cycles_to_WW≈{cycles_ww:.0f}"
-            )
-            if cfg.PLOT_WW:
-                ww.plot_ww_prediction(ww_result)
+        esn = engine_df["ESN"].iloc[0]
+        engine_res = hi.residuals_single(engine_df)
+        if engine_res is None:
+            continue
 
-    # --- Test WW ---
+        ww_result = ww.predict_ww(engine_df, engine_res, esn)
+        ww.results_val[esn] = ww_result
+        if cfg.PLOT_WW:
+            ww.plot_ww_prediction(ww_result)
+        cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
+
+        print(
+            f"val_{i} ESN {esn}: "
+            f"events={ww_result['n_events']} "
+            f"slope={ww_result['slope']:.5f} "
+            f"WW≈{cycles_ww:.0f}"
+        )
+
+    # ── Test WW ──────────────────────────────────────────────────
     print("\n--- Test WW ---")
-    ww_results_test_final: dict = {}
-    for i, engine_df in enumerate(data.test):
-        for esn in engine_df["ESN"].unique():
-            edf = engine_df[engine_df["ESN"] == esn]
-            engine_res = hi.residuals_single(edf)
-            if engine_res is None:
-                print(f"  test_{i} (ESN {esn}): residuals None, skip")
-                continue
-            ww_result = ww.predict_ww(edf, engine_res, esn)
-            ww.results_test[esn] = ww_result
-            ww_results_test_final[i] = ww_result  # keyed by file index
-            cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
-            print(
-                f"  test_{i} (ESN {esn}): events={ww_result['n_events']}  "
-                f"slope={ww_result['slope']:.5f}  Cycles_to_WW≈{cycles_ww:.0f}"
-            )
+    ww_results_test_final = {}
 
-    # ──────────────────────────────────────────────────────────────
-    # 10. ASSEMBLE SUBMISSION CSV
-    # ──────────────────────────────────────────────────────────────
+    for i, engine_df in enumerate(data.test):
+        esn = engine_df["ESN"].iloc[0]
+        engine_res = hi.residuals_single(engine_df)
+        if engine_res is None:
+            continue
+
+        ww_result = ww.predict_ww(engine_df, engine_res, esn)
+        ww.results_test[esn] = ww_result
+        ww_results_test_final[i] = ww_result
+        if cfg.PLOT_WW:
+            ww.plot_ww_prediction(ww_result)
+        cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
+
+        print(
+            f"test_{i} ESN {esn}: "
+            f"events={ww_result['n_events']} "
+            f"slope={ww_result['slope']:.5f} "
+            f"WW≈{cycles_ww:.0f}"
+        )
+
+    return ww, ww_results_test_final
+
+
+# ══════════════════════════════════════════════════════════════════
+#  STEP 10: ASSEMBLE SUBMISSION
+# ══════════════════════════════════════════════════════════════════
+
+
+def assemble_submission(
+    data: Data,
+    results_test: pd.DataFrame,
+    n_val: int,
+    ww: WWTrainer,
+    ww_results_test_final: dict,
+) -> pd.DataFrame:
+    """Assemble and save the final submission CSV.
+
+    Parameters
+    ----------
+    data : Data
+        Populated Data instance.
+    results_test : pd.DataFrame
+        HPT/HPC prediction results for test set.
+    n_val : int
+        Number of validation files (used for file_idx offset).
+    ww : WWTrainer
+        Trained WWTrainer instance.
+    ww_results_test_final : dict
+        WW results keyed by test file index.
+
+    Returns
+    -------
+    pd.DataFrame
+        The submission DataFrame.
+    """
     print("\n" + "=" * 60)
     print("STEP 10 — ASSEMBLE SUBMISSION")
     print("=" * 60)
@@ -303,9 +413,7 @@ def main() -> None:
         else:
             cycles_hpt = _fallback_hpt
             cycles_hpc = _fallback_hpc
-            print(
-                f"  {file_name}: FALLBACK HPT/HPC (file_idx {file_idx} not found)"
-            )
+            print(f"  {file_name}: FALLBACK HPT/HPC (file_idx {file_idx} not found)")
 
         # --- WW (keyed by file index) ---
         if i in ww_results_test_final:
@@ -339,9 +447,33 @@ def main() -> None:
     )
 
     submission_df.to_csv(cfg.SUBMISSION_OUTPUT, index=False)
-    elapsed = time.time() - t0
     print(f"\nSubmission saved to: {cfg.SUBMISSION_OUTPUT}")
     print(submission_df.to_string(index=False))
+
+    return submission_df
+
+
+# ══════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════
+
+
+def main() -> None:
+    t0 = time.time()
+
+    data = load_data()
+    hi = train_hi(data)
+
+    # HPT/HPC SV prediction
+    results_val, results_test, n_val = predict_hpc_hpt(hi, data)
+
+    # Water Wash prediction
+    ww, ww_results_test_final = predict_ww(hi, data)
+
+    # Assemble submission
+    assemble_submission(data, results_test, n_val, ww, ww_results_test_final)
+
+    elapsed = time.time() - t0
     print(f"\nTotal elapsed time: {elapsed:.1f}s")
 
 
