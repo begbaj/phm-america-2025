@@ -138,6 +138,7 @@ class LGBMCycleClassifier:
 
         self.clf_hpt = lgbm.LGBMClassifier(
             objective="multiclass",
+            class_weight="balanced",
             n_estimators=cfg.CLF_N_ESTIMATORS,
             learning_rate=cfg.CLF_LEARNING_RATE,
             max_depth=cfg.CLF_MAX_DEPTH,
@@ -148,6 +149,7 @@ class LGBMCycleClassifier:
         )
         self.clf_hpc = lgbm.LGBMClassifier(
             objective="multiclass",
+            class_weight="balanced",
             n_estimators=cfg.CLF_N_ESTIMATORS,
             learning_rate=cfg.CLF_LEARNING_RATE,
             max_depth=cfg.CLF_MAX_DEPTH,
@@ -157,8 +159,44 @@ class LGBMCycleClassifier:
             random_state=42,
         )
 
-        self.clf_hpt.fit(X, y_hpt)
-        self.clf_hpc.fit(X, y_hpc)
+        eval_set_hpt = None
+        eval_set_hpc = None
+        if cfg.USE_ONLY_TRAIN:
+            # Gather validation data from TESTING_ESN
+            train_full = self.hi.data.train
+            val_data = train_full[train_full["ESN"] == cfg.TESTING_ESN].copy()
+            if not val_data.empty:
+                val_res = self.hi.residuals(val_data)
+                val_data[cfg.DEGRAD_VARS] = val_res[cfg.DEGRAD_VARS]
+                if cfg.USE_CLEAN_DATA:
+                    val_data = val_data.groupby(
+                        ["ESN", "Cycles_Since_New"], as_index=False
+                    ).median(numeric_only=True)
+                    val_data = Data.remove_outliers(
+                        val_data, threshold=cfg.COEF_OUTLIERS_THRESHOLD
+                    )
+                    val_data = val_data.ffill().bfill().dropna()
+                
+                val_clf_data = self.build_features(val_data)
+                if not val_clf_data.empty:
+                    X_val = val_clf_data[self.feature_cols].values
+                    y_val_hpt = val_clf_data["label_hpt"].values.astype(int)
+                    y_val_hpc = val_clf_data["label_hpc"].values.astype(int)
+                    eval_set_hpt = [(X_val, y_val_hpt)]
+                    eval_set_hpc = [(X_val, y_val_hpc)]
+
+        fit_params_hpt = {}
+        if eval_set_hpt is not None:
+            fit_params_hpt["eval_set"] = eval_set_hpt
+            fit_params_hpt["callbacks"] = [lgbm.early_stopping(stopping_rounds=30, verbose=False)]
+            
+        fit_params_hpc = {}
+        if eval_set_hpc is not None:
+            fit_params_hpc["eval_set"] = eval_set_hpc
+            fit_params_hpc["callbacks"] = [lgbm.early_stopping(stopping_rounds=30, verbose=False)]
+
+        self.clf_hpt.fit(X, y_hpt, **fit_params_hpt)
+        self.clf_hpc.fit(X, y_hpc, **fit_params_hpc)
 
         pred_hpt = self.clf_hpt.predict(X)
         pred_hpc = self.clf_hpc.predict(X)

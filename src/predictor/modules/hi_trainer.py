@@ -100,9 +100,7 @@ class HITrainer:
         preds = [m.predict(data) for m in self.models.values()]
         return np.mean(preds, axis=0)
 
-    def _predict(
-        self, data: pd.DataFrame, esn: Any = None
-    ) -> np.ndarray:
+    def _predict(self, data: pd.DataFrame, esn: Any = None) -> np.ndarray:
         """Predict using per-ESN model (if SEPARATE_MODELS) or ensemble."""
         if not cfg.SEPARATE_MODELS:
             return self._ensamble_predict(data)
@@ -123,9 +121,7 @@ class HITrainer:
             if Y_pred is None:
                 return None
             res_temp = Y - Y_pred
-            res_temp = Data.remove_outliers(
-                res_temp, threshold=3, method="iqr"
-            )
+            res_temp = Data.remove_outliers(res_temp, threshold=3, method="iqr")
             res_temp = res_temp.ffill().bfill()
             res_temp["ESN"] = esn
             try:
@@ -135,9 +131,7 @@ class HITrainer:
             res_list.append(res_temp)
         return pd.concat(res_list)
 
-    def residuals(
-        self, df: pd.DataFrame | list[pd.DataFrame]
-    ) -> pd.DataFrame:
+    def residuals(self, df: pd.DataFrame | list[pd.DataFrame]) -> pd.DataFrame:
         """Compute residuals for a DataFrame or list of DataFrames."""
         if isinstance(df, list):
             parts = [self.residuals_single(d) for d in df]
@@ -154,9 +148,7 @@ class HITrainer:
 
         train_full = self.data.train
         if not cfg.INCLUDE_TEST:
-            train_full = train_full[
-                train_full["ESN"] != cfg.TESTING_ESN
-            ].copy()
+            train_full = train_full[train_full["ESN"] != cfg.TESTING_ESN].copy()
         print("Computing residuals: training (full)...")
         self._res_train = self.residuals(train_full)
 
@@ -205,9 +197,7 @@ class HITrainer:
             # Resolve dict coefficients when no explicit values given
             if isinstance(self.chpt, dict) or isinstance(self.chpc, dict):
                 esn = (
-                    sensor_data["ESN"].iloc[0]
-                    if "ESN" in sensor_data.columns
-                    else None
+                    sensor_data["ESN"].iloc[0] if "ESN" in sensor_data.columns else None
                 )
                 _ahpt, _ahpc = self.get_coefs_for_esn(esn)
                 if ahpt is None:
@@ -246,9 +236,7 @@ class HITrainer:
         """
         # Prepare data (always needed — downstream classifiers use coef_data)
         if cfg.USE_ONLY_TRAIN:
-            esn_data = self.data.train[
-                self.data.train["ESN"] != cfg.TESTING_ESN
-            ].copy()
+            esn_data = self.data.train[self.data.train["ESN"] != cfg.TESTING_ESN].copy()
         else:
             esn_data = self.data.train.copy()
 
@@ -257,12 +245,9 @@ class HITrainer:
         X_train = esn_data.copy()
 
         if cfg.USE_CLEAN_DATA:
-            X_train = (
-                X_train.groupby(
-                    ["ESN", "Cycles_Since_New"], as_index=False
-                )
-                .median(numeric_only=True)
-            )
+            X_train = X_train.groupby(
+                ["ESN", "Cycles_Since_New"], as_index=False
+            ).median(numeric_only=True)
             X_train = Data.remove_outliers(
                 X_train, threshold=cfg.COEF_OUTLIERS_THRESHOLD
             )
@@ -336,28 +321,25 @@ class HITrainer:
         print("\nFINAL COEFFICIENTS:")
         if isinstance(self.chpt, dict):
             for k in self.chpt:
-                print(
-                    f"  ESN {k}: HPT α={self.chpt[k]}, HPC α={self.chpc[k]}"
-                )
+                print(f"  ESN {k}: HPT α={self.chpt[k]}, HPC α={self.chpc[k]}")
         else:
             print(f"  HPT (median): {self.chpt}")
             print(f"  HPC (median): {self.chpc}")
 
     # ── objective functions ──────────────────────────────────────
 
-    def _objective_single(
-        self, a, sensor_data: pd.DataFrame, RUL: pd.Series
-    ) -> float:
+    def _objective_single(self, a, sensor_data: pd.DataFrame, RUL: pd.Series) -> float:
         """Minimises ``-pearsonr`` between HI and RUL (single alpha)."""
         hi = self.HI(sensor_data["Sensed_T3"], sensor_data["Sensed_T45"], a)
-        valid = hi.dropna().index.intersection(RUL.dropna().index)
-        if len(valid) < 3:
-            return 1.0
-        hi_valid = hi.loc[valid]
-        rul_valid = RUL.loc[valid]
-        if hi_valid.max() == hi_valid.min():
-            return 1.0
-        return -stats.pearsonr(rul_valid, hi_valid)[0]
+        # valid = hi.dropna().index.intersection(RUL.dropna().index)
+        # if len(valid) < 3:
+        #     return 1.0
+        # hi_valid = hi.loc[valid]
+        # rul_valid = RUL.loc[valid]
+        # if hi_valid.max() == hi_valid.min():
+        #     return 1.0
+        # return -stats.pearsonr(rul_valid, hi_valid)[0]
+        return -stats.pearsonr(RUL, hi)[0]
 
     def _objective_multi(
         self, params, sensor_data: pd.DataFrame, RUL: pd.Series
@@ -386,6 +368,12 @@ class HITrainer:
         """Scale ``source`` to the range of ``target``, saving min/max
         coefficients into *coefs*.
         """
+        if not cfg.SCALE_TARGET:
+            if isinstance(coefs, dict):
+                coefs.setdefault("min", []).append(0)
+                coefs.setdefault("max", []).append(1)
+            return source.copy()
+
         s_min, s_max = source.min(), source.max()
         t_min, t_max = target.min(), target.max()
         if isinstance(coefs, dict):
@@ -405,19 +393,17 @@ class HITrainer:
         coefs: dict,
     ) -> pd.Series:
         """Scale ``source`` using pre-saved coefficients."""
+        if not cfg.SCALE_TARGET:
+            return source.copy()
+
         s_min, s_max = source.min(), source.max()
         denom = s_max - s_min
         if denom == 0:
             return pd.Series(
-                np.full(
-                    len(source), (coefs["max"] + coefs["min"]) / 2
-                ),
+                np.full(len(source), (coefs["max"] + coefs["min"]) / 2),
                 index=source.index,
             )
-        return (
-            (source - s_min) / denom * (coefs["max"] - coefs["min"])
-            + coefs["min"]
-        )
+        return (source - s_min) / denom * (coefs["max"] - coefs["min"]) + coefs["min"]
 
     # ════════════════════════════════════════════════════════════════
     #  6.  HELPER: get per-ESN coefficients
@@ -487,24 +473,14 @@ class HITrainer:
         """Return median (ahpt, ahpc) for unknown engines."""
         if isinstance(self.chpt, dict):
             hpt_vals = [
-                v[0] if isinstance(v, np.ndarray) else v
-                for v in self.chpt.values()
+                v[0] if isinstance(v, np.ndarray) else v for v in self.chpt.values()
             ]
             hpc_vals = [
-                v[0] if isinstance(v, np.ndarray) else v
-                for v in self.chpc.values()
+                v[0] if isinstance(v, np.ndarray) else v for v in self.chpc.values()
             ]
             return float(np.median(hpt_vals)), float(np.median(hpc_vals))
-        ahpt = (
-            self.chpt[0]
-            if isinstance(self.chpt, np.ndarray)
-            else float(self.chpt)
-        )
-        ahpc = (
-            self.chpc[0]
-            if isinstance(self.chpc, np.ndarray)
-            else float(self.chpc)
-        )
+        ahpt = self.chpt[0] if isinstance(self.chpt, np.ndarray) else float(self.chpt)
+        ahpc = self.chpc[0] if isinstance(self.chpc, np.ndarray) else float(self.chpc)
         return ahpt, ahpc
 
     # ════════════════════════════════════════════════════════════════
@@ -554,8 +530,7 @@ class HITrainer:
                 self._plot_residual_axis(ax, degrad, d_var, str(esn))
         axs_flat[0].legend(fontsize="small", loc="upper right")
         plt.tight_layout()
-        suffix = title_suffix.replace(
-            " ", "_").lower() if title_suffix else "residuals"
+        suffix = title_suffix.replace(" ", "_").lower() if title_suffix else "residuals"
         save_fig(fig, f"residuals_{suffix}")
 
     @staticmethod
@@ -589,9 +564,7 @@ class HITrainer:
             return
 
         for esn in self.coef_data["ESN"].unique():
-            sd = self.coef_data.loc[
-                self.coef_data["ESN"] == esn
-            ].copy()
+            sd = self.coef_data.loc[self.coef_data["ESN"] == esn].copy()
             if "Cycles_Since_New" in sd.columns:
                 sd = sd.sort_values("Cycles_Since_New")
                 x_axis = sd["Cycles_Since_New"]
@@ -604,14 +577,10 @@ class HITrainer:
             ahpt, ahpc = self.get_coefs_for_esn(esn)
             hi_hpt, hi_hpc = self.calc_hi(sd, ahpt, ahpc)
             rul_hpt = (
-                sd["Cycles_to_HPT_SV"]
-                if "Cycles_to_HPT_SV" in sd.columns
-                else None
+                sd["Cycles_to_HPT_SV"] if "Cycles_to_HPT_SV" in sd.columns else None
             )
             rul_hpc = (
-                sd["Cycles_to_HPC_SV"]
-                if "Cycles_to_HPC_SV" in sd.columns
-                else None
+                sd["Cycles_to_HPC_SV"] if "Cycles_to_HPC_SV" in sd.columns else None
             )
 
             subplots = []
@@ -642,9 +611,7 @@ class HITrainer:
             fig.suptitle(f"Training: ESN - {esn}", fontsize=16)
             if len(subplots) == 1:
                 axs = [axs]
-            for ax, (hi_data, rul_data, label, rul_label, color) in zip(
-                axs, subplots
-            ):
+            for ax, (hi_data, rul_data, label, rul_label, color) in zip(axs, subplots):
                 self._plot_hi_subplot(
                     ax,
                     x_axis,

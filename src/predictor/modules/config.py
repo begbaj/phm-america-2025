@@ -92,8 +92,9 @@ DE_MAXITER: int = 800
 DE_POPSIZE: int = 80
 DE_TOL: float = 0.001
 
-USE_ONLY_TRAIN: bool = False
+USE_ONLY_TRAIN: bool = True
 USE_CLEAN_DATA: bool = True
+SCALE_TARGET: bool = False
 COEF_OUTLIERS_THRESHOLD: float = 3
 SEPARATE_COEFS: bool = False
 
@@ -117,8 +118,8 @@ DEFAULT_CHPC: dict = {
 # ──────────────────────────────────────────
 CLF_N_ESTIMATORS: int = 600
 CLF_LEARNING_RATE: float = 0.002
-CLF_MAX_DEPTH: int = 10
-CLF_NUM_LEAVES: int = 63
+CLF_MAX_DEPTH: int = 4
+CLF_NUM_LEAVES: int = 15
 CLF_WINDOW: int = 20
 
 
@@ -131,9 +132,9 @@ GAP_LGBM_PARAMS: dict = {
     "metric": "rmse",
     "n_estimators": 5000,
     "learning_rate": 0.002,
-    "max_depth": 12,
-    "num_leaves": 63,
-    "min_child_samples": 5,
+    "max_depth": 4,
+    "num_leaves": 15,
+    "min_child_samples": 15,
     "reg_alpha": 0.1,
     "reg_lambda": 0.1,
     "n_jobs": -1,
@@ -156,9 +157,9 @@ WW_FACTOR_MULT: int = 80
 # Set to True to load from MODELS_DIR; False to retrain.
 # If the saved file doesn't exist, training runs automatically.
 # ──────────────────────────────────────────────────────────────
-LOAD_HI_TRAINER: bool = False  # linear models + HI coefficients
-LOAD_LGBM_CLASSIFIER: bool = True  # LGBM cycle classifier
-LOAD_LGBM_GAP: bool = True  # LGBM gap correction
+LOAD_HI_TRAINER: bool = True # linear models + HI coefficients
+LOAD_LGBM_CLASSIFIER: bool = True # LGBM cycle classifier
+LOAD_LGBM_GAP: bool = True # LGBM gap correction
 
 
 # ──────────────────────────────────────────

@@ -282,8 +282,52 @@ class LGBMGapCorrection:
             )
 
         # ── Final fit on all data ────────────────────────────
-        self.lgbm_gap_hpt.fit(X_reg, gap_hpt)
-        self.lgbm_gap_hpc.fit(X_reg, gap_hpc)
+        eval_set_hpt = None
+        eval_set_hpc = None
+
+        if cfg.USE_ONLY_TRAIN:
+            train_full = self.hi.data.train
+            val_data = train_full[train_full["ESN"] == cfg.TESTING_ESN].copy()
+            if not val_data.empty:
+                val_res = self.hi.residuals(val_data)
+                val_data[cfg.DEGRAD_VARS] = val_res[cfg.DEGRAD_VARS]
+                if cfg.USE_CLEAN_DATA:
+                    val_data = val_data.groupby(["ESN", "Cycles_Since_New"], as_index=False).median(numeric_only=True)
+                    val_data = Data.remove_outliers(val_data, threshold=cfg.COEF_OUTLIERS_THRESHOLD)
+                    val_data = val_data.ffill().bfill().dropna()
+                
+                esn_reg = self.build_regression_features(val_data)
+                if not esn_reg.empty:
+                    y_val_hpt = esn_reg["target_hpt"].values
+                    y_val_hpc = esn_reg["target_hpc"].values
+                    
+                    cycle_hpt_val = int(esn_reg["cycle_hpt"].values[-1])
+                    cycle_hpc_val = int(esn_reg["cycle_hpc"].values[-1])
+                    hpt_key = cycle_hpt_val if cycle_hpt_val in self.scale_coefs_hpt else min(self.scale_coefs_hpt.keys())
+                    hpc_key = cycle_hpc_val if cycle_hpc_val in self.scale_coefs_hpc else min(self.scale_coefs_hpc.keys())
+                    
+                    base_hpt_val = HITrainer.scale_to_target_test(esn_reg["HI_HPT"], self.scale_coefs_hpt[hpt_key]).values
+                    base_hpc_val = HITrainer.scale_to_target_test(esn_reg["HI_HPC"], self.scale_coefs_hpc[hpc_key]).values
+                    
+                    gap_hpt_val = y_val_hpt - base_hpt_val
+                    gap_hpc_val = y_val_hpc - base_hpc_val
+                    
+                    X_val_reg = esn_reg[self.feature_cols].values
+                    eval_set_hpt = [(X_val_reg, gap_hpt_val)]
+                    eval_set_hpc = [(X_val_reg, gap_hpc_val)]
+
+        fit_params_hpt = {}
+        if eval_set_hpt is not None:
+            fit_params_hpt["eval_set"] = eval_set_hpt
+            fit_params_hpt["callbacks"] = [lgbm.early_stopping(stopping_rounds=50, verbose=False)]
+            
+        fit_params_hpc = {}
+        if eval_set_hpc is not None:
+            fit_params_hpc["eval_set"] = eval_set_hpc
+            fit_params_hpc["callbacks"] = [lgbm.early_stopping(stopping_rounds=50, verbose=False)]
+
+        self.lgbm_gap_hpt.fit(X_reg, gap_hpt, **fit_params_hpt)
+        self.lgbm_gap_hpc.fit(X_reg, gap_hpc, **fit_params_hpc)
         print("\nLGBM gap regressors trained on all engines.")
 
     # ════════════════════════════════════════════════════════════════
@@ -791,69 +835,109 @@ class LGBMGapCorrection:
             base_hpt = base_pred_hpt_all[esn_mask.values].copy()
             base_hpc = base_pred_hpc_all[esn_mask.values].copy()
 
-            X_feat = esn_reg[self.feature_cols].values
-            gap_hpt = self.lgbm_gap_hpt.predict(X_feat)
-            gap_hpc = self.lgbm_gap_hpc.predict(X_feat)
-            final_hpt = np.clip(base_hpt + gap_hpt, 0, None)
-            final_hpc = np.clip(base_hpc + gap_hpc, 0, None)
+            self._plot_single_before_after_engine(esn, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc)
 
-            # Build subplot grid based on enabled toggles
-            subplot_specs = []
-            if cfg.PLOT_BA_TIME_SERIES:
-                subplot_specs.append(("time_series", "_plot_time_series"))
-            if cfg.PLOT_BA_ERROR:
-                subplot_specs.append(("error", "_plot_error"))
-            if cfg.PLOT_BA_SCATTER:
-                subplot_specs.append(("scatter", "_plot_scatter"))
+        # Also plot TESTING_ESN if it was excluded from training
+        if cfg.USE_ONLY_TRAIN:
+            # We need to compute features and base predictions for TESTING_ESN
+            train_full = self.hi.data.train
+            esn_data = train_full[train_full["ESN"] == cfg.TESTING_ESN].copy()
+            if not esn_data.empty:
+                res = self.hi.residuals(esn_data)
+                esn_data[cfg.DEGRAD_VARS] = res[cfg.DEGRAD_VARS]
+                
+                if cfg.USE_CLEAN_DATA:
+                    esn_data = esn_data.groupby(
+                        ["ESN", "Cycles_Since_New"], as_index=False
+                    ).median(numeric_only=True)
+                    esn_data = Data.remove_outliers(
+                        esn_data, threshold=cfg.COEF_OUTLIERS_THRESHOLD
+                    )
+                    esn_data = esn_data.ffill().bfill().dropna()
+                
+                esn_reg = self.build_regression_features(esn_data)
+                if not esn_reg.empty:
+                    y_true_hpt = esn_reg["target_hpt"].values
+                    y_true_hpc = esn_reg["target_hpc"].values
+                    
+                    # Compute base predictions using scale_to_target_test
+                    cycle_hpt = esn_reg["cycle_hpt"].values[-1]
+                    cycle_hpc = esn_reg["cycle_hpc"].values[-1]
+                    
+                    hpt_key = cycle_hpt if cycle_hpt in self.scale_coefs_hpt else min(self.scale_coefs_hpt.keys())
+                    hpc_key = cycle_hpc if cycle_hpc in self.scale_coefs_hpc else min(self.scale_coefs_hpc.keys())
+                    
+                    base_hpt = HITrainer.scale_to_target_test(esn_reg["HI_HPT"], self.scale_coefs_hpt[hpt_key]).values
+                    base_hpc = HITrainer.scale_to_target_test(esn_reg["HI_HPC"], self.scale_coefs_hpc[hpc_key]).values
 
-            if not subplot_specs:
-                continue
-
-            n_cols = len(subplot_specs)
-            fig, axs = plt.subplots(2, n_cols, figsize=(8 * n_cols, 10))
-            fig.suptitle(
-                f"Training ESN {esn} — Before vs After Correction",
-                fontsize=16,
-            )
-            if n_cols == 1:
-                axs = axs.reshape(-1, 1)
-            x_axis = np.arange(len(y_true_hpt))
-
-            for col_idx, (kind, method_name) in enumerate(subplot_specs):
-                method = getattr(self, method_name)
-                if kind == "scatter":
-                    method(axs[0, col_idx], y_true_hpt, base_hpt, final_hpt, "HPT — Scatter", "tab:blue")
-                    method(axs[1, col_idx], y_true_hpc, base_hpc, final_hpc, "HPC — Scatter", "tab:green")
-                else:
-                    label_hpt = "HPT — Cycles to SV" if kind == "time_series" else "HPT — Error"
-                    label_hpc = "HPC — Cycles to SV" if kind == "time_series" else "HPC — Error"
-                    method(axs[0, col_idx], x_axis, y_true_hpt, base_hpt, final_hpt, label_hpt, "tab:blue")
-                    method(axs[1, col_idx], x_axis, y_true_hpc, base_hpc, final_hpc, label_hpc, "tab:green")
-
-            plt.tight_layout()
-            save_fig(fig, f"training_before_after_esn_{esn}")
-
-            # Metrics
-            rmse_b_hpt = np.sqrt(np.mean((y_true_hpt - base_hpt) ** 2))
-            rmse_f_hpt = np.sqrt(np.mean((y_true_hpt - final_hpt) ** 2))
-            rmse_b_hpc = np.sqrt(np.mean((y_true_hpc - base_hpc) ** 2))
-            rmse_f_hpc = np.sqrt(np.mean((y_true_hpc - final_hpc) ** 2))
-            print(f"ESN {esn}:")
-            print(
-                f"  HPT  Base RMSE={rmse_b_hpt:.2f} → "
-                f"Corrected RMSE={rmse_f_hpt:.2f}  "
-                f"(Δ={rmse_b_hpt - rmse_f_hpt:+.2f})"
-            )
-            print(
-                f"  HPC  Base RMSE={rmse_b_hpc:.2f} → "
-                f"Corrected RMSE={rmse_f_hpc:.2f}  "
-                f"(Δ={rmse_b_hpc - rmse_f_hpc:+.2f})"
-            )
-            print()
+                    print(f"--- Adding plot for excluded TESTING_ESN: {cfg.TESTING_ESN} ---")
+                    self._plot_single_before_after_engine(cfg.TESTING_ESN, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc)
 
         # Global summary
         if cfg.PLOT_BA_GLOBAL_ERROR:
             self._plot_global_error_distribution()
+
+    def _plot_single_before_after_engine(self, esn, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc) -> None:
+        """Helper to plot Before vs After Correction for a single engine."""
+        X_feat = esn_reg[self.feature_cols].values
+        gap_hpt = self.lgbm_gap_hpt.predict(X_feat)
+        gap_hpc = self.lgbm_gap_hpc.predict(X_feat)
+        final_hpt = np.clip(base_hpt + gap_hpt, 0, None)
+        final_hpc = np.clip(base_hpc + gap_hpc, 0, None)
+
+        # Build subplot grid based on enabled toggles
+        subplot_specs = []
+        if cfg.PLOT_BA_TIME_SERIES:
+            subplot_specs.append(("time_series", "_plot_time_series"))
+        if cfg.PLOT_BA_ERROR:
+            subplot_specs.append(("error", "_plot_error"))
+        if cfg.PLOT_BA_SCATTER:
+            subplot_specs.append(("scatter", "_plot_scatter"))
+
+        if not subplot_specs:
+            return
+
+        n_cols = len(subplot_specs)
+        fig, axs = plt.subplots(2, n_cols, figsize=(8 * n_cols, 10))
+        fig.suptitle(
+            f"Training ESN {esn} — Before vs After Correction",
+            fontsize=16,
+        )
+        if n_cols == 1:
+            axs = axs.reshape(-1, 1)
+        x_axis = np.arange(len(y_true_hpt))
+
+        for col_idx, (kind, method_name) in enumerate(subplot_specs):
+            method = getattr(self, method_name)
+            if kind == "scatter":
+                method(axs[0, col_idx], y_true_hpt, base_hpt, final_hpt, "HPT — Scatter", "tab:blue")
+                method(axs[1, col_idx], y_true_hpc, base_hpc, final_hpc, "HPC — Scatter", "tab:green")
+            else:
+                label_hpt = "HPT — Cycles to SV" if kind == "time_series" else "HPT — Error"
+                label_hpc = "HPC — Cycles to SV" if kind == "time_series" else "HPC — Error"
+                method(axs[0, col_idx], x_axis, y_true_hpt, base_hpt, final_hpt, label_hpt, "tab:blue")
+                method(axs[1, col_idx], x_axis, y_true_hpc, base_hpc, final_hpc, label_hpc, "tab:green")
+
+        plt.tight_layout()
+        save_fig(fig, f"training_before_after_esn_{esn}")
+
+        # Metrics
+        rmse_b_hpt = np.sqrt(np.mean((y_true_hpt - base_hpt) ** 2))
+        rmse_f_hpt = np.sqrt(np.mean((y_true_hpt - final_hpt) ** 2))
+        rmse_b_hpc = np.sqrt(np.mean((y_true_hpc - base_hpc) ** 2))
+        rmse_f_hpc = np.sqrt(np.mean((y_true_hpc - final_hpc) ** 2))
+        print(f"ESN {esn}:")
+        print(
+            f"  HPT  Base RMSE={rmse_b_hpt:.2f} → "
+            f"Corrected RMSE={rmse_f_hpt:.2f}  "
+            f"(Δ={rmse_b_hpt - rmse_f_hpt:+.2f})"
+        )
+        print(
+            f"  HPC  Base RMSE={rmse_b_hpc:.2f} → "
+            f"Corrected RMSE={rmse_f_hpc:.2f}  "
+            f"(Δ={rmse_b_hpc - rmse_f_hpc:+.2f})"
+        )
+        print()
 
     @staticmethod
     def _plot_time_series(
