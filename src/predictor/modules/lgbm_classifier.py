@@ -47,10 +47,6 @@ class LGBMCycleClassifier:
         # Feature column names (order matters for prediction)
         self.feature_cols: list[str] = []
 
-        # Scale coefficients for classifier-input HI
-        self.scale_coefs_hpt: dict[str, float] = {}
-        self.scale_coefs_hpc: dict[str, float] = {}
-
     # ════════════════════════════════════════════════════════════════
     #  FEATURE BUILDING
     # ════════════════════════════════════════════════════════════════
@@ -58,7 +54,7 @@ class LGBMCycleClassifier:
     def build_features(
         self,
         data: pd.DataFrame,
-        window: int = cfg.CLF_WINDOW,
+        window: int = cfg.MINIMAL_FEATURE_WINDOW,
     ) -> pd.DataFrame:
         """Build classification features for every ESN in *data*.
 
@@ -71,29 +67,19 @@ class LGBMCycleClassifier:
             ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
             hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
 
-            # Scale HI with classifier-level coefficients
-            hi_hpt_s = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt)
-            hi_hpc_s = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc)
-
             feat = sd[cfg.DEGRAD_VARS].copy()
-            feat["HI_HPT"] = hi_hpt_s.values
-            feat["HI_HPC"] = hi_hpc_s.values
-            feat["HI_HPT_slope"] = (
-                hi_hpt_s.rolling(window=window, min_periods=1)
-                .apply(Data.get_slope, raw=True)
-                .values
-            )
-            feat["HI_HPC_slope"] = (
-                hi_hpc_s.rolling(window=window, min_periods=1)
-                .apply(Data.get_slope, raw=True)
-                .values
-            )
-            feat["HI_HPT_rolling_mean"] = (
-                hi_hpt_s.rolling(window=window, min_periods=1).mean().values
-            )
-            feat["HI_HPC_rolling_mean"] = (
-                hi_hpc_s.rolling(window=window, min_periods=1).mean().values
-            )
+            feat["HI_HPT"] = hi_hpt.values
+            feat["HI_HPC"] = hi_hpc.values
+            
+            feat["HI_HPT_mean"] = hi_hpt.rolling(window=window, min_periods=1).mean().values
+            feat["HI_HPC_mean"] = hi_hpc.rolling(window=window, min_periods=1).mean().values
+            
+            feat["HI_HPT_std"] = hi_hpt.rolling(window=window, min_periods=2).std().fillna(0).values
+            feat["HI_HPC_std"] = hi_hpc.rolling(window=window, min_periods=2).std().fillna(0).values
+
+            feat["HI_HPT_slope"] = hi_hpt.rolling(window=window, min_periods=1).apply(Data.get_slope, raw=True).values
+            feat["HI_HPC_slope"] = hi_hpc.rolling(window=window, min_periods=1).apply(Data.get_slope, raw=True).values
+
             feat["ESN"] = esn
             feat["label_hpt"] = sd["Cumulative_HPT_SVs"].values
             feat["label_hpc"] = sd["Cumulative_HPC_SVs"].values
@@ -116,16 +102,6 @@ class LGBMCycleClassifier:
             raise ValueError(
                 "No coef_data available. Run HITrainer.train_coefficients() first."
             )
-
-        # Pre-compute classifier-level scale coefficients
-        self.scale_coefs_hpt = {
-            "min": float(coef_data["Cycles_to_HPT_SV"].min()),
-            "max": float(coef_data["Cycles_to_HPT_SV"].max()),
-        }
-        self.scale_coefs_hpc = {
-            "min": float(coef_data["Cycles_to_HPC_SV"].min()),
-            "max": float(coef_data["Cycles_to_HPC_SV"].max()),
-        }
 
         clf_data = self.build_features(coef_data)
         self.feature_cols = [
@@ -232,28 +208,25 @@ class LGBMCycleClassifier:
         ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
         hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
 
-        hi_hpt_clf = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt)
-        hi_hpc_clf = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc)
-
-        window = cfg.CLF_WINDOW
+        window = cfg.MINIMAL_FEATURE_WINDOW
         clf_feat = sd[cfg.DEGRAD_VARS].copy()
-        clf_feat["HI_HPT"] = hi_hpt_clf.values
-        clf_feat["HI_HPC"] = hi_hpc_clf.values
+        clf_feat["HI_HPT"] = hi_hpt.values
+        clf_feat["HI_HPC"] = hi_hpc.values
         clf_feat["HI_HPT_slope"] = (
-            hi_hpt_clf.rolling(window=window, min_periods=1)
+            hi_hpt.rolling(window=window, min_periods=1)
             .apply(Data.get_slope, raw=True)
             .values
         )
         clf_feat["HI_HPC_slope"] = (
-            hi_hpc_clf.rolling(window=window, min_periods=1)
+            hi_hpc.rolling(window=window, min_periods=1)
             .apply(Data.get_slope, raw=True)
             .values
         )
         clf_feat["HI_HPT_rolling_mean"] = (
-            hi_hpt_clf.rolling(window=window, min_periods=1).mean().values
+            hi_hpt.rolling(window=window, min_periods=1).mean().values
         )
         clf_feat["HI_HPC_rolling_mean"] = (
-            hi_hpc_clf.rolling(window=window, min_periods=1).mean().values
+            hi_hpc.rolling(window=window, min_periods=1).mean().values
         )
 
         try:
@@ -273,8 +246,6 @@ class LGBMCycleClassifier:
         joblib.dump(self.clf_hpt, f"{directory}/clf_hpt.pkl")
         joblib.dump(self.clf_hpc, f"{directory}/clf_hpc.pkl")
         joblib.dump(self.feature_cols, f"{directory}/clf_feature_cols.pkl")
-        joblib.dump(self.scale_coefs_hpt, f"{directory}/clf_scale_coefs_hpt.pkl")
-        joblib.dump(self.scale_coefs_hpc, f"{directory}/clf_scale_coefs_hpc.pkl")
         print(f"Classifiers saved to {directory}/")
 
     def load(self, directory: str = cfg.MODELS_DIR) -> None:
@@ -282,8 +253,6 @@ class LGBMCycleClassifier:
         self.clf_hpt = joblib.load(f"{directory}/clf_hpt.pkl")
         self.clf_hpc = joblib.load(f"{directory}/clf_hpc.pkl")
         self.feature_cols = joblib.load(f"{directory}/clf_feature_cols.pkl")
-        self.scale_coefs_hpt = joblib.load(f"{directory}/clf_scale_coefs_hpt.pkl")
-        self.scale_coefs_hpc = joblib.load(f"{directory}/clf_scale_coefs_hpc.pkl")
         print(f"Classifiers loaded from {directory}/")
 
     # ════════════════════════════════════════════════════════════════

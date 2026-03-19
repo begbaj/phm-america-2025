@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
 """
 main.py - Full PHM America 2025 prediction pipeline.
-
-Orchestrates every step of the prediction pipeline:
-    1. Load data
-    2. Prepare training subset
-    3. Train nominal-behaviour linear models (ensemble)
-    4. Compute residuals for all datasets
-    5. Optimise HI coefficients (differential_evolution)
-    6. Train LGBM cycle classifier
-    7. Train LGBM gap correction
-    8. Infer Cycles_to_HPT_SV / Cycles_to_HPC_SV on val & test
-    9. Predict Water Wash (WW) events
-   10. Assemble and save submission.csv
-
-Usage
------
-    cd src/notebooks
-    python -m predictor.main
 """
 
 from __future__ import annotations
@@ -28,7 +11,7 @@ from modules.lgbm_classifier import LGBMCycleClassifier
 from modules.hi_trainer import HITrainer
 from modules.data_loading import DataLoading
 from modules.data import Data
-from modules import config as cfg
+from modules import config as cfg, utils as u
 
 import time
 import warnings
@@ -40,7 +23,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
 
 # ══════════════════════════════════════════════════════════════════
-#  STEP 1-2: DATA LOADING & PREPARATION
+#  DATA LOADING & PREPARATION
 # ══════════════════════════════════════════════════════════════════
 
 
@@ -53,42 +36,36 @@ def load_data() -> Data:
         Populated Data instance with train/val/test loaded and
         training subset prepared.
     """
-    print("=" * 60)
-    print("STEP 1 — LOAD DATA")
-    print("=" * 60)
+
+    u.print_title("Load Data")
     data = Data()
     loader = DataLoading(data)
     loader.load_all(
         val_range=range(0, 48),
         test_range=range(0, 52),
     )
-    print(
-        f"  Training rows:    {len(data.train)}\n"
-        f"  Validation files: {len(data.validation)}\n"
-        f"  Test files:       {len(data.test)}"
-    )
 
-    print("\n" + "=" * 60)
-    print("STEP 2 — PREPARE TRAINING SUBSET")
-    print("=" * 60)
+    u.print_data("Training rows",   len(data.train))
+    u.print_data("Validation files", len(data.validation))
+    u.print_data("Test files",      len(data.test))
+
+    u.print_title("Prepare training subset")
     data.prepare_training()
-    print(
-        f"  train_data rows: {len(data.train_data)}\n"
-        f"  test_loo rows:   {len(data.test_loo)}\n"
-        f"  TESTING_ESN:     {cfg.TESTING_ESN}\n"
-        f"  CYCLES_HEALTHY:  {cfg.CYCLES_HEALTHY}\n"
-        f"  ENSAMBLE:        {cfg.ENSAMBLE}\n"
-        f"  SEPARATE_MODELS: {cfg.SEPARATE_MODELS}"
-    )
+
+    u.print_data("train_data rows", len(data.train_data))
+    u.print_data("test_loo rows",   len(data.test_loo))
+    u.print_data("TESTING_ESN",     cfg.TESTING_ESN)
+    u.print_data("CYCLES_HEALTHY",  cfg.CYCLES_HEALTHY)
+    u.print_data("ENSAMBLE",        cfg.ENSAMBLE)
+    u.print_data("SEPARATE_MODELS", cfg.SEPARATE_MODELS)
 
     return data
 
 
 # ══════════════════════════════════════════════════════════════════
-#  STEPS 3-5: HITrainer (linear models + residuals + HI coefs)
+#  HITrainer
 # ══════════════════════════════════════════════════════════════════
-
-
+#
 def train_hi(data: Data) -> HITrainer:
     """Train or load the HITrainer (linear models, residuals, HI
     coefficients).
@@ -107,29 +84,23 @@ def train_hi(data: Data) -> HITrainer:
     _hi_saved = Path(cfg.MODELS_DIR, "hi_models.pkl").exists()
 
     if cfg.LOAD_HI_TRAINER and _hi_saved:
-        print("\n" + "=" * 60)
-        print("STEPS 3-5 — LOADING HITrainer")
-        print("=" * 60)
+        u.print_title("LOADING HITrainer")
         hi.load()
-        print(f"  Models: {list(hi.models.keys())}")
-        print(f"  chpt = {hi.chpt}")
-        print(f"  chpc = {hi.chpc}")
+        u.print_data("Models", list(hi.models.keys()))
+        u.print_data("chpt", hi.chpt)
+        u.print_data("chpc", hi.chpc)
         hi.compute_all_residuals()
     else:
         if cfg.LOAD_HI_TRAINER and not _hi_saved:
-            print("\n  [!] LOAD_HI_TRAINER=True but no saved models — training...")
+            u.print_line("[!] LOAD_HI_TRAINER=True but no saved models — training...")
 
         # 3. TRAIN LINEAR MODELS
-        print("\n" + "=" * 60)
-        print("STEP 3 — TRAIN LINEAR MODELS")
-        print("=" * 60)
+        u.print_title("STEP 3 — TRAIN LINEAR MODELS")
         hi.train_linear_models()
-        print(f"  Models: {list(hi.models.keys())}")
+        u.print_data("Models", list(hi.models.keys()))
 
         # 4. COMPUTE RESIDUALS
-        print("\n" + "=" * 60)
-        print("STEP 4 — COMPUTE RESIDUALS")
-        print("=" * 60)
+        u.print_title("STEP 4 — COMPUTE RESIDUALS")
         hi.compute_all_residuals()
         if cfg.PLOT_RESIDUALS:
             hi.plot_residuals(hi._res_train_healthy, title_suffix="Training (healthy)")
@@ -137,12 +108,10 @@ def train_hi(data: Data) -> HITrainer:
             hi.plot_residuals(hi._res_test_loo, title_suffix="Leave-One-Out ESN")
 
         # 5. OPTIMISE HI COEFFICIENTS
-        print("\n" + "=" * 60)
-        print("STEP 5 — HI COEFFICIENT OPTIMISATION")
-        print("=" * 60)
+        u.print_title("STEP 5 — HI COEFFICIENT OPTIMISATION")
         hi.train_coefficients()
-        print(f"  chpt = {hi.chpt}")
-        print(f"  chpc = {hi.chpc}")
+        u.print_data("chpt", hi.chpt)
+        u.print_data("chpc", hi.chpc)
         hi.plot_training_hi() if cfg.PLOT_TRAINING_HI else None
         hi.save()
 
@@ -179,16 +148,12 @@ def predict_hpc_hpt(
     _clf_saved = Path(cfg.MODELS_DIR, "clf_hpt.pkl").exists()
 
     if cfg.LOAD_LGBM_CLASSIFIER and _clf_saved:
-        print("\n" + "=" * 60)
-        print("STEP 6 — LOADING LGBM CYCLE CLASSIFIER")
-        print("=" * 60)
+        u.print_title("STEP 6 — LOADING LGBM CYCLE CLASSIFIER")
         classifier.load()
     else:
         if cfg.LOAD_LGBM_CLASSIFIER and not _clf_saved:
-            print("\n  [!] LOAD_LGBM_CLASSIFIER=True but no saved models — training...")
-        print("\n" + "=" * 60)
-        print("STEP 6 — TRAIN LGBM CYCLE CLASSIFIER")
-        print("=" * 60)
+            u.print_line("[!] LOAD_LGBM_CLASSIFIER=True but no saved models — training...")
+        u.print_title("STEP 6 — TRAIN LGBM CYCLE CLASSIFIER")
         classifier.train()
         classifier.save()
 
@@ -197,16 +162,12 @@ def predict_hpc_hpt(
     _gap_saved = Path(cfg.MODELS_DIR, "lgbm_gap_hpt.pkl").exists()
 
     if cfg.LOAD_LGBM_GAP and _gap_saved:
-        print("\n" + "=" * 60)
-        print("STEP 7 — LOADING LGBM GAP CORRECTION")
-        print("=" * 60)
+        u.print_title("STEP 7 — LOADING LGBM GAP CORRECTION")
         gap.load()
     else:
         if cfg.LOAD_LGBM_GAP and not _gap_saved:
-            print("\n  [!] LOAD_LGBM_GAP=True but no saved models — training...")
-        print("\n" + "=" * 60)
-        print("STEP 7 — TRAIN LGBM GAP CORRECTION")
-        print("=" * 60)
+            u.print_line("[!] LOAD_LGBM_GAP=True but no saved models — training...")
+        u.print_title("STEP 7 — TRAIN LGBM GAP CORRECTION")
         gap.train()
         gap.save()
 
@@ -214,14 +175,12 @@ def predict_hpc_hpt(
         gap.plot_training_before_after()
 
     # ── 8. PREDICT HPT / HPC (validation + test) ─────────────────
-    print("\n" + "=" * 60)
-    print("STEP 8 — PREDICT CYCLES TO SV (HPT / HPC)")
-    print("=" * 60)
+    u.print_title("STEP 8 — PREDICT CYCLES TO SV (HPT / HPC)")
 
-    print("\n=== VALIDATION ===")
+    u.print_title("VALIDATION")
     results_val = gap.predict_all_engines(data.validation)
 
-    print("\n=== TEST ===")
+    u.print_title("TEST")
     results_test = gap.predict_all_engines(data.test)
 
     # Offset test file_idx so they don't collide with validation
@@ -231,21 +190,21 @@ def predict_hpc_hpt(
     results_df = pd.concat([results_val, results_test], ignore_index=True)
 
     # Quality check
-    print("\n=== QUALITY CHECK ===")
+    u.print_title("QUALITY CHECK")
     for label, rdf in [
         ("Validation", results_val),
         ("Test", results_test),
     ]:
         n_ok = (rdf["confidence"] == "ok").sum()
         n_fallback = (rdf["confidence"] != "ok").sum()
-        print(f"{label}: {n_ok} ok, {n_fallback} fallback")
-        print(
+        u.print_line(f"{label}: {n_ok} ok, {n_fallback} fallback")
+        u.print_line(
             f"  HPT: mean={rdf['Cycles_to_HPT_SV'].mean():.0f}, "
             f"std={rdf['Cycles_to_HPT_SV'].std():.0f}, "
             f"min={rdf['Cycles_to_HPT_SV'].min():.0f}, "
             f"max={rdf['Cycles_to_HPT_SV'].max():.0f}"
         )
-        print(
+        u.print_line(
             f"  HPC: mean={rdf['Cycles_to_HPC_SV'].mean():.0f}, "
             f"std={rdf['Cycles_to_HPC_SV'].std():.0f}, "
             f"min={rdf['Cycles_to_HPC_SV'].min():.0f}, "
@@ -263,9 +222,7 @@ def predict_hpc_hpt(
 # ══════════════════════════════════════════════════════════════════
 
 
-def predict_ww(
-    hi: HITrainer, data: Data
-) -> tuple[WWTrainer, dict]:
+def predict_ww(hi: HITrainer, data: Data) -> tuple[WWTrainer, dict]:
     """Run the full WW prediction pipeline.
 
     Trains the global WW slope/gap on training engines, then predicts
@@ -284,14 +241,12 @@ def predict_ww(
         (ww_trainer, ww_results_test_final) where
         ww_results_test_final is keyed by test file index.
     """
-    print("\n" + "=" * 60)
-    print("STEP 9 — WATER WASH PREDICTION")
-    print("=" * 60)
+    u.print_title("STEP 9 — WATER WASH PREDICTION")
 
     ww = WWTrainer(hi)
 
     # ── Train WW global slope + gap ──────────────────────────────
-    print("\n--- Training WW global slope ---")
+    u.print_line("--- Training WW global slope ---")
     engine_training = []
     for esn in data.train["ESN"].unique():
         edf = data.train[data.train["ESN"] == esn].copy()
@@ -301,7 +256,7 @@ def predict_ww(
     ww.train_ww(engine_training)
 
     # ── Training WW (predict + plot) ─────────────────────────────
-    print("\n--- Training WW ---")
+    u.print_line("--- Training WW ---")
     for edf in engine_training:
         esn = edf["ESN"].iloc[0]
         engine_res = hi.residuals_single(edf)
@@ -313,7 +268,7 @@ def predict_ww(
             ww.plot_ww_prediction(ww_result)
 
     # ── Validation WW ────────────────────────────────────────────
-    print("\n--- Validation WW ---")
+    u.print_line("--- Validation WW ---")
     for i, engine_df in enumerate(data.validation):
         esn = engine_df["ESN"].iloc[0]
         engine_res = hi.residuals_single(engine_df)
@@ -326,7 +281,7 @@ def predict_ww(
             ww.plot_ww_prediction(ww_result)
         cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
 
-        print(
+        u.print_line(
             f"val_{i} ESN {esn}: "
             f"events={ww_result['n_events']} "
             f"slope={ww_result['slope']:.5f} "
@@ -334,7 +289,7 @@ def predict_ww(
         )
 
     # ── Test WW ──────────────────────────────────────────────────
-    print("\n--- Test WW ---")
+    u.print_line("--- Test WW ---")
     ww_results_test_final = {}
 
     for i, engine_df in enumerate(data.test):
@@ -350,7 +305,7 @@ def predict_ww(
             ww.plot_ww_prediction(ww_result)
         cycles_ww = ww.cycles_to_next_ww_from_end(ww_result)
 
-        print(
+        u.print_line(
             f"test_{i} ESN {esn}: "
             f"events={ww_result['n_events']} "
             f"slope={ww_result['slope']:.5f} "
@@ -392,9 +347,7 @@ def assemble_submission(
     pd.DataFrame
         The submission DataFrame.
     """
-    print("\n" + "=" * 60)
-    print("STEP 10 — ASSEMBLE SUBMISSION")
-    print("=" * 60)
+    u.print_title("STEP 10 — ASSEMBLE SUBMISSION")
 
     _fallback_hpt = float(results_test["Cycles_to_HPT_SV"].mean())
     _fallback_hpc = float(results_test["Cycles_to_HPC_SV"].mean())
@@ -413,14 +366,14 @@ def assemble_submission(
         else:
             cycles_hpt = _fallback_hpt
             cycles_hpc = _fallback_hpc
-            print(f"  {file_name}: FALLBACK HPT/HPC (file_idx {file_idx} not found)")
+            u.print_line(f"{file_name}: FALLBACK HPT/HPC (file_idx {file_idx} not found)")
 
         # --- WW (keyed by file index) ---
         if i in ww_results_test_final:
             cycles_ww = ww.cycles_to_next_ww_from_end(ww_results_test_final[i])
         else:
             cycles_ww = 0
-            print(f"  {file_name}: WW not available, set to 0")
+            u.print_line(f"{file_name}: WW not available, set to 0")
 
         rows.append(
             {
@@ -431,8 +384,8 @@ def assemble_submission(
             }
         )
 
-        print(
-            f"  {file_name} (ESN {esn}):  "
+        u.print_line(
+            f"{file_name} (ESN {esn}):  "
             f"WW={cycles_ww:.0f}  HPC={cycles_hpc:.0f}  HPT={cycles_hpt:.0f}"
         )
 
@@ -447,8 +400,8 @@ def assemble_submission(
     )
 
     submission_df.to_csv(cfg.SUBMISSION_OUTPUT, index=False)
-    print(f"\nSubmission saved to: {cfg.SUBMISSION_OUTPUT}")
-    print(submission_df.to_string(index=False))
+    u.print_line(f"Submission saved to: {cfg.SUBMISSION_OUTPUT}")
+    u.print_line(submission_df.to_string(index=False))
 
     return submission_df
 
@@ -474,7 +427,7 @@ def main() -> None:
     assemble_submission(data, results_test, n_val, ww, ww_results_test_final)
 
     elapsed = time.time() - t0
-    print(f"\nTotal elapsed time: {elapsed:.1f}s")
+    u.print_data("Total elapsed time (s)", f"{elapsed:.1f}")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,6 @@
 """
 ww_trainer.py - WWTrainer class.
-
-Handles Water Wash (WW) prediction:
-- Removes HPT/HPC maintenance effects from Sensed_T45 residuals.
-- Detects WW events via rolling-mean deviation from linear trend.
-- Extrapolates cycles to next WW from the end of available data.
-- Plotting functions for WW detection results.
+Handles Water Wash (WW) prediction
 """
 
 from __future__ import annotations

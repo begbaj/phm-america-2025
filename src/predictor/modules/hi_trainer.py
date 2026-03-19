@@ -1,14 +1,5 @@
 """
 hi_trainer.py - HITrainer class.
-
-Handles:
-- Training the linear regressor ensemble for nominal-behaviour modelling.
-- Computing residuals (predicted - actual sensor readings).
-- Finding optimised alpha coefficients via differential_evolution.
-- Computing Health Indices (single-alpha HI and multi-variable HIE).
-- scale_to_target normalisation.
-- Full ``predict_cycles_to_sv_v2`` inference pipeline.
-- All associated plotting methods (each subplot has its own function).
 """
 
 from __future__ import annotations
@@ -26,7 +17,7 @@ from scipy import stats
 from scipy.optimize import differential_evolution
 from sklearn.linear_model import LinearRegression
 
-from modules import config as cfg, save_fig
+from modules import config as cfg, save_fig, utils as u
 from modules.data import Data
 
 
@@ -39,6 +30,11 @@ class HITrainer:
     data : Data
         Populated ``Data`` instance.
     """
+    @staticmethod
+    def get_sminmax() -> tuple[float, float]:
+        smin = -130.22684888136197
+        smax = -4.964727533770569
+        return (smin, smax)
 
     def __init__(self, data: Data) -> None:
         self.data = data
@@ -62,7 +58,7 @@ class HITrainer:
         self.target_vars: list[str] = []
 
     # ════════════════════════════════════════════════════════════════
-    #  1.  LINEAR REGRESSOR TRAINING
+    #  LINEAR REGRESSOR TRAINING
     # ════════════════════════════════════════════════════════════════
 
     def train_linear_models(self) -> None:
@@ -355,55 +351,7 @@ class HITrainer:
             return 1.0
         return float(np.mean((hi_norm.loc[valid] - RUL.loc[valid]) ** 2))
 
-    # ════════════════════════════════════════════════════════════════
-    #  5.  SCALE-TO-TARGET
-    # ════════════════════════════════════════════════════════════════
 
-    @staticmethod
-    def scale_to_target(
-        source: pd.Series,
-        target: pd.Series,
-        coefs: dict,
-    ) -> pd.Series:
-        """Scale ``source`` to the range of ``target``, saving min/max
-        coefficients into *coefs*.
-        """
-        if not cfg.SCALE_TARGET:
-            if isinstance(coefs, dict):
-                coefs.setdefault("min", []).append(0)
-                coefs.setdefault("max", []).append(1)
-            return source.copy()
-
-        s_min, s_max = source.min(), source.max()
-        t_min, t_max = target.min(), target.max()
-        if isinstance(coefs, dict):
-            coefs.setdefault("min", []).append(t_min)
-            coefs.setdefault("max", []).append(t_max)
-        denom = s_max - s_min
-        if denom == 0:
-            return pd.Series(
-                np.full(len(source), (t_max + t_min) / 2),
-                index=source.index,
-            )
-        return (source - s_min) / denom * (t_max - t_min) + t_min
-
-    @staticmethod
-    def scale_to_target_test(
-        source: pd.Series,
-        coefs: dict,
-    ) -> pd.Series:
-        """Scale ``source`` using pre-saved coefficients."""
-        if not cfg.SCALE_TARGET:
-            return source.copy()
-
-        s_min, s_max = source.min(), source.max()
-        denom = s_max - s_min
-        if denom == 0:
-            return pd.Series(
-                np.full(len(source), (coefs["max"] + coefs["min"]) / 2),
-                index=source.index,
-            )
-        return (source - s_min) / denom * (coefs["max"] - coefs["min"]) + coefs["min"]
 
     # ════════════════════════════════════════════════════════════════
     #  6.  HELPER: get per-ESN coefficients
@@ -563,8 +511,25 @@ class HITrainer:
             print("No coef_data. Run train_coefficients() first.")
             return
 
-        for esn in self.coef_data["ESN"].unique():
-            sd = self.coef_data.loc[self.coef_data["ESN"] == esn].copy()
+        for esn in self.data.train["ESN"].unique():
+            if esn in self.coef_data["ESN"].unique():
+                sd = self.coef_data.loc[self.coef_data["ESN"] == esn].copy()
+            else:
+                sd = self.data.train[self.data.train["ESN"] == esn].copy()
+                if sd.empty:
+                    continue
+                # Compute residuals
+                res = self.residuals(sd)
+                sd[cfg.DEGRAD_VARS] = res[cfg.DEGRAD_VARS]
+                if cfg.USE_CLEAN_DATA:
+                    sd = sd.groupby(
+                        ["ESN", "Cycles_Since_New"], as_index=False
+                    ).median(numeric_only=True)
+                    sd = Data.remove_outliers(
+                        sd, threshold=cfg.COEF_OUTLIERS_THRESHOLD
+                    )
+                    sd = sd.ffill().bfill().dropna()
+
             if "Cycles_Since_New" in sd.columns:
                 sd = sd.sort_values("Cycles_Since_New")
                 x_axis = sd["Cycles_Since_New"]

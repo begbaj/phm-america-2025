@@ -55,12 +55,11 @@ class LGBMGapCorrection:
         self.lgbm_gap_hpt: lgbm.LGBMRegressor | None = None
         self.lgbm_gap_hpc: lgbm.LGBMRegressor | None = None
 
+        self.max_cycles_train: float | None = None
+
         # Feature column order
         self.feature_cols: list[str] = []
 
-        # scale_to_target coefficients per maintenance cycle
-        self.scale_coefs_hpt: dict[int, dict[str, float]] = {}
-        self.scale_coefs_hpc: dict[int, dict[str, float]] = {}
 
         # Training-time base predictions (for plotting)
         self._base_pred_hpt: np.ndarray | None = None
@@ -75,9 +74,9 @@ class LGBMGapCorrection:
         self,
         sd: pd.DataFrame,
         esn: Any,
-        window: int = cfg.GAP_FEATURE_WINDOW,
+        window: int = cfg.MINIMAL_FEATURE_WINDOW,
     ) -> pd.DataFrame:
-        """Build rich regression features for a single ESN block."""
+        """Build minimal regression features for a single ESN block."""
         sd = sd.copy().sort_values("Cycles_Since_New")
         ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
         hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
@@ -88,81 +87,46 @@ class LGBMGapCorrection:
         feat["HI_HPT"] = hi_hpt.values
         feat["HI_HPC"] = hi_hpc.values
 
-        # ── Multi-scale trend features ──────────────────────────
-        for w in [10, 20, 50]:
-            feat[f"HI_HPT_slope_{w}"] = (
-                hi_hpt.rolling(window=w, min_periods=1)
-                .apply(Data.get_slope, raw=True)
-                .values
-            )
-            feat[f"HI_HPC_slope_{w}"] = (
-                hi_hpc.rolling(window=w, min_periods=1)
-                .apply(Data.get_slope, raw=True)
-                .values
-            )
-            feat[f"HI_HPT_mean_{w}"] = (
-                hi_hpt.rolling(window=w, min_periods=1).mean().values
-            )
-            feat[f"HI_HPC_mean_{w}"] = (
-                hi_hpc.rolling(window=w, min_periods=1).mean().values
-            )
-            feat[f"HI_HPT_std_{w}"] = (
-                hi_hpt.rolling(window=w, min_periods=2).std().fillna(0).values
-            )
-            feat[f"HI_HPC_std_{w}"] = (
-                hi_hpc.rolling(window=w, min_periods=2).std().fillna(0).values
-            )
+        # ── cycle_norm ──────────────────────────────────────────
+        if self.max_cycles_train is not None and self.max_cycles_train > 0:
+            feat["cycle_norm"] = sd["Cycles_Since_New"].values / self.max_cycles_train
+        else:
+            feat["cycle_norm"] = 0.0
 
-        # ── Position / degradation features ─────────────────────
-        feat["HI_HPT_delta_from_start"] = hi_hpt.values - hi_hpt.values[0]
-        feat["HI_HPC_delta_from_start"] = hi_hpc.values - hi_hpc.values[0]
-        feat["HI_HPT_cumulative_change"] = hi_hpt.diff().fillna(0).cumsum().values
-        feat["HI_HPC_cumulative_change"] = hi_hpc.diff().fillna(0).cumsum().values
+        # ── Minimal local features ──────────────────────────────
+        feat["HI_HPT_mean"] = hi_hpt.rolling(window=window, min_periods=1).mean().values
+        feat["HI_HPC_mean"] = hi_hpc.rolling(window=window, min_periods=1).mean().values
 
-        exp_mean_hpt = hi_hpt.expanding(min_periods=1).mean()
-        exp_mean_hpc = hi_hpc.expanding(min_periods=1).mean()
-        feat["HI_HPT_ratio_to_hist"] = (hi_hpt.values / exp_mean_hpt.values).clip(
-            -10, 10
+        feat["HI_HPT_ewma"] = hi_hpt.ewm(span=window, adjust=False).mean().values
+        feat["HI_HPC_ewma"] = hi_hpc.ewm(span=window, adjust=False).mean().values
+
+        feat["HI_HPT_diff"] = hi_hpt.diff().fillna(0).values
+        feat["HI_HPC_diff"] = hi_hpc.diff().fillna(0).values
+
+        feat["HI_HPT_std"] = (
+            hi_hpt.rolling(window=window, min_periods=3).std().fillna(0).values
         )
-        feat["HI_HPC_ratio_to_hist"] = (hi_hpc.values / exp_mean_hpc.values).clip(
-            -10, 10
+        feat["HI_HPC_std"] = (
+            hi_hpc.rolling(window=window, min_periods=3).std().fillna(0).values
         )
 
-        for w in [20, 50]:
-            feat[f"HI_HPT_range_{w}"] = (
-                hi_hpt.rolling(w, min_periods=1).max().values
-                - hi_hpt.rolling(w, min_periods=1).min().values
-            )
-            feat[f"HI_HPC_range_{w}"] = (
-                hi_hpc.rolling(w, min_periods=1).max().values
-                - hi_hpc.rolling(w, min_periods=1).min().values
-            )
-
-        # ── Acceleration ────────────────────────────────────────
-        slope_hpt = hi_hpt.rolling(window=20, min_periods=1).apply(
-            Data.get_slope, raw=True
+        feat["HI_HPT_slope"] = (
+            hi_hpt.rolling(window=window, min_periods=3)
+            .apply(Data.get_slope, raw=True)
+            .values
         )
-        slope_hpc = hi_hpc.rolling(window=20, min_periods=1).apply(
-            Data.get_slope, raw=True
+        feat["HI_HPC_slope"] = (
+            hi_hpc.rolling(window=window, min_periods=3)
+            .apply(Data.get_slope, raw=True)
+            .values
         )
-        feat["HI_HPT_acceleration"] = slope_hpt.diff().fillna(0).values
-        feat["HI_HPC_acceleration"] = slope_hpc.diff().fillna(0).values
-
-        # ── Sensor-level slopes ─────────────────────────────────
-        for var in cfg.DEGRAD_VARS:
-            feat[f"{var}_slope_20"] = (
-                sd[var]
-                .rolling(window=20, min_periods=1)
-                .apply(Data.get_slope, raw=True)
-                .values
-            )
 
         return feat
 
     def build_regression_features(
         self,
         coef_data: pd.DataFrame,
-        window: int = cfg.GAP_FEATURE_WINDOW,
+        window: int = cfg.MINIMAL_FEATURE_WINDOW,
     ) -> pd.DataFrame:
         """Build regression features for all ESNs in *coef_data*."""
         feat_list: list[pd.DataFrame] = []
@@ -191,55 +155,32 @@ class LGBMGapCorrection:
         if coef_data is None:
             raise ValueError("No coef_data. Run HITrainer.train_coefficients().")
 
+        if "Cycles_Since_New" in coef_data.columns:
+            self.max_cycles_train = float(coef_data["Cycles_Since_New"].max())
+        elif "Cycles" in coef_data.columns:
+            self.max_cycles_train = float(coef_data["Cycles"].max())
+        else:
+            self.max_cycles_train = float(len(coef_data))
+
         regs_data = self.build_regression_features(coef_data)
-        self.feature_cols = [
-            c for c in regs_data.columns if c not in ("ESN", "target_hpt", "target_hpc")
-        ]
+        self.feature_cols = [ c for c in regs_data.columns if c not in ("ESN", "target_hpt", "target_hpc") ]
         self._regs_data = regs_data
         print(f"Gap correction features: {len(self.feature_cols)}")
 
         y_true_hpt = regs_data["target_hpt"].values
         y_true_hpc = regs_data["target_hpc"].values
 
-        # ── Scale to target per maintenance cycle ────────────
-        base_pred_hpt = np.full(len(regs_data), np.nan)
-        base_pred_hpc = np.full(len(regs_data), np.nan)
-
-        for cycle in sorted(regs_data["cycle_hpt"].unique()):
-            mask = regs_data["cycle_hpt"] == cycle
-            coefs: dict = {}
-            scaled = HITrainer.scale_to_target(
-                regs_data.loc[mask, "HI_HPT"],
-                regs_data.loc[mask, "target_hpt"],
-                coefs,
-            )
-            base_pred_hpt[mask.values] = scaled.values
-            self.scale_coefs_hpt[int(cycle)] = {
-                "min": coefs["min"][0],
-                "max": coefs["max"][0],
-            }
-
-        for cycle in sorted(regs_data["cycle_hpc"].unique()):
-            mask = regs_data["cycle_hpc"] == cycle
-            coefs = {}
-            scaled = HITrainer.scale_to_target(
-                regs_data.loc[mask, "HI_HPC"],
-                regs_data.loc[mask, "target_hpc"],
-                coefs,
-            )
-            base_pred_hpc[mask.values] = scaled.values
-            self.scale_coefs_hpc[int(cycle)] = {
-                "min": coefs["min"][0],
-                "max": coefs["max"][0],
-            }
+        # ── Use pure HI features as base prediction ──────────
+        base_pred_hpt = regs_data["HI_HPT"].values
+        base_pred_hpc = regs_data["HI_HPC"].values
 
         self._base_pred_hpt = base_pred_hpt
         self._base_pred_hpc = base_pred_hpc
 
         rmse_hpt = np.sqrt(np.nanmean((y_true_hpt - base_pred_hpt) ** 2))
         rmse_hpc = np.sqrt(np.nanmean((y_true_hpc - base_pred_hpc) ** 2))
-        print(f"Base HPT (scale_to_target) RMSE: {rmse_hpt:.2f}")
-        print(f"Base HPC (scale_to_target) RMSE: {rmse_hpc:.2f}")
+        print(f"Base HPT RMSE: {rmse_hpt:.2f}")
+        print(f"Base HPC RMSE: {rmse_hpc:.2f}")
 
         # ── Gap = ground_truth - base ────────────────────────
         gap_hpt = y_true_hpt - base_pred_hpt
@@ -250,36 +191,6 @@ class LGBMGapCorrection:
 
         self.lgbm_gap_hpt = lgbm.LGBMRegressor(**cfg.GAP_LGBM_PARAMS)
         self.lgbm_gap_hpc = lgbm.LGBMRegressor(**cfg.GAP_LGBM_PARAMS)
-
-        # ── Leave-one-engine-out validation ──────────────────
-        logo = LeaveOneGroupOut()
-        print("\n=== Gap Correction — Leave-One-Engine-Out ===")
-        for train_idx, test_idx in logo.split(X_reg, gap_hpt, groups):
-            test_esn = groups[test_idx[0]]
-
-            self.lgbm_gap_hpt.fit(X_reg[train_idx], gap_hpt[train_idx])
-            gap_pred_hpt = self.lgbm_gap_hpt.predict(X_reg[test_idx])
-            final_hpt = base_pred_hpt[test_idx] + gap_pred_hpt
-            rmse_hpt_ = np.sqrt(np.mean((y_true_hpt[test_idx] - final_hpt) ** 2))
-
-            self.lgbm_gap_hpc.fit(X_reg[train_idx], gap_hpc[train_idx])
-            gap_pred_hpc = self.lgbm_gap_hpc.predict(X_reg[test_idx])
-            final_hpc = base_pred_hpc[test_idx] + gap_pred_hpc
-            rmse_hpc_ = np.sqrt(np.mean((y_true_hpc[test_idx] - final_hpc) ** 2))
-
-            base_rmse_hpt = np.sqrt(
-                np.mean((y_true_hpt[test_idx] - base_pred_hpt[test_idx]) ** 2)
-            )
-            base_rmse_hpc = np.sqrt(
-                np.mean((y_true_hpc[test_idx] - base_pred_hpc[test_idx]) ** 2)
-            )
-            print(f"ESN {test_esn}:")
-            print(
-                f"  HPT: base RMSE={base_rmse_hpt:.2f} → corrected RMSE={rmse_hpt_:.2f}"
-            )
-            print(
-                f"  HPC: base RMSE={base_rmse_hpc:.2f} → corrected RMSE={rmse_hpc_:.2f}"
-            )
 
         # ── Final fit on all data ────────────────────────────
         eval_set_hpt = None
@@ -292,26 +203,25 @@ class LGBMGapCorrection:
                 val_res = self.hi.residuals(val_data)
                 val_data[cfg.DEGRAD_VARS] = val_res[cfg.DEGRAD_VARS]
                 if cfg.USE_CLEAN_DATA:
-                    val_data = val_data.groupby(["ESN", "Cycles_Since_New"], as_index=False).median(numeric_only=True)
-                    val_data = Data.remove_outliers(val_data, threshold=cfg.COEF_OUTLIERS_THRESHOLD)
+                    val_data = val_data.groupby(
+                        ["ESN", "Cycles_Since_New"], as_index=False
+                    ).median(numeric_only=True)
+                    val_data = Data.remove_outliers(
+                        val_data, threshold=cfg.COEF_OUTLIERS_THRESHOLD
+                    )
                     val_data = val_data.ffill().bfill().dropna()
-                
+
                 esn_reg = self.build_regression_features(val_data)
                 if not esn_reg.empty:
                     y_val_hpt = esn_reg["target_hpt"].values
                     y_val_hpc = esn_reg["target_hpc"].values
-                    
-                    cycle_hpt_val = int(esn_reg["cycle_hpt"].values[-1])
-                    cycle_hpc_val = int(esn_reg["cycle_hpc"].values[-1])
-                    hpt_key = cycle_hpt_val if cycle_hpt_val in self.scale_coefs_hpt else min(self.scale_coefs_hpt.keys())
-                    hpc_key = cycle_hpc_val if cycle_hpc_val in self.scale_coefs_hpc else min(self.scale_coefs_hpc.keys())
-                    
-                    base_hpt_val = HITrainer.scale_to_target_test(esn_reg["HI_HPT"], self.scale_coefs_hpt[hpt_key]).values
-                    base_hpc_val = HITrainer.scale_to_target_test(esn_reg["HI_HPC"], self.scale_coefs_hpc[hpc_key]).values
-                    
+
+                    base_hpt_val = esn_reg["HI_HPT"].values
+                    base_hpc_val = esn_reg["HI_HPC"].values
+
                     gap_hpt_val = y_val_hpt - base_hpt_val
                     gap_hpc_val = y_val_hpc - base_hpc_val
-                    
+
                     X_val_reg = esn_reg[self.feature_cols].values
                     eval_set_hpt = [(X_val_reg, gap_hpt_val)]
                     eval_set_hpc = [(X_val_reg, gap_hpc_val)]
@@ -319,12 +229,18 @@ class LGBMGapCorrection:
         fit_params_hpt = {}
         if eval_set_hpt is not None:
             fit_params_hpt["eval_set"] = eval_set_hpt
-            fit_params_hpt["callbacks"] = [lgbm.early_stopping(stopping_rounds=50, verbose=False)]
-            
+            fit_params_hpt["callbacks"] = [
+                lgbm.early_stopping(stopping_rounds=50, verbose=False),
+                lgbm.log_evaluation(50)
+            ]
+
         fit_params_hpc = {}
         if eval_set_hpc is not None:
             fit_params_hpc["eval_set"] = eval_set_hpc
-            fit_params_hpc["callbacks"] = [lgbm.early_stopping(stopping_rounds=50, verbose=False)]
+            fit_params_hpc["callbacks"] = [
+                lgbm.early_stopping(stopping_rounds=50, verbose=False),
+                lgbm.log_evaluation(50)
+            ]
 
         self.lgbm_gap_hpt.fit(X_reg, gap_hpt, **fit_params_hpt)
         self.lgbm_gap_hpc.fit(X_reg, gap_hpc, **fit_params_hpc)
@@ -365,23 +281,12 @@ class LGBMGapCorrection:
 
         X_feat = feat[self.feature_cols].values
 
-        # scale_to_target base prediction
+        # Base pure HI prediction
         ahpt, ahpc = self.hi.get_coefs_for_esn(esn)
         hi_hpt, hi_hpc = self.hi.calc_hi(sd, ahpt, ahpc)
 
-        hpt_key = (
-            cycle_hpt
-            if cycle_hpt in self.scale_coefs_hpt
-            else min(self.scale_coefs_hpt.keys())
-        )
-        hpc_key = (
-            cycle_hpc
-            if cycle_hpc in self.scale_coefs_hpc
-            else min(self.scale_coefs_hpc.keys())
-        )
-
-        base_hpt = HITrainer.scale_to_target_test(hi_hpt, self.scale_coefs_hpt[hpt_key])
-        base_hpc = HITrainer.scale_to_target_test(hi_hpc, self.scale_coefs_hpc[hpc_key])
+        base_hpt = hi_hpt
+        base_hpc = hi_hpc
         # Gap correction
         gap_hpt = self.lgbm_gap_hpt.predict(X_feat)
         gap_hpc = self.lgbm_gap_hpc.predict(X_feat)
@@ -511,8 +416,7 @@ class LGBMGapCorrection:
         joblib.dump(self.lgbm_gap_hpt, f"{directory}/lgbm_gap_hpt.pkl")
         joblib.dump(self.lgbm_gap_hpc, f"{directory}/lgbm_gap_hpc.pkl")
         joblib.dump(self.feature_cols, f"{directory}/regs_feature_cols.pkl")
-        joblib.dump(self.scale_coefs_hpt, f"{directory}/scale_coefs_hpt.pkl")
-        joblib.dump(self.scale_coefs_hpc, f"{directory}/scale_coefs_hpc.pkl")
+        joblib.dump(self.max_cycles_train, f"{directory}/max_cycles_train.pkl")
         if self._regs_data is not None:
             joblib.dump(self._regs_data, f"{directory}/gap_regs_data.pkl")
         if self._base_pred_hpt is not None:
@@ -526,9 +430,9 @@ class LGBMGapCorrection:
         self.lgbm_gap_hpt = joblib.load(f"{directory}/lgbm_gap_hpt.pkl")
         self.lgbm_gap_hpc = joblib.load(f"{directory}/lgbm_gap_hpc.pkl")
         self.feature_cols = joblib.load(f"{directory}/regs_feature_cols.pkl")
-        self.scale_coefs_hpt = joblib.load(f"{directory}/scale_coefs_hpt.pkl")
-        self.scale_coefs_hpc = joblib.load(f"{directory}/scale_coefs_hpc.pkl")
         p = Path(directory)
+        if (p / "max_cycles_train.pkl").exists():
+            self.max_cycles_train = joblib.load(p / "max_cycles_train.pkl")
         if (p / "gap_regs_data.pkl").exists():
             self._regs_data = joblib.load(p / "gap_regs_data.pkl")
         if (p / "gap_base_pred_hpt.pkl").exists():
@@ -775,9 +679,7 @@ class LGBMGapCorrection:
             alpha=0.6,
             label=f"Final = {final_value:.0f}",
         )
-        ax.set_title(
-            f"{component} — Pred: {final_value:.0f} cycles (cycle {cycle})"
-        )
+        ax.set_title(f"{component} — Pred: {final_value:.0f} cycles (cycle {cycle})")
         ax.set_xlabel("Observation")
         ax.set_ylabel("Predicted Cycles to SV")
         ax.legend(fontsize="small")
@@ -835,7 +737,9 @@ class LGBMGapCorrection:
             base_hpt = base_pred_hpt_all[esn_mask.values].copy()
             base_hpc = base_pred_hpc_all[esn_mask.values].copy()
 
-            self._plot_single_before_after_engine(esn, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc)
+            self._plot_single_before_after_engine(
+                esn, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc
+            )
 
         # Also plot TESTING_ESN if it was excluded from training
         if cfg.USE_ONLY_TRAIN:
@@ -845,7 +749,7 @@ class LGBMGapCorrection:
             if not esn_data.empty:
                 res = self.hi.residuals(esn_data)
                 esn_data[cfg.DEGRAD_VARS] = res[cfg.DEGRAD_VARS]
-                
+
                 if cfg.USE_CLEAN_DATA:
                     esn_data = esn_data.groupby(
                         ["ESN", "Cycles_Since_New"], as_index=False
@@ -854,30 +758,34 @@ class LGBMGapCorrection:
                         esn_data, threshold=cfg.COEF_OUTLIERS_THRESHOLD
                     )
                     esn_data = esn_data.ffill().bfill().dropna()
-                
+
                 esn_reg = self.build_regression_features(esn_data)
                 if not esn_reg.empty:
                     y_true_hpt = esn_reg["target_hpt"].values
                     y_true_hpc = esn_reg["target_hpc"].values
-                    
-                    # Compute base predictions using scale_to_target_test
-                    cycle_hpt = esn_reg["cycle_hpt"].values[-1]
-                    cycle_hpc = esn_reg["cycle_hpc"].values[-1]
-                    
-                    hpt_key = cycle_hpt if cycle_hpt in self.scale_coefs_hpt else min(self.scale_coefs_hpt.keys())
-                    hpc_key = cycle_hpc if cycle_hpc in self.scale_coefs_hpc else min(self.scale_coefs_hpc.keys())
-                    
-                    base_hpt = HITrainer.scale_to_target_test(esn_reg["HI_HPT"], self.scale_coefs_hpt[hpt_key]).values
-                    base_hpc = HITrainer.scale_to_target_test(esn_reg["HI_HPC"], self.scale_coefs_hpc[hpc_key]).values
+
+                    # Use pure HI features as base prediction
+                    base_hpt = esn_reg["HI_HPT"].values
+                    base_hpc = esn_reg["HI_HPC"].values
 
                     print(f"--- Adding plot for excluded TESTING_ESN: {cfg.TESTING_ESN} ---")
-                    self._plot_single_before_after_engine(cfg.TESTING_ESN, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc)
+
+                    self._plot_single_before_after_engine(
+                        cfg.TESTING_ESN,
+                        esn_reg,
+                        y_true_hpt,
+                        y_true_hpc,
+                        base_hpt,
+                        base_hpc,
+                    )
 
         # Global summary
         if cfg.PLOT_BA_GLOBAL_ERROR:
             self._plot_global_error_distribution()
 
-    def _plot_single_before_after_engine(self, esn, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc) -> None:
+    def _plot_single_before_after_engine(
+        self, esn, esn_reg, y_true_hpt, y_true_hpc, base_hpt, base_hpc
+    ) -> None:
         """Helper to plot Before vs After Correction for a single engine."""
         X_feat = esn_reg[self.feature_cols].values
         gap_hpt = self.lgbm_gap_hpt.predict(X_feat)
@@ -910,13 +818,47 @@ class LGBMGapCorrection:
         for col_idx, (kind, method_name) in enumerate(subplot_specs):
             method = getattr(self, method_name)
             if kind == "scatter":
-                method(axs[0, col_idx], y_true_hpt, base_hpt, final_hpt, "HPT — Scatter", "tab:blue")
-                method(axs[1, col_idx], y_true_hpc, base_hpc, final_hpc, "HPC — Scatter", "tab:green")
+                method(
+                    axs[0, col_idx],
+                    y_true_hpt,
+                    base_hpt,
+                    final_hpt,
+                    "HPT — Scatter",
+                    "tab:blue",
+                )
+                method(
+                    axs[1, col_idx],
+                    y_true_hpc,
+                    base_hpc,
+                    final_hpc,
+                    "HPC — Scatter",
+                    "tab:green",
+                )
             else:
-                label_hpt = "HPT — Cycles to SV" if kind == "time_series" else "HPT — Error"
-                label_hpc = "HPC — Cycles to SV" if kind == "time_series" else "HPC — Error"
-                method(axs[0, col_idx], x_axis, y_true_hpt, base_hpt, final_hpt, label_hpt, "tab:blue")
-                method(axs[1, col_idx], x_axis, y_true_hpc, base_hpc, final_hpc, label_hpc, "tab:green")
+                label_hpt = (
+                    "HPT — Cycles to SV" if kind == "time_series" else "HPT — Error"
+                )
+                label_hpc = (
+                    "HPC — Cycles to SV" if kind == "time_series" else "HPC — Error"
+                )
+                method(
+                    axs[0, col_idx],
+                    x_axis,
+                    y_true_hpt,
+                    base_hpt,
+                    final_hpt,
+                    label_hpt,
+                    "tab:blue",
+                )
+                method(
+                    axs[1, col_idx],
+                    x_axis,
+                    y_true_hpc,
+                    base_hpc,
+                    final_hpc,
+                    label_hpc,
+                    "tab:green",
+                )
 
         plt.tight_layout()
         save_fig(fig, f"training_before_after_esn_{esn}")
@@ -952,30 +894,40 @@ class LGBMGapCorrection:
         """Ground truth vs base vs corrected time series."""
         rmse_b = np.sqrt(np.mean((y_true - base) ** 2))
         rmse_c = np.sqrt(np.mean((y_true - corrected) ** 2))
+
+        # Primary axis: Ground Truth and Corrected (reliable scales)
         ax.plot(
-            x, y_true, color="black", linewidth=1.0, alpha=0.8, label="Ground Truth"
-        )
-        ax.plot(
-            x,
-            base,
-            color="tab:orange",
-            linewidth=0.8,
-            alpha=0.7,
-            linestyle="--",
-            label=f"Base (RMSE={rmse_b:.1f})",
+            x, y_true, color="black", linewidth=1.5, alpha=0.8, label="Ground Truth"
         )
         ax.plot(
             x,
             corrected,
             color=color,
-            linewidth=0.8,
+            linewidth=1.2,
             alpha=0.9,
             label=f"Corrected (RMSE={rmse_c:.1f})",
         )
         ax.set_title(title)
         ax.set_xlabel("Observation")
         ax.set_ylabel("Cycles to SV")
-        ax.legend(fontsize="small")
+
+        # Secondary axis: Base (often wildly off scale)
+        #ax2 = ax.twinx()
+        ax.plot(
+            x,
+            base,
+            color="tab:orange",
+            linewidth=1.0,
+            alpha=0.6,
+            linestyle="--",
+            label=f"Base (RMSE={rmse_b:.1f})",
+        )
+        ax.set_ylabel("Base Scale", color="tab:orange")
+        ax.tick_params(axis="y", labelcolor="tab:orange")
+
+        lines_1, labels_1 = ax.get_legend_handles_labels()
+        # lines_2, labels_2 = ax.get_legend_handles_labels()
+        ax.legend(lines_1, labels_1, loc="best", fontsize="small")
         ax.grid(True, alpha=0.3)
 
     @staticmethod
@@ -988,33 +940,45 @@ class LGBMGapCorrection:
         title,
         color,
     ) -> None:
-        """Residual error before and after correction."""
+        """Residual error before and after correction using twinx."""
         err_b = y_true - base
         err_c = y_true - corrected
         mae_b = np.mean(np.abs(err_b))
         mae_c = np.mean(np.abs(err_c))
-        ax.plot(
-            x,
-            err_b,
-            color="tab:orange",
-            linewidth=0.6,
-            alpha=0.6,
-            label=f"Base error (MAE={mae_b:.1f})",
-        )
+
+        # Primary axis: Corrected error (small scale)
         ax.plot(
             x,
             err_c,
             color=color,
-            linewidth=0.6,
-            alpha=0.8,
+            linewidth=1.0,
+            alpha=0.9,
             label=f"Corrected error (MAE={mae_c:.1f})",
         )
         ax.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
         ax.fill_between(x, err_c, 0, alpha=0.15, color=color)
         ax.set_title(title)
         ax.set_xlabel("Observation")
-        ax.set_ylabel("Error")
-        ax.legend(fontsize="small")
+        ax.set_ylabel("Corrected Error", color=color)
+        ax.tick_params(axis="y", labelcolor=color)
+
+        # Secondary axis: Base error (large scale)
+        ax2 = ax.twinx()
+        ax2.plot(
+            x,
+            err_b,
+            color="tab:orange",
+            linewidth=0.8,
+            alpha=0.6,
+            linestyle="--",
+            label=f"Base error (MAE={mae_b:.1f})",
+        )
+        ax2.set_ylabel("Base Error", color="tab:orange")
+        ax2.tick_params(axis="y", labelcolor="tab:orange")
+
+        lines_1, labels_1 = ax.get_legend_handles_labels()
+        lines_2, labels_2 = ax2.get_legend_handles_labels()
+        ax.legend(lines_1 + lines_2, labels_1 + labels_2, loc="best", fontsize="small")
         ax.grid(True, alpha=0.3)
 
     @staticmethod

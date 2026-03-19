@@ -94,7 +94,8 @@ DE_TOL: float = 0.001
 
 USE_ONLY_TRAIN: bool = True
 USE_CLEAN_DATA: bool = True
-SCALE_TARGET: bool = False
+
+
 COEF_OUTLIERS_THRESHOLD: float = 3
 SEPARATE_COEFS: bool = False
 
@@ -114,32 +115,49 @@ DEFAULT_CHPC: dict = {
 
 
 # ──────────────────────────────────────────
-# LGBM CLASSIFIER (cycle classification)
+# LGBM FEATURE ENGINEERING
+# ──────────────────────────────────────────
+MINIMAL_FEATURE_WINDOW: int = 10
+
+# ──────────────────────────────────────────
+# LGBM CYCLE CLASSIFIER
 # ──────────────────────────────────────────
 CLF_N_ESTIMATORS: int = 600
 CLF_LEARNING_RATE: float = 0.002
 CLF_MAX_DEPTH: int = 4
 CLF_NUM_LEAVES: int = 15
-CLF_WINDOW: int = 20
 
 
 # ──────────────────────────────────────────
 # LGBM GAP CORRECTION
 # ──────────────────────────────────────────
-GAP_FEATURE_WINDOW: int = 20
-GAP_LGBM_PARAMS: dict = {
-    "objective": "regression",
-    "metric": "rmse",
-    "n_estimators": 5000,
-    "learning_rate": 0.002,
-    "max_depth": 4,
-    "num_leaves": 15,
-    "min_child_samples": 15,
-    "reg_alpha": 0.1,
-    "reg_lambda": 0.1,
-    "n_jobs": -1,
-    "verbose": -1,
-    "random_state": 42,
+# GAP_LGBM_PARAMS: dict = {
+#     "objective": "regression",
+#     "metric": "rmse",
+#     "n_estimators": 5000,
+#     "learning_rate": 0.002,
+#     "max_depth": 8,
+#     "num_leaves": 15,
+#     "min_child_samples": 15,
+#     "reg_alpha": 0.1,
+#     "reg_lambda": 0.1,
+#     "n_jobs": -1,
+#     "verbose": -1,
+#     "random_state": 42,
+# }
+
+GAP_LGBM_PARAMS = {
+    "objective": "regression",  # MAE: più robusto agli outlier di RUL
+    "num_leaves": 63,  # range: 15–63 — tieni basso, evita overfitting
+    "max_depth": 8,  # range: 4–8 — coerente con num_leaves
+    "learning_rate": 0.005,  # range: 0.01–0.1 — più basso = più alberi necessari
+    "n_estimators": 800,  # range: 200–1000, usa early stopping
+    "min_data_in_leaf": 150,  # range: 20–200 — alto perché il training è lungo
+    "feature_fraction": 0.9,  # range: 0.6–1.0 — subsample delle feature per albero
+    "bagging_fraction": 0.8,  # range: 0.6–1.0 — subsample dei dati per albero
+    "bagging_freq": 1,  # abilita il bagging ogni iterazione
+    "lambda_l1": 0.1,  # range: 0–1 — regolarizzazione L1
+    "lambda_l2": 0.1,  # range: 0–1 — regolarizzazione L2
 }
 SMOOTHING_WINDOW: int = 20
 SMOOTH_PREDICTIONS: bool = True
@@ -157,9 +175,9 @@ WW_FACTOR_MULT: int = 80
 # Set to True to load from MODELS_DIR; False to retrain.
 # If the saved file doesn't exist, training runs automatically.
 # ──────────────────────────────────────────────────────────────
-LOAD_HI_TRAINER: bool = True # linear models + HI coefficients
-LOAD_LGBM_CLASSIFIER: bool = True # LGBM cycle classifier
-LOAD_LGBM_GAP: bool = True # LGBM gap correction
+LOAD_HI_TRAINER: bool = False  # linear models + HI coefficients
+LOAD_LGBM_CLASSIFIER: bool = False  # LGBM cycle classifier
+LOAD_LGBM_GAP: bool = False  # LGBM gap correction
 
 
 # ──────────────────────────────────────────
