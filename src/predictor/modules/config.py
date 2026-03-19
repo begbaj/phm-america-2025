@@ -150,16 +150,16 @@ GAP_LGBM_PARAMS = {
     "objective": "regression",  # MAE: più robusto agli outlier di RUL
     "num_leaves": 63,  # range: 15–63 — tieni basso, evita overfitting
     "max_depth": 12,  # range: 4–8 — coerente con num_leaves
-    "learning_rate": 0.001,  # range: 0.01–0.1 — più basso = più alberi necessari
+    "learning_rate": 0.01,  # range: 0.01–0.1 — più basso = più alberi necessari
     "n_estimators": 900,  # range: 200–1000, usa early stopping
-    "min_data_in_leaf": 15,  # range: 20–200 — alto perché il training è lungo
+    "min_data_in_leaf": 20,  # range: 20–200 — alto perché il training è lungo
     "feature_fraction": 0.9,  # range: 0.6–1.0 — subsample delle feature per albero
     "bagging_fraction": 0.8,  # range: 0.6–1.0 — subsample dei dati per albero
     "bagging_freq": 1,  # abilita il bagging ogni iterazione
     "lambda_l1": 0.3,  # range: 0–1 — regolarizzazione L1
     "lambda_l2": 0.8,  # range: 0–1 — regolarizzazione L2
 }
-SMOOTHING_WINDOW: int = 100
+SMOOTHING_WINDOW: int = 50
 SMOOTH_PREDICTIONS: bool = True
 
 # ──────────────────────────────────────────
