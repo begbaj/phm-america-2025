@@ -84,14 +84,16 @@ class LGBMGapCorrection:
         feat = sd[cfg.DEGRAD_VARS].copy()
 
         # ── Base HI features ────────────────────────────────────
-        feat["HI_HPT"] = hi_hpt.values
-        feat["HI_HPC"] = hi_hpc.values
+        # feat["HI_HPT"] = hi_hpt.values
+        # feat["HI_HPC"] = hi_hpc.values
+        feat["HI_HPT"] = hi_hpt.ewm(span=window, adjust=False).mean().values
+        feat["HI_HPC"] = hi_hpc.ewm(span=window, adjust=False).mean().values
 
         # ── cycle_norm ──────────────────────────────────────────
-        if self.max_cycles_train is not None and self.max_cycles_train > 0:
-            feat["cycle_norm"] = sd["Cycles_Since_New"].values / self.max_cycles_train
-        else:
-            feat["cycle_norm"] = 0.0
+        # if self.max_cycles_train is not None and self.max_cycles_train > 0:
+        #     feat["cycle_norm"] = sd["Cycles_Since_New"].values / self.max_cycles_train
+        # else:
+        #     feat["cycle_norm"] = 0.0
 
         # ── Minimal local features ──────────────────────────────
         feat["HI_HPT_mean"] = hi_hpt.rolling(window=window, min_periods=1).mean().values
